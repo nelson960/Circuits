@@ -1,0 +1,13 @@
+name: ml
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - matplotlib>=3.8
+  - numpy>=1.26
+  - pytest>=8
+  - tqdm>=4.66
+  - pip
+  - setuptools>=69
+  - pip:
+      - torch>=2.5

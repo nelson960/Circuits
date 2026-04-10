@@ -1,0 +1,49 @@
+{
+  "benchmark_type": "symbolic_kv_stream",
+  "name": "symbolic_kv_stream_learnability",
+  "output_dir": "data/generated/symbolic_kv_stream_learnability",
+  "seed": 7,
+  "num_keys": 8,
+  "num_values": 128,
+  "holdout_answer_pair_fraction": 0.1,
+  "heuristic_max_accuracy": 0.4,
+  "train": {
+    "num_samples": 8000,
+    "active_keys": {"min": 2, "max": 3},
+    "overwrite_count": {"min": 8, "max": 8},
+    "num_queries": {"min": 6, "max": 7},
+    "query_lag": {"min": 1, "max": 2}
+  },
+  "validation_iid": {
+    "num_samples": 1024,
+    "active_keys": {"min": 2, "max": 3},
+    "overwrite_count": {"min": 8, "max": 8},
+    "num_queries": {"min": 6, "max": 7},
+    "query_lag": {"min": 1, "max": 2}
+  },
+  "test_iid": {
+    "num_samples": 1024,
+    "active_keys": {"min": 2, "max": 3},
+    "overwrite_count": {"min": 8, "max": 8},
+    "num_queries": {"min": 6, "max": 7},
+    "query_lag": {"min": 1, "max": 2}
+  },
+  "heldout_pairs": {
+    "num_samples": 1024,
+    "active_keys": {"min": 2, "max": 3},
+    "overwrite_count": {"min": 8, "max": 8},
+    "num_queries": {"min": 6, "max": 7},
+    "query_lag": {"min": 1, "max": 2}
+  },
+  "structural_ood": {
+    "num_samples": 1024,
+    "active_keys": {"min": 4, "max": 5},
+    "overwrite_count": {"min": 10, "max": 12},
+    "num_queries": {"min": 8, "max": 10},
+    "query_lag": {"min": 2, "max": 3}
+  },
+  "counterfactual": {
+    "num_samples": 1024,
+    "source_split": "test_iid"
+  }
+}
