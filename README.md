@@ -4,11 +4,15 @@ Mechanistic interpretability research repo for studying circuit formation in sma
 
 The current benchmark is a stream-based symbolic KV retrieval task trained with plain autoregressive next-token prediction. The scientific question is not only whether the model solves the task, but how the circuit forms during training, which factors change that formation, and why gradient descent reinforces one mechanistic solution over another.
 
+Public paper page:
+
+- [From Retrieval Motifs To SGD Circuit Selection](https://nelson960.github.io/Circuits/)
+
 The project is closely related to prior work on motif emergence:
 
 - [Mechanistic Transparency](https://nelson960.github.io/Mechanistic-Transparency/)
 
-For the living paper draft and public-facing research story, see [docs/index.md](docs/index.md).
+For the source of the living paper draft and public-facing research story, see [docs/index.md](docs/index.md).
 
 For current internal research progress, benchmark history, training results, checkpoint-analysis findings, and the evolving formation-analysis plan, see [results.md](results.md).
 

@@ -168,9 +168,12 @@ pre code {
 }
 
 .mermaid {
+  width: min(1180px, calc(100vw - 2rem));
   overflow-x: auto;
   margin: 1.6rem 0;
+  margin-left: 50%;
   padding: 1rem;
+  transform: translateX(-50%);
   background: #ffffff;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -178,8 +181,9 @@ pre code {
 
 .mermaid svg {
   display: block;
-  width: 100%;
-  max-width: 100%;
+  width: auto !important;
+  max-width: none !important;
+  min-width: 920px;
   height: auto;
   margin: 0 auto;
 }

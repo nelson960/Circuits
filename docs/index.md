@@ -424,43 +424,57 @@ The tools are part of the research contribution. They turn checkpoint files into
 ### Tool Dependency Graph
 
 ```mermaid
-flowchart LR
-  A["generate-benchmark"] --> B["train"]
-  B --> C["select-reference"]
-  B --> D["generate-probe-set"]
-  D --> E["checkpoint-sweep"]
-  E --> F["birth-window-analyze"]
-  E --> G["birth-window-compare"]
-  D --> H["shared-feature-fit"]
-  H --> I["feature-trajectory-sweep"]
-  I --> J["feature-birth-analyze"]
-  I --> K["feature-family-cluster"]
-  K --> L["feature-family-birth"]
-  K --> M["feature-family-compare"]
-  M --> N["feature-family-rank"]
-  N --> O["feature-family-subpatch"]
-  N --> P["feature-family-lineage"]
-  O --> Q["feature-family-trace"]
-  P --> Q
-  I --> R["subset-trajectory"]
-  R --> S["subset-birth"]
-  Q --> T["family-update-link"]
-  Q --> U["candidate-circuit-registry"]
-  R --> U
-  S --> U
-  T --> U
-  U --> V["circuit-gradient-link"]
-  V --> W["candidate-mechanism-report"]
-  V --> X["candidate-birth-model"]
-  V --> Y["candidate-coalition-map"]
-  Y --> Z["candidate-neuron-intervention"]
-  D --> AA["dataset-geometry-report"]
-  E --> AB["attention-geometry-trace"]
-  AA --> AB
-  AB --> AC["path-logit-decomposition"]
-  Z --> AC
-  AC --> AD["example-gradient-geometry"]
-  AD --> AE["mechanism-hypothesis-tester"]
+flowchart TD
+  subgraph A["Benchmark and Checkpoints"]
+    GB["generate-benchmark"] --> TR["train"]
+    TR --> SR["select-reference"]
+    TR --> GPS["generate-probe-set"]
+    GPS --> CS["checkpoint-sweep"]
+    CS --> BWA["birth-window-analyze"]
+    CS --> BWC["birth-window-compare"]
+  end
+
+  subgraph B["Shared Feature Layer"]
+    GPS --> SFF["shared-feature-fit"]
+    SFF --> FTS["feature-trajectory-sweep"]
+    FTS --> FBA["feature-birth-analyze"]
+    FTS --> FFC["feature-family-cluster"]
+  end
+
+  subgraph C["Family and Candidate Tracing"]
+    FFC --> FFB["feature-family-birth"]
+    FFC --> FFCMP["feature-family-compare"]
+    FFCMP --> FFR["feature-family-rank"]
+    FFR --> FFSP["feature-family-subpatch"]
+    FFR --> FFL["feature-family-lineage"]
+    FFSP --> FFT["feature-family-trace"]
+    FFL --> FFT
+    FTS --> ST["subset-trajectory"]
+    ST --> SB["subset-birth"]
+    FFT --> FUL["family-update-link"]
+    FFT --> CCR["candidate-circuit-registry"]
+    ST --> CCR
+    SB --> CCR
+    FUL --> CCR
+  end
+
+  subgraph D["Candidate Dynamics and Coalition"]
+    CCR --> CGL["circuit-gradient-link"]
+    CGL --> CMR["candidate-mechanism-report"]
+    CGL --> CBM["candidate-birth-model"]
+    CGL --> CCM["candidate-coalition-map"]
+    CCM --> CNI["candidate-neuron-intervention"]
+  end
+
+  subgraph E["Mathematical Next Layer"]
+    GPS --> DGR["dataset-geometry-report"]
+    CS --> AGT["attention-geometry-trace"]
+    DGR --> AGT
+    AGT --> PLD["path-logit-decomposition"]
+    CNI --> PLD
+    PLD --> EGG["example-gradient-geometry"]
+    EGG --> MHT["mechanism-hypothesis-tester"]
+  end
 ```
 
 ### Current Tool Inventory
