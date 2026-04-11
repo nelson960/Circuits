@@ -8,7 +8,9 @@ The project is closely related to prior work on motif emergence:
 
 - [Mechanistic Transparency](https://nelson960.github.io/Mechanistic-Transparency/)
 
-For current research progress, benchmark history, training results, checkpoint-analysis findings, and the evolving formation-analysis plan, see [results.md](results.md).
+For the living paper draft and public-facing research story, see [docs/index.md](docs/index.md).
+
+For current internal research progress, benchmark history, training results, checkpoint-analysis findings, and the evolving formation-analysis plan, see [results.md](results.md).
 
 For a plain-language overview of the main terms and analysis objects, see [notes.md](notes.md).
 

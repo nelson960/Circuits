@@ -10,6 +10,13 @@ from circuit.analysis.analysis_report import build_analysis_report
 from circuit.analysis.formation import compute_head_ablation_importance, compute_head_localization, compute_qrw_batch
 from circuit.analysis.birth_windows import analyze_birth_windows
 from circuit.analysis.birth_window_compare import compare_birth_window_checkpoints
+from circuit.analysis.candidate_dynamics import (
+    build_candidate_birth_model,
+    build_candidate_circuit_registry,
+    build_candidate_mechanism_report,
+    run_candidate_sweep,
+    run_circuit_gradient_link,
+)
 from circuit.analysis.checkpoint_sweep import generate_probe_set, run_checkpoint_sweep
 from circuit.analysis.feature_analysis import analyze_checkpoint_features
 from circuit.analysis.shared_feature_dynamics import (
@@ -548,6 +555,136 @@ def test_analysis_and_training_pipeline(tmp_path: Path, benchmark_config_path: P
     assert len(family_update_link_payload["interval_rows"]) == 1
     assert "correlation_summary" in family_update_link_payload
     assert "top_intervals" in family_update_link_payload
+
+    candidate_registry_path = build_candidate_circuit_registry(
+        feature_family_trace_paths=[family_trace_path],
+        subset_trajectory_paths=[subset_trajectory_path],
+        candidate_ids=["test_candidate"],
+        basis_paths=[basis_path],
+        subset_birth_paths=[subset_birth_path],
+        family_update_link_paths=[family_update_link_path],
+        output_path=shared_basis_dir / "candidate_registry.json",
+    )
+    candidate_registry_payload = read_json(candidate_registry_path)
+
+    assert candidate_registry_path.exists()
+    assert candidate_registry_payload["candidate_count"] == 1
+    assert candidate_registry_payload["candidates"][0]["candidate_id"] == "test_candidate"
+    assert candidate_registry_payload["candidates"][0]["parameter_groups"]
+
+    gradient_link_path = run_circuit_gradient_link(
+        config_path=train_config,
+        probe_set_path=probe_set_path,
+        registry_path=candidate_registry_path,
+        checkpoint_dir=run_dir / "checkpoints",
+        sweep_metrics_path=metrics_path,
+        output_path=shared_basis_dir / "circuit_gradient_link.json",
+        device_name="cpu",
+    )
+    gradient_link_payload = read_json(gradient_link_path)
+
+    assert gradient_link_path.exists()
+    assert gradient_link_payload["candidate_count"] == 1
+    assert gradient_link_payload["interval_count"] == 1
+    assert gradient_link_payload["interval_rows"][0]["candidate_id"] == "test_candidate"
+    assert "candidate_union" in gradient_link_payload["interval_rows"][0]["parameter_projections"]
+    assert "global" in gradient_link_payload["interval_rows"][0]["parameter_projections"]
+    assert gradient_link_payload["interval_rows"][0]["feature_score_projection"]["status"] == "computed"
+    assert "candidate_union" in gradient_link_payload["interval_rows"][0]["feature_score_projection"]["parameter_projections"]
+    assert "test_candidate" in gradient_link_payload["candidate_summaries"]
+    assert "feature_score_summary" in gradient_link_payload["candidate_summaries"]["test_candidate"]
+    assert set(gradient_link_payload["plots"]) == {"alignment", "cumulative", "intervals", "scatter"}
+    for plot_path in gradient_link_payload["plots"].values():
+        assert Path(plot_path).exists()
+
+    mechanism_report_path, mechanism_markdown_path, mechanism_plot_paths = build_candidate_mechanism_report(
+        registry_path=candidate_registry_path,
+        gradient_link_path=gradient_link_path,
+        output_dir=shared_basis_dir / "candidate_mechanism",
+        candidate_ids=["test_candidate"],
+        top_interval_k=1,
+    )
+    mechanism_payload = read_json(mechanism_report_path)
+    mechanism_markdown = mechanism_markdown_path.read_text(encoding="utf-8")
+
+    assert mechanism_report_path.exists()
+    assert mechanism_markdown_path.exists()
+    assert mechanism_payload["selected_candidate_ids"] == ["test_candidate"]
+    assert mechanism_payload["candidate_reports"][0]["candidate_id"] == "test_candidate"
+    assert mechanism_payload["candidate_reports"][0]["phase_windows"]
+    assert mechanism_payload["candidate_reports"][0]["component_summary"]["status"] == "computed"
+    assert "Candidate Mechanism Report" in mechanism_markdown
+    assert {"competition_matrix", "cumulative", "scoreboard"}.issubset(set(mechanism_plot_paths))
+    for plot_path in mechanism_plot_paths.values():
+        assert plot_path.exists()
+
+    birth_model_report_path, birth_model_markdown_path, birth_model_plot_paths = build_candidate_birth_model(
+        registry_path=candidate_registry_path,
+        gradient_link_path=gradient_link_path,
+        output_dir=shared_basis_dir / "candidate_birth_model",
+        birth_metric="birth_step",
+        prediction_cutoff_step=4,
+    )
+    birth_model_payload = read_json(birth_model_report_path)
+    birth_model_markdown = birth_model_markdown_path.read_text(encoding="utf-8")
+
+    assert birth_model_report_path.exists()
+    assert birth_model_markdown_path.exists()
+    assert birth_model_payload["selected_candidate_ids"] == ["test_candidate"]
+    assert birth_model_payload["candidate_rows"][0]["candidate_id"] == "test_candidate"
+    assert "factor_contributions" in birth_model_payload["candidate_rows"][0]
+    assert "Candidate Birth Model" in birth_model_markdown
+    assert {"birth_order", "factors", "scoreboard"} == set(birth_model_plot_paths)
+    for plot_path in birth_model_plot_paths.values():
+        assert plot_path.exists()
+
+    candidate_sweep_summary_path, candidate_sweep_plot_paths = run_candidate_sweep(
+        config_path=train_config,
+        probe_set_path=probe_set_path,
+        checkpoint_dir=run_dir / "checkpoints",
+        output_dir=shared_basis_dir / "candidate_sweep",
+        stage_names=["layer_1_post_mlp"],
+        families_paths=[family_path],
+        feature_compare_paths=[compare_path],
+        trajectories_paths=[trajectories_path],
+        basis_paths=[basis_path],
+        sweep_metrics_path=metrics_path,
+        device_name="cpu",
+        subset_size=2,
+        top_k_families=1,
+    )
+    candidate_sweep_summary = read_json(candidate_sweep_summary_path)
+
+    assert candidate_sweep_summary_path.exists()
+    assert candidate_sweep_summary["candidate_count"] == 1
+    assert candidate_sweep_summary["ranking_rows"]
+    assert (shared_basis_dir / "candidate_sweep" / "candidate_sweep_registry.json").exists()
+    assert (shared_basis_dir / "candidate_sweep" / "candidate_sweep_gradient_link.json").exists()
+    assert set(candidate_sweep_plot_paths) == {
+        "top_feature_score_delta",
+        "top_heldout_gap_delta",
+        "top_useful_delta",
+        "useful_vs_feature_score",
+    }
+    for plot_path in candidate_sweep_plot_paths.values():
+        assert plot_path.exists()
+
+    sweep_mechanism_report_path, sweep_mechanism_markdown_path, sweep_mechanism_plot_paths = (
+        build_candidate_mechanism_report(
+            registry_path=Path(candidate_sweep_summary["registry_path"]),
+            gradient_link_path=Path(candidate_sweep_summary["gradient_link_path"]),
+            output_dir=shared_basis_dir / "candidate_sweep_mechanism",
+            top_k=1,
+            top_interval_k=1,
+        )
+    )
+    sweep_mechanism_payload = read_json(sweep_mechanism_report_path)
+
+    assert sweep_mechanism_report_path.exists()
+    assert sweep_mechanism_markdown_path.exists()
+    assert sweep_mechanism_payload["candidate_reports"][0]["component_summary"]["status"] == "no_component_groups"
+    assert "components" not in sweep_mechanism_plot_paths
+    assert {"competition_matrix", "cumulative", "scoreboard"} == set(sweep_mechanism_plot_paths)
 
     lineage_path, lineage_graph_path = feature_lineage(
         config_path=train_config,

@@ -1130,3 +1130,230 @@ The next stages are:
    - coalition useful-birth timing
    - update-link correlations
 6. Only after cross-seed replication, start treating feature-family strengths as candidate state variables for a reduced dynamical model.
+
+## Current Why-Gap And Birth-Model Direction
+
+This section records the conclusion after the traced `family7` and `family4` candidate-mechanism run.
+
+The current tooling is now good at formation phenomenology:
+
+- when a feature family or subset appears
+- where its strongest traced component ancestry sits
+- how candidate feature scores move across checkpoints
+- how much traced parameter groups align with loss gradients and feature-score gradients
+- whether a candidate has heldout support or only probe-local movement
+
+That is not yet the final "why" answer.
+
+The unanswered question is stronger:
+
+```text
+Given multiple possible circuits or feature families, why does SGD select one family over another?
+```
+
+The current answer is still partly observational. It says which family moved, which components moved with it, and which intervals were useful. It does not yet prove that the selected family was predictable before it appeared.
+
+### Current Traced Family7 / Family4 Result
+
+The current traced mechanism report is:
+
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/traced_candidates/layer2_family7_family4/mechanism_report/candidate_mechanism_report.json`
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/traced_candidates/layer2_family7_family4/mechanism_report/candidate_mechanism_report.md`
+
+Selected candidates:
+
+- `layer2_family7_top2`
+  - family: `7`
+  - features: `27, 54`
+  - useful delta: `0.40821056067943573`
+  - heldout delta: `0.19631874561309814`
+  - traced feature-score drive: `0.10995836968906202`
+  - status: `sgd_supported_generalizing_candidate`
+- `layer2_family4_top2`
+  - family: `4`
+  - features: `1, 59`
+  - useful delta: `0.23405300080776215`
+  - heldout delta: `0.021932989358901978`
+  - traced feature-score drive: `0.14723929510814068`
+  - status: `sgd_supported_generalizing_candidate`
+
+Interpretation:
+
+- Family7 remains the stronger circuit-family candidate because it has meaningful heldout gain.
+- Family4 is real but weaker: it has feature-score movement without comparable heldout generalization.
+- Family7 and Family4 are not clean competitors. Their score-drive correlation is high, so they look more like sibling readouts inside a shared dense coalition.
+
+### Current Component Interpretation
+
+Both traced candidates share the same top component groups:
+
+- `layer0_head3`
+- `layer0_mlp`
+- `layer2` neuron group `180, 121, 427, 39`
+
+Component-level interpretation:
+
+- `layer0_head3` contributes strongly to loss reduction but has negative feature-score drive for both family7 and family4.
+- `layer0_mlp` has positive feature-score drive, especially for family7.
+- the `layer2` neuron group has strong positive feature-score drive for family4 and weaker positive drive for family7.
+
+The current best component story is:
+
+1. `layer0_head3` helps the task-loss route but is not the direct birth source of these feature families.
+2. `layer0_mlp` is the strongest traced candidate for family7 feature formation.
+3. the `layer2` neuron group is more like an amplification or readout shard, especially for family4.
+4. family7 looks like the more generalizing branch of the shared module.
+5. family4 looks like a nearby sibling branch that is amplified but does not generalize as well.
+
+### Current Causal Patch Caveat
+
+The `7500 -> 14000` subpatch result is negative for family7 and family4 subsets.
+
+This does not reject family7. It shows that `7500 -> 14000` is a poor causal validation window for birth, because family7 formed earlier and is being compressed or rebalanced later.
+
+The next causal patch windows should target positive formation intervals:
+
+- family7: `1750 -> 2500`
+- family7: `2750 -> 3750`
+- family7: `4250 -> 4500`
+- family4: `2000 -> 2500`
+- family4: `3500 -> 4500`
+- family4: `5500 -> 6000`
+
+### Why The Existing Story Is Not Enough
+
+The current mechanism report answers:
+
+```text
+What moved, where did it move, and was the movement useful?
+```
+
+The missing model must answer:
+
+```text
+Before the candidate is useful, can we predict that this candidate should form?
+```
+
+The target mathematical object is:
+
+```text
+Delta S_c(t) ~= grad_theta S_c(theta_t) . Delta theta_t
+```
+
+and, under SGD-like updates:
+
+```text
+Delta S_c(t) ~= -eta_t <grad_theta S_c(theta_t), grad_theta L(theta_t)>
+```
+
+where:
+
+- `S_c` is a score for candidate circuit or feature family `c`
+- `L` is training loss
+- `Delta theta_t` is the checkpoint update
+- `<grad S_c, grad L>` is the alignment between the direction that would form the candidate and the loss-reducing gradient
+
+A candidate should be considered explained only if pre-birth factors predict its later birth better than competing candidates.
+
+### Candidate Birth Model Target
+
+The next tool is `candidate-birth-model`.
+
+It should consume:
+
+- candidate registry
+- circuit-gradient-link output
+- subset birth labels
+- subset trajectories through the registry
+
+It should report:
+
+- actual birth or useful-birth step
+- strict pre-birth prediction window by default
+- candidate birth score
+- predicted birth rank
+- actual birth rank
+- factor decomposition
+- whether a requested cutoff leaks post-birth information
+- unsupported claims
+
+The initial factor model should be deliberately transparent:
+
+- `feature_score_drive`: cumulative projected update in the candidate feature-score direction
+- `gradient_alignment`: mean cosine between update and feature-score gradient
+- `loss_utility`: cumulative loss reduction in the candidate parameter scope
+- `component_accessibility`: candidate update and gradient share relative to global update
+- `activation_support`: candidate activation level at the prediction cutoff
+- `amplification`: positive pre-birth activation and active-fraction movement
+- `interference_cost`: negative feature-score and useful-movement pressure
+
+The first version is a ranking model, not a final theory. It should be judged by whether it can predict that family7 is the better candidate before family7 becomes useful.
+
+### Updated Scientific Standard
+
+From this point, a candidate explanation is not strong enough if it only says:
+
+- this family formed
+- this component contributed
+- this interval had positive score drive
+
+The stronger standard is:
+
+```text
+Using only pre-birth evidence, the model predicts which candidate will form and why.
+```
+
+If the birth model cannot predict family7 over family4, family3, and family5 before their useful birth windows, then the current story remains post-hoc.
+
+If it can, the project starts moving from circuit observation toward an explanation of SGD circuit selection.
+
+### Initial Candidate-Birth-Model Smoke Test
+
+After adding the first `candidate-birth-model` implementation, it was run on the traced `family7` and `family4` artifacts.
+
+Output:
+
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/traced_candidates/layer2_family7_family4/birth_model/candidate_birth_model_report.json`
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/traced_candidates/layer2_family7_family4/birth_model/candidate_birth_model_report.md`
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/traced_candidates/layer2_family7_family4/birth_model/candidate_birth_model_scoreboard.svg`
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/traced_candidates/layer2_family7_family4/birth_model/candidate_birth_model_factors.svg`
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/traced_candidates/layer2_family7_family4/birth_model/candidate_birth_model_birth_order.svg`
+
+Settings:
+
+- birth metric: `useful_birth_step`
+- prediction mode: `shared_strict_prebirth`
+- effective cutoff: `2000`
+- post-birth leakage: `false` for both candidates
+
+Result:
+
+- `layer2_family4_top2`
+  - birth-model score: `4`
+  - predicted rank: `1`
+  - actual useful birth: `2500`
+  - actual rank: `2`
+- `layer2_family7_top2`
+  - birth-model score: `0`
+  - predicted rank: `2`
+  - actual useful birth: `2250`
+  - actual rank: `1`
+
+Interpretation:
+
+- The first transparent factor model does not yet explain why family7 becomes the better candidate.
+- This is a useful negative result, not a tooling failure.
+- Pre-birth score drive and activation support favor family4 at the shared cutoff, but family7 still becomes useful earlier and generalizes better.
+- Therefore the missing factor is likely not just raw feature-score drive.
+
+Current implication:
+
+The next birth-model iteration needs additional factors that distinguish early generalizing utility from raw feature amplification, especially:
+
+- per-feature rather than family-sum birth factors
+- heldout-specific gradient alignment
+- feature-to-answer readout utility before birth
+- interference with already-forming families
+- separate treatment of `f54`, `f27`, `f1`, and `f59`
+
+This strengthens the current conclusion: the repo can now test a proposed "why" story, and the first simple story fails. The research should now improve the explanatory model rather than only adding more descriptive traces.

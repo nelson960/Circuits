@@ -14,6 +14,13 @@ from circuit.analysis.analysis_report import build_analysis_report
 from circuit.analysis.birth_windows import analyze_birth_windows
 from circuit.analysis.birth_window_compare import compare_birth_window_checkpoints
 from circuit.analysis.checkpoint_sweep import generate_probe_set, run_checkpoint_sweep
+from circuit.analysis.candidate_dynamics import (
+    build_candidate_birth_model,
+    build_candidate_mechanism_report,
+    build_candidate_circuit_registry,
+    run_candidate_sweep,
+    run_circuit_gradient_link,
+)
 from circuit.analysis.feature_analysis import analyze_checkpoint_features
 from circuit.analysis.shared_feature_dynamics import (
     family_update_link,
@@ -340,6 +347,65 @@ def main() -> None:
     family_update_link_parser.add_argument("--sweep-metrics", type=Path, required=True)
     family_update_link_parser.add_argument("--checkpoint-dir", type=Path, required=True)
     family_update_link_parser.add_argument("--output", type=Path, required=True)
+
+    candidate_registry_parser = subparsers.add_parser("candidate-circuit-registry")
+    candidate_registry_parser.add_argument("--feature-family-trace", type=Path, action="append", required=True)
+    candidate_registry_parser.add_argument("--subset-trajectory", type=Path, action="append", required=True)
+    candidate_registry_parser.add_argument("--candidate-id", type=str, action="append", default=None)
+    candidate_registry_parser.add_argument("--basis", type=Path, action="append", default=None)
+    candidate_registry_parser.add_argument("--subset-birth", type=Path, action="append", default=None)
+    candidate_registry_parser.add_argument("--family-update-link", type=Path, action="append", default=None)
+    candidate_registry_parser.add_argument("--output", type=Path, required=True)
+
+    gradient_link_parser = subparsers.add_parser("circuit-gradient-link")
+    gradient_link_parser.add_argument("--config", type=Path, required=True)
+    gradient_link_parser.add_argument("--probe-set", type=Path, required=True)
+    gradient_link_parser.add_argument("--registry", type=Path, required=True)
+    gradient_link_parser.add_argument("--checkpoint-dir", type=Path, required=True)
+    gradient_link_parser.add_argument("--output", type=Path, required=True)
+    gradient_link_parser.add_argument("--device", type=str, default="cpu")
+    gradient_link_parser.add_argument("--sweep-metrics", type=Path, default=None)
+    gradient_link_parser.add_argument("--start-step", type=int, default=None)
+    gradient_link_parser.add_argument("--end-step", type=int, default=None)
+
+    candidate_sweep_parser = subparsers.add_parser("candidate-sweep")
+    candidate_sweep_parser.add_argument("--config", type=Path, required=True)
+    candidate_sweep_parser.add_argument("--probe-set", type=Path, required=True)
+    candidate_sweep_parser.add_argument("--checkpoint-dir", type=Path, required=True)
+    candidate_sweep_parser.add_argument("--output-dir", type=Path, required=True)
+    candidate_sweep_parser.add_argument("--stage", type=str, action="append", required=True)
+    candidate_sweep_parser.add_argument("--families", type=Path, action="append", required=True)
+    candidate_sweep_parser.add_argument("--feature-compare", type=Path, action="append", required=True)
+    candidate_sweep_parser.add_argument("--trajectories", type=Path, action="append", required=True)
+    candidate_sweep_parser.add_argument("--basis", type=Path, action="append", required=True)
+    candidate_sweep_parser.add_argument("--sweep-metrics", type=Path, default=None)
+    candidate_sweep_parser.add_argument("--device", type=str, default="cpu")
+    candidate_sweep_parser.add_argument("--ranking-name", type=str, default="by_useful_delta")
+    candidate_sweep_parser.add_argument("--subset-size", type=int, default=3)
+    candidate_sweep_parser.add_argument("--min-family-size", type=int, default=2)
+    candidate_sweep_parser.add_argument("--top-k-families", type=int, default=None)
+    candidate_sweep_parser.add_argument("--start-step", type=int, default=None)
+    candidate_sweep_parser.add_argument("--end-step", type=int, default=None)
+
+    candidate_mechanism_parser = subparsers.add_parser("candidate-mechanism-report")
+    candidate_mechanism_parser.add_argument("--registry", type=Path, required=True)
+    candidate_mechanism_parser.add_argument("--gradient-link", type=Path, required=True)
+    candidate_mechanism_parser.add_argument("--output-dir", type=Path, required=True)
+    candidate_mechanism_parser.add_argument("--candidate-id", type=str, action="append", default=None)
+    candidate_mechanism_parser.add_argument("--top-k", type=int, default=4)
+    candidate_mechanism_parser.add_argument("--ranking-metric", type=str, default="sum_useful_delta")
+    candidate_mechanism_parser.add_argument("--phase-epsilon", type=float, default=0.0)
+    candidate_mechanism_parser.add_argument("--top-interval-k", type=int, default=5)
+
+    candidate_birth_parser = subparsers.add_parser("candidate-birth-model")
+    candidate_birth_parser.add_argument("--registry", type=Path, required=True)
+    candidate_birth_parser.add_argument("--gradient-link", type=Path, required=True)
+    candidate_birth_parser.add_argument("--output-dir", type=Path, required=True)
+    candidate_birth_parser.add_argument("--candidate-id", type=str, action="append", default=None)
+    candidate_birth_parser.add_argument("--birth-metric", type=str, choices=["birth_step", "useful_birth_step"], default="useful_birth_step")
+    candidate_birth_parser.add_argument("--prediction-cutoff-step", type=int, default=None)
+    candidate_birth_parser.add_argument("--lookback-intervals", type=int, default=None)
+    candidate_birth_parser.add_argument("--birth-score-threshold", type=float, default=0.0)
 
     feature_compare_parser = subparsers.add_parser("feature-compare")
     feature_compare_parser.add_argument("--trajectories", type=Path, required=True)
@@ -677,6 +743,92 @@ def main() -> None:
             output_path=args.output,
         )
         print({"update_link": str(update_link_path), "plots": {key: str(value) for key, value in plot_paths.items()}})
+        return
+    if args.command == "candidate-circuit-registry":
+        output_path = build_candidate_circuit_registry(
+            feature_family_trace_paths=args.feature_family_trace,
+            subset_trajectory_paths=args.subset_trajectory,
+            candidate_ids=args.candidate_id,
+            basis_paths=args.basis,
+            subset_birth_paths=args.subset_birth,
+            family_update_link_paths=args.family_update_link,
+            output_path=args.output,
+        )
+        print(output_path)
+        return
+    if args.command == "circuit-gradient-link":
+        output_path = run_circuit_gradient_link(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            registry_path=args.registry,
+            checkpoint_dir=args.checkpoint_dir,
+            output_path=args.output,
+            device_name=args.device,
+            sweep_metrics_path=args.sweep_metrics,
+            start_step=args.start_step,
+            end_step=args.end_step,
+        )
+        print(output_path)
+        return
+    if args.command == "candidate-sweep":
+        summary_path, plot_paths = run_candidate_sweep(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            checkpoint_dir=args.checkpoint_dir,
+            output_dir=args.output_dir,
+            stage_names=args.stage,
+            families_paths=args.families,
+            feature_compare_paths=args.feature_compare,
+            trajectories_paths=args.trajectories,
+            basis_paths=args.basis,
+            sweep_metrics_path=args.sweep_metrics,
+            device_name=args.device,
+            ranking_name=args.ranking_name,
+            subset_size=args.subset_size,
+            min_family_size=args.min_family_size,
+            top_k_families=args.top_k_families,
+            start_step=args.start_step,
+            end_step=args.end_step,
+        )
+        print({"summary": str(summary_path), "plots": {key: str(value) for key, value in plot_paths.items()}})
+        return
+    if args.command == "candidate-mechanism-report":
+        report_path, markdown_path, plot_paths = build_candidate_mechanism_report(
+            registry_path=args.registry,
+            gradient_link_path=args.gradient_link,
+            output_dir=args.output_dir,
+            candidate_ids=args.candidate_id,
+            top_k=args.top_k,
+            ranking_metric=args.ranking_metric,
+            phase_epsilon=args.phase_epsilon,
+            top_interval_k=args.top_interval_k,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "plots": {key: str(value) for key, value in plot_paths.items()},
+            }
+        )
+        return
+    if args.command == "candidate-birth-model":
+        report_path, markdown_path, plot_paths = build_candidate_birth_model(
+            registry_path=args.registry,
+            gradient_link_path=args.gradient_link,
+            output_dir=args.output_dir,
+            candidate_ids=args.candidate_id,
+            birth_metric=args.birth_metric,
+            prediction_cutoff_step=args.prediction_cutoff_step,
+            lookback_intervals=args.lookback_intervals,
+            birth_score_threshold=args.birth_score_threshold,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "plots": {key: str(value) for key, value in plot_paths.items()},
+            }
+        )
         return
     if args.command == "feature-compare":
         compare_path, plot_path = feature_compare(
