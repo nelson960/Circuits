@@ -1,16 +1,15 @@
 :root {
   color-scheme: light;
-  --bg: #f6f7fb;
+  --bg: #ffffff;
   --paper: #ffffff;
-  --ink: #121826;
-  --muted: #526071;
-  --line: #d9e0ea;
-  --soft: #eef3f8;
-  --accent: #0f766e;
-  --accent-ink: #0b4f4a;
-  --code-bg: #f3f6fa;
-  --table-head: #edf7f6;
-  --shadow: 0 18px 50px rgba(18, 24, 38, 0.08);
+  --ink: #24292f;
+  --muted: #57606a;
+  --line: #d0d7de;
+  --soft: #f6f8fa;
+  --accent: #0969da;
+  --accent-ink: #0969da;
+  --code-bg: #f6f8fa;
+  --table-head: #f6f8fa;
 }
 
 * {
@@ -34,9 +33,8 @@ body {
   position: sticky;
   top: 0;
   z-index: 10;
-  background: rgba(255, 255, 255, 0.92);
+  background: rgba(255, 255, 255, 0.96);
   border-bottom: 1px solid var(--line);
-  backdrop-filter: blur(14px);
 }
 
 .site-nav {
@@ -78,18 +76,15 @@ body {
 }
 
 .page-shell {
-  width: min(1120px, calc(100% - 2rem));
-  margin: 2rem auto 4rem;
+  width: min(980px, calc(100% - 2rem));
+  margin: 1.6rem auto 4rem;
 }
 
 .paper {
-  max-width: 980px;
+  max-width: 900px;
   margin: 0 auto;
-  padding: clamp(1.25rem, 3vw, 3.25rem);
+  padding: 0;
   background: var(--paper);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  box-shadow: var(--shadow);
 }
 
 .paper > h1:first-child {
@@ -108,9 +103,8 @@ h4 {
 }
 
 h2 {
-  margin-top: 3rem;
-  padding-top: 1.2rem;
-  border-top: 1px solid var(--line);
+  margin-top: 2.8rem;
+  padding-top: 0;
   font-size: clamp(1.45rem, 3vw, 2.2rem);
 }
 
@@ -132,7 +126,7 @@ li {
 blockquote {
   margin: 1.4rem 0;
   padding: 0.8rem 1rem;
-  border-left: 4px solid var(--accent);
+  border-left: 3px solid var(--line);
   background: var(--soft);
   border-radius: 0 8px 8px 0;
 }
@@ -168,12 +162,10 @@ pre code {
 }
 
 .mermaid {
-  width: min(1180px, calc(100vw - 2rem));
-  overflow-x: auto;
+  width: 100%;
+  overflow: hidden;
   margin: 1.6rem 0;
-  margin-left: 50%;
-  padding: 1rem;
-  transform: translateX(-50%);
+  padding: 0.75rem;
   background: #ffffff;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -181,9 +173,8 @@ pre code {
 
 .mermaid svg {
   display: block;
-  width: auto !important;
-  max-width: none !important;
-  min-width: 920px;
+  width: 100% !important;
+  max-width: 100% !important;
   height: auto;
   margin: 0 auto;
 }
@@ -213,8 +204,6 @@ img {
   max-width: 100%;
   height: auto;
   margin: 1.4rem auto;
-  border: 1px solid var(--line);
-  border-radius: 8px;
   background: #ffffff;
 }
 
@@ -244,11 +233,11 @@ hr {
   }
 
   .page-shell {
-    width: min(100% - 1rem, 1120px);
+    width: min(100% - 1rem, 980px);
     margin-top: 0.75rem;
   }
 
   .paper {
-    padding: 1rem;
+    padding: 0;
   }
 }
