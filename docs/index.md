@@ -1,3 +1,9 @@
+---
+layout: default
+title: From Retrieval Motifs To SGD Circuit Selection
+description: Ongoing mechanistic interpretability research on how SGD forms retrieval circuits in small symbolic key-value transformers.
+---
+
 # From Retrieval Motifs To SGD Circuit Selection
 
 Nelson Alex

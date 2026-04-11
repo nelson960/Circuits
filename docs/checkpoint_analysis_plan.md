@@ -1,3 +1,9 @@
+---
+layout: default
+title: Checkpoint Analysis Plan
+description: Checkpoint-level measurement design for symbolic key-value circuit formation.
+---
+
 # Checkpoint Analysis Plan
 
 ## Purpose

@@ -1,0 +1,250 @@
+:root {
+  color-scheme: light;
+  --bg: #f6f7fb;
+  --paper: #ffffff;
+  --ink: #121826;
+  --muted: #526071;
+  --line: #d9e0ea;
+  --soft: #eef3f8;
+  --accent: #0f766e;
+  --accent-ink: #0b4f4a;
+  --code-bg: #f3f6fa;
+  --table-head: #edf7f6;
+  --shadow: 0 18px 50px rgba(18, 24, 38, 0.08);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 17px;
+  line-height: 1.68;
+}
+
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: rgba(255, 255, 255, 0.92);
+  border-bottom: 1px solid var(--line);
+  backdrop-filter: blur(14px);
+}
+
+.site-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  width: min(1120px, calc(100% - 2rem));
+  margin: 0 auto;
+  padding: 0.85rem 0;
+}
+
+.site-title {
+  color: var(--ink);
+  font-weight: 760;
+  line-height: 1.2;
+  text-decoration: none;
+}
+
+.site-links {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.7rem 1rem;
+  font-size: 0.92rem;
+}
+
+.site-links a,
+.paper a {
+  color: var(--accent-ink);
+  text-decoration-color: rgba(15, 118, 110, 0.35);
+  text-underline-offset: 0.18em;
+}
+
+.site-links a:hover,
+.paper a:hover {
+  color: var(--accent);
+  text-decoration-color: var(--accent);
+}
+
+.page-shell {
+  width: min(1120px, calc(100% - 2rem));
+  margin: 2rem auto 4rem;
+}
+
+.paper {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: clamp(1.25rem, 3vw, 3.25rem);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+
+.paper > h1:first-child {
+  margin-top: 0;
+  font-size: clamp(2rem, 5vw, 4rem);
+  line-height: 1.02;
+  letter-spacing: 0;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  line-height: 1.2;
+  letter-spacing: 0;
+}
+
+h2 {
+  margin-top: 3rem;
+  padding-top: 1.2rem;
+  border-top: 1px solid var(--line);
+  font-size: clamp(1.45rem, 3vw, 2.2rem);
+}
+
+h3 {
+  margin-top: 2rem;
+  font-size: 1.25rem;
+}
+
+p,
+li {
+  color: var(--ink);
+}
+
+.paper > p:nth-of-type(1),
+.paper > p:nth-of-type(2) {
+  color: var(--muted);
+}
+
+blockquote {
+  margin: 1.4rem 0;
+  padding: 0.8rem 1rem;
+  border-left: 4px solid var(--accent);
+  background: var(--soft);
+  border-radius: 0 8px 8px 0;
+}
+
+pre,
+code {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+code {
+  padding: 0.12em 0.34em;
+  background: var(--code-bg);
+  border-radius: 6px;
+  font-size: 0.88em;
+}
+
+pre {
+  overflow-x: auto;
+  margin: 1.2rem 0;
+  padding: 1rem;
+  background: #111827;
+  color: #f8fafc;
+  border-radius: 8px;
+  line-height: 1.48;
+}
+
+pre code {
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  border-radius: 0;
+  font-size: 0.9rem;
+}
+
+.mermaid {
+  overflow-x: auto;
+  margin: 1.6rem 0;
+  padding: 1rem;
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.mermaid svg {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+
+table {
+  display: block;
+  width: 100%;
+  overflow-x: auto;
+  margin: 1.2rem 0;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--line);
+  vertical-align: top;
+}
+
+th {
+  background: var(--table-head);
+  font-weight: 720;
+}
+
+img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 1.4rem auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+ul,
+ol {
+  padding-left: 1.35rem;
+}
+
+hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 2.5rem 0;
+}
+
+@media (max-width: 760px) {
+  body {
+    font-size: 16px;
+  }
+
+  .site-nav {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .site-links {
+    justify-content: flex-start;
+  }
+
+  .page-shell {
+    width: min(100% - 1rem, 1120px);
+    margin-top: 0.75rem;
+  }
+
+  .paper {
+    padding: 1rem;
+  }
+}

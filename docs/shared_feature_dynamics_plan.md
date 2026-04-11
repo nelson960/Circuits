@@ -1,3 +1,9 @@
+---
+layout: default
+title: Shared Feature Dynamics Plan
+description: Shared feature basis and feature-family analysis design for symbolic key-value circuit formation.
+---
+
 # Shared Feature Dynamics Plan
 
 ## Goal

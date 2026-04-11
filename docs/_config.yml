@@ -1,0 +1,14 @@
+title: From Retrieval Motifs To SGD Circuit Selection
+description: Ongoing mechanistic interpretability research on how SGD forms retrieval circuits in small symbolic key-value transformers.
+url: https://nelson960.github.io
+baseurl: /Circuits
+repository_url: https://github.com/nelson960/Circuits
+theme: minima
+markdown: kramdown
+lang: en
+plugins:
+  - jekyll-seo-tag
+
+kramdown:
+  input: GFM
+  syntax_highlighter: rouge
