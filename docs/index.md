@@ -1273,3 +1273,57 @@ If a proposed explanation cannot express the dataset relation,
 decompose the answer margin, and predict which path SGD reinforces,
 it is only a post-hoc story.
 ```
+
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script>
+(() => {
+  const renderMermaid = async () => {
+    const blocks = Array.from(document.querySelectorAll("pre > code, .language-mermaid pre code"))
+      .filter((block) => block.classList.contains("language-mermaid") || block.closest(".language-mermaid"));
+
+    for (const block of blocks) {
+      const container = document.createElement("div");
+      container.className = "mermaid";
+      container.textContent = block.textContent;
+      const source = block.closest(".language-mermaid.highlighter-rouge") || block.parentElement;
+      source.replaceWith(container);
+    }
+
+    if (!window.mermaid || blocks.length === 0) {
+      return;
+    }
+
+    window.mermaid.initialize({
+      startOnLoad: false,
+      securityLevel: "strict",
+      theme: "neutral",
+      flowchart: {
+        htmlLabels: false,
+        useMaxWidth: true,
+        curve: "linear"
+      },
+      themeVariables: {
+        fontFamily: "Iowan Old Style, Palatino Linotype, Book Antiqua, Palatino, Georgia, serif",
+        fontSize: "13px",
+        primaryColor: "#fffdf8",
+        primaryBorderColor: "#d4c8b5",
+        primaryTextColor: "#202124",
+        lineColor: "#9d927f",
+        secondaryColor: "#f8f4ec",
+        tertiaryColor: "#fffdf8",
+        clusterBkg: "#fffdf8",
+        clusterBorder: "#e0daca",
+        edgeLabelBackground: "#fffdf8"
+      }
+    });
+
+    await window.mermaid.run({ querySelector: ".mermaid" });
+  };
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", renderMermaid);
+  } else {
+    renderMermaid();
+  }
+})();
+</script>
