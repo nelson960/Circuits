@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="360" viewBox="0 0 960 360" role="img" aria-labelledby="title desc">
+  <title id="title">Current research progress</title>
+  <desc id="desc">Progress from benchmark through dense shared score support and the next geometry phase.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <path d="M0,0 L10,4 L0,8 Z" fill="#9d927f"/>
+    </marker>
+    <style>
+      .box { fill:#fffdf8; stroke:#d4c8b5; stroke-width:1.3; rx:8; }
+      .result { fill:#f8f4ec; stroke:#cdbfaa; stroke-width:1.3; rx:8; }
+      .text { fill:#202124; font-family: Georgia, Palatino, serif; font-size:15px; text-anchor:middle; dominant-baseline:middle; }
+      .line { stroke:#9d927f; stroke-width:1.4; fill:none; marker-end:url(#arrow); }
+    </style>
+  </defs>
+  <rect width="960" height="360" fill="#fcfbf8"/>
+  <text x="480" y="34" class="text" style="font-size:22px;font-weight:600">Current Research Progress</text>
+
+  <rect class="box" x="60" y="78" width="140" height="52"/><text class="text" x="130" y="104">Stream KV</text>
+  <rect class="box" x="250" y="78" width="140" height="52"/><text class="text" x="320" y="104">Training</text>
+  <rect class="box" x="440" y="78" width="140" height="52"/><text class="text" x="510" y="104">Sweep</text>
+  <rect class="box" x="630" y="78" width="140" height="52"/><text class="text" x="700" y="104">Features</text>
+
+  <rect class="box" x="60" y="190" width="150" height="52"/><text class="text" x="135" y="216">Family7/4</text>
+  <rect class="box" x="250" y="190" width="150" height="52"/><text class="text" x="325" y="216">Gradient Link</text>
+  <rect class="result" x="440" y="190" width="150" height="52"/><text class="text" x="515" y="216">Birth Model Fails</text>
+  <rect class="result" x="630" y="190" width="150" height="52"/><text class="text" x="705" y="216">Dense Coalition</text>
+  <rect class="result" x="445" y="286" width="190" height="52"/><text class="text" x="540" y="312">Next: Geometry</text>
+
+  <path class="line" d="M200 104 H250"/>
+  <path class="line" d="M390 104 H440"/>
+  <path class="line" d="M580 104 H630"/>
+  <path class="line" d="M700 130 C700 160 135 160 135 190"/>
+  <path class="line" d="M210 216 H250"/>
+  <path class="line" d="M400 216 H440"/>
+  <path class="line" d="M590 216 H630"/>
+  <path class="line" d="M705 242 C705 285 635 285 635 312"/>
+  <path class="line" d="M515 242 V286"/>
+</svg>

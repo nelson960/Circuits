@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="840" viewBox="0 0 960 840" role="img" aria-labelledby="title desc">
+  <title id="title">Tool dependency graph</title>
+  <desc id="desc">Grouped dependency graph for benchmark, shared features, family tracing, candidate dynamics, and planned mathematical tools.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <path d="M0,0 L10,4 L0,8 Z" fill="#9d927f"/>
+    </marker>
+    <style>
+      .bg { fill:#fcfbf8; }
+      .group { fill:#fffdf8; stroke:#e0daca; stroke-width:1.2; rx:8; }
+      .box { fill:#ffffff; stroke:#d4c8b5; stroke-width:1.2; rx:7; }
+      .planned { fill:#f8f4ec; stroke:#cdbfaa; stroke-width:1.2; rx:7; }
+      .title { fill:#171615; font-family: Georgia, Palatino, serif; font-size:17px; font-weight:600; }
+      .text { fill:#202124; font-family: Georgia, Palatino, serif; font-size:13px; text-anchor:middle; dominant-baseline:middle; }
+      .line { stroke:#9d927f; stroke-width:1.2; fill:none; marker-end:url(#arrow); }
+    </style>
+  </defs>
+  <rect class="bg" width="960" height="840"/>
+
+  <rect class="group" x="40" y="30" width="880" height="118"/>
+  <text class="title" x="62" y="58">Benchmark and Checkpoints</text>
+  <rect class="box" x="70" y="78" width="135" height="42"/><text class="text" x="137.5" y="99">generate-benchmark</text>
+  <rect class="box" x="245" y="78" width="90" height="42"/><text class="text" x="290" y="99">train</text>
+  <rect class="box" x="375" y="55" width="125" height="42"/><text class="text" x="437.5" y="76">select-reference</text>
+  <rect class="box" x="375" y="105" width="135" height="42"/><text class="text" x="442.5" y="126">generate-probe-set</text>
+  <rect class="box" x="555" y="105" width="130" height="42"/><text class="text" x="620" y="126">checkpoint-sweep</text>
+  <rect class="box" x="730" y="78" width="145" height="42"/><text class="text" x="802.5" y="99">birth-window tools</text>
+  <path class="line" d="M205 99 H245"/>
+  <path class="line" d="M335 99 C355 99 355 76 375 76"/>
+  <path class="line" d="M335 99 C355 99 355 126 375 126"/>
+  <path class="line" d="M510 126 H555"/>
+  <path class="line" d="M685 126 C705 126 705 99 730 99"/>
+
+  <rect class="group" x="40" y="178" width="880" height="118"/>
+  <text class="title" x="62" y="206">Shared Feature Layer</text>
+  <rect class="box" x="100" y="228" width="135" height="42"/><text class="text" x="167.5" y="249">shared-feature-fit</text>
+  <rect class="box" x="285" y="228" width="165" height="42"/><text class="text" x="367.5" y="249">feature-trajectory-sweep</text>
+  <rect class="box" x="510" y="206" width="145" height="42"/><text class="text" x="582.5" y="227">feature-birth-analyze</text>
+  <rect class="box" x="510" y="256" width="145" height="42"/><text class="text" x="582.5" y="277">feature-family-cluster</text>
+  <path class="line" d="M235 249 H285"/>
+  <path class="line" d="M450 249 C475 249 475 227 510 227"/>
+  <path class="line" d="M450 249 C475 249 475 277 510 277"/>
+  <path class="line" d="M442 148 C360 165 220 178 170 228"/>
+
+  <rect class="group" x="40" y="326" width="880" height="176"/>
+  <text class="title" x="62" y="354">Family and Candidate Tracing</text>
+  <rect class="box" x="78" y="382" width="135" height="42"/><text class="text" x="145.5" y="403">family-compare</text>
+  <rect class="box" x="248" y="382" width="125" height="42"/><text class="text" x="310.5" y="403">family-rank</text>
+  <rect class="box" x="408" y="356" width="135" height="42"/><text class="text" x="475.5" y="377">family-subpatch</text>
+  <rect class="box" x="408" y="408" width="135" height="42"/><text class="text" x="475.5" y="429">family-lineage</text>
+  <rect class="box" x="588" y="382" width="135" height="42"/><text class="text" x="655.5" y="403">family-trace</text>
+  <rect class="box" x="78" y="452" width="135" height="42"/><text class="text" x="145.5" y="473">subset-trajectory</text>
+  <rect class="box" x="248" y="452" width="115" height="42"/><text class="text" x="305.5" y="473">subset-birth</text>
+  <rect class="box" x="588" y="452" width="135" height="42"/><text class="text" x="655.5" y="473">family-update-link</text>
+  <rect class="box" x="755" y="417" width="135" height="42"/><text class="text" x="822.5" y="438">candidate-registry</text>
+  <path class="line" d="M213 403 H248"/>
+  <path class="line" d="M373 403 C390 403 390 377 408 377"/>
+  <path class="line" d="M373 403 C390 403 390 429 408 429"/>
+  <path class="line" d="M543 377 C565 377 565 403 588 403"/>
+  <path class="line" d="M543 429 C565 429 565 403 588 403"/>
+  <path class="line" d="M213 473 H248"/>
+  <path class="line" d="M723 403 C735 403 742 438 755 438"/>
+  <path class="line" d="M723 473 C735 473 742 438 755 438"/>
+  <path class="line" d="M363 473 C515 473 590 438 755 438"/>
+  <path class="line" d="M582 296 C500 320 210 326 145 382"/>
+
+  <rect class="group" x="40" y="532" width="880" height="118"/>
+  <text class="title" x="62" y="560">Candidate Dynamics and Coalition</text>
+  <rect class="box" x="90" y="582" width="140" height="42"/><text class="text" x="160" y="603">circuit-gradient-link</text>
+  <rect class="box" x="280" y="560" width="145" height="42"/><text class="text" x="352.5" y="581">mechanism-report</text>
+  <rect class="box" x="280" y="610" width="145" height="42"/><text class="text" x="352.5" y="631">birth-model</text>
+  <rect class="box" x="480" y="582" width="145" height="42"/><text class="text" x="552.5" y="603">coalition-map</text>
+  <rect class="box" x="680" y="582" width="160" height="42"/><text class="text" x="760" y="603">neuron-intervention</text>
+  <path class="line" d="M822 459 C815 520 250 520 160 582"/>
+  <path class="line" d="M230 603 C250 603 250 581 280 581"/>
+  <path class="line" d="M230 603 C250 603 250 631 280 631"/>
+  <path class="line" d="M425 603 H480"/>
+  <path class="line" d="M625 603 H680"/>
+
+  <rect class="group" x="40" y="680" width="880" height="128"/>
+  <text class="title" x="62" y="708">Mathematical Next Layer</text>
+  <rect class="planned" x="70" y="735" width="155" height="42"/><text class="text" x="147.5" y="756">dataset-geometry</text>
+  <rect class="planned" x="265" y="735" width="155" height="42"/><text class="text" x="342.5" y="756">attention-geometry</text>
+  <rect class="planned" x="460" y="735" width="155" height="42"/><text class="text" x="537.5" y="756">path-logit-decomp</text>
+  <rect class="planned" x="655" y="715" width="165" height="42"/><text class="text" x="737.5" y="736">example-gradient</text>
+  <rect class="planned" x="655" y="765" width="165" height="42"/><text class="text" x="737.5" y="786">hypothesis-tester</text>
+  <path class="line" d="M225 756 H265"/>
+  <path class="line" d="M420 756 H460"/>
+  <path class="line" d="M615 756 C635 756 635 736 655 736"/>
+  <path class="line" d="M615 756 C635 756 635 786 655 786"/>
+  <path class="line" d="M760 624 C760 655 610 690 537 735"/>
+</svg>

@@ -78,28 +78,7 @@ Supported:
 
 The project currently has a full end-to-end circuit-formation analysis stack:
 
-```mermaid
-flowchart TD
-  A["Stream symbolic KV dataset"] --> B["Decoder-only training"]
-  B --> C["Dense checkpoints every 250 steps"]
-  C --> D["Checkpoint sweep"]
-  D --> E["Birth-window analysis"]
-  D --> F["Shared feature basis"]
-  F --> G["Feature trajectories"]
-  G --> H["Feature families"]
-  H --> I["Family rank, subpatch, lineage, trace"]
-  I --> J["Candidate circuit registry"]
-  J --> K["Circuit-gradient link"]
-  K --> L["Candidate mechanism report"]
-  K --> M["Candidate birth model"]
-  K --> P["Candidate coalition map"]
-  P --> R["Candidate neuron intervention"]
-  L --> N["What formed?"]
-  M --> O["Can pre-birth factors predict why it forms?"]
-  P --> Q["Are families one dense neuron coalition?"]
-  R --> S["Which shared neurons are causally carrying family scores?"]
-  S --> T["Next: dataset and attention geometry"]
-```
+![Circuit formation analysis stack](assets/figures/analysis_stack_overview.svg)
 
 Current best hypothesis:
 
@@ -423,59 +402,7 @@ The tools are part of the research contribution. They turn checkpoint files into
 
 ### Tool Dependency Graph
 
-```mermaid
-flowchart TD
-  subgraph A["Benchmark and Checkpoints"]
-    GB["generate-benchmark"] --> TR["train"]
-    TR --> SR["select-reference"]
-    TR --> GPS["generate-probe-set"]
-    GPS --> CS["checkpoint-sweep"]
-    CS --> BWA["birth-window-analyze"]
-    CS --> BWC["birth-window-compare"]
-  end
-
-  subgraph B["Shared Feature Layer"]
-    GPS --> SFF["shared-feature-fit"]
-    SFF --> FTS["feature-trajectory-sweep"]
-    FTS --> FBA["feature-birth-analyze"]
-    FTS --> FFC["feature-family-cluster"]
-  end
-
-  subgraph C["Family and Candidate Tracing"]
-    FFC --> FFB["feature-family-birth"]
-    FFC --> FFCMP["feature-family-compare"]
-    FFCMP --> FFR["feature-family-rank"]
-    FFR --> FFSP["feature-family-subpatch"]
-    FFR --> FFL["feature-family-lineage"]
-    FFSP --> FFT["feature-family-trace"]
-    FFL --> FFT
-    FTS --> ST["subset-trajectory"]
-    ST --> SB["subset-birth"]
-    FFT --> FUL["family-update-link"]
-    FFT --> CCR["candidate-circuit-registry"]
-    ST --> CCR
-    SB --> CCR
-    FUL --> CCR
-  end
-
-  subgraph D["Candidate Dynamics and Coalition"]
-    CCR --> CGL["circuit-gradient-link"]
-    CGL --> CMR["candidate-mechanism-report"]
-    CGL --> CBM["candidate-birth-model"]
-    CGL --> CCM["candidate-coalition-map"]
-    CCM --> CNI["candidate-neuron-intervention"]
-  end
-
-  subgraph E["Mathematical Next Layer"]
-    GPS --> DGR["dataset-geometry-report"]
-    CS --> AGT["attention-geometry-trace"]
-    DGR --> AGT
-    AGT --> PLD["path-logit-decomposition"]
-    CNI --> PLD
-    PLD --> EGG["example-gradient-geometry"]
-    EGG --> MHT["mechanism-hypothesis-tester"]
-  end
-```
+![Tool dependency graph](assets/figures/tool_dependency_graph.svg)
 
 ### Current Tool Inventory
 
@@ -964,20 +891,7 @@ Supported:
 
 The project has progressed through these stages:
 
-```mermaid
-flowchart TD
-  A["Stream KV benchmark"] --> B["Reference training"]
-  B --> C["Checkpoint sweep"]
-  C --> D["Shared features"]
-  D --> E["Family7 / family4"]
-  E --> F["Gradient link"]
-  F --> G["Birth-model failure"]
-  F --> H["Coalition map"]
-  H --> I["Neuron intervention"]
-  I --> J["Feature-score support"]
-  J --> K["Behavior still compensated"]
-  K --> L["Next: geometry"]
-```
+![Current research progress](assets/figures/current_research_progress.svg)
 
 Current status by research layer:
 
@@ -1273,57 +1187,3 @@ If a proposed explanation cannot express the dataset relation,
 decompose the answer margin, and predict which path SGD reinforces,
 it is only a post-hoc story.
 ```
-
-<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
-<script>
-(() => {
-  const renderMermaid = async () => {
-    const blocks = Array.from(document.querySelectorAll("pre > code, .language-mermaid pre code"))
-      .filter((block) => block.classList.contains("language-mermaid") || block.closest(".language-mermaid"));
-
-    for (const block of blocks) {
-      const container = document.createElement("div");
-      container.className = "mermaid";
-      container.textContent = block.textContent;
-      const source = block.closest(".language-mermaid.highlighter-rouge") || block.parentElement;
-      source.replaceWith(container);
-    }
-
-    if (!window.mermaid || blocks.length === 0) {
-      return;
-    }
-
-    window.mermaid.initialize({
-      startOnLoad: false,
-      securityLevel: "strict",
-      theme: "neutral",
-      flowchart: {
-        htmlLabels: false,
-        useMaxWidth: true,
-        curve: "linear"
-      },
-      themeVariables: {
-        fontFamily: "Iowan Old Style, Palatino Linotype, Book Antiqua, Palatino, Georgia, serif",
-        fontSize: "13px",
-        primaryColor: "#fffdf8",
-        primaryBorderColor: "#d4c8b5",
-        primaryTextColor: "#202124",
-        lineColor: "#9d927f",
-        secondaryColor: "#f8f4ec",
-        tertiaryColor: "#fffdf8",
-        clusterBkg: "#fffdf8",
-        clusterBorder: "#e0daca",
-        edgeLabelBackground: "#fffdf8"
-      }
-    });
-
-    await window.mermaid.run({ querySelector: ".mermaid" });
-  };
-
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", renderMermaid);
-  } else {
-    renderMermaid();
-  }
-})();
-</script>
