@@ -32,6 +32,8 @@ CANDIDATE_REGISTRY_SCHEMA_VERSION = 1
 GRADIENT_LINK_SCHEMA_VERSION = 1
 MECHANISM_REPORT_SCHEMA_VERSION = 1
 BIRTH_MODEL_SCHEMA_VERSION = 1
+COALITION_MAP_SCHEMA_VERSION = 1
+NEURON_INTERVENTION_SCHEMA_VERSION = 1
 SUBSET_DELTA_KEYS = [
     "mean_activation_mean",
     "active_fraction_mean",
@@ -80,6 +82,7 @@ BIRTH_MODEL_FACTOR_ORIENTATION = {
     str(spec["name"]): str(spec["orientation"])
     for spec in BIRTH_MODEL_FACTOR_SPECS
 }
+NEURON_PARAMETER_SUFFIXES = ("fc_in.weight", "fc_in.bias", "fc_out.weight")
 
 
 def _require_dict(value: Any, label: str) -> dict[str, Any]:
@@ -3931,3 +3934,2180 @@ def build_candidate_birth_model(
     write_json(report_path, report_payload)
     _write_birth_model_markdown(output_path=markdown_path, report_payload=report_payload)
     return report_path, markdown_path, plots
+
+
+def _candidate_source_basis_path(candidate: dict[str, Any], candidate_id: str) -> Path:
+    artifacts = _require_dict(candidate.get("source_artifacts"), f"candidate {candidate_id}.source_artifacts")
+    raw_basis_path = artifacts.get("shared_feature_basis")
+    if raw_basis_path is None:
+        raise ValueError(f"candidate {candidate_id} is missing source_artifacts.shared_feature_basis.")
+    return Path(_require_non_empty_str(raw_basis_path, f"candidate {candidate_id}.source_artifacts.shared_feature_basis"))
+
+
+def _coalition_target_specs(
+    *,
+    registry_lookup: dict[str, dict[str, Any]],
+    selected_candidate_ids: list[str],
+    include_individual_features: bool,
+) -> list[dict[str, Any]]:
+    targets: list[dict[str, Any]] = []
+    feature_targets: dict[tuple[str, str, int], dict[str, Any]] = {}
+    for candidate_id in selected_candidate_ids:
+        candidate = registry_lookup[candidate_id]
+        stage_name = _require_non_empty_str(candidate.get("stage_name"), f"candidate {candidate_id}.stage_name")
+        feature_ids = _coerce_int_list(candidate.get("feature_ids"), f"candidate {candidate_id}.feature_ids")
+        basis_path = _candidate_source_basis_path(candidate, candidate_id)
+        targets.append(
+            {
+                "target_id": candidate_id,
+                "target_kind": "candidate",
+                "candidate_id": candidate_id,
+                "family_id": candidate.get("family_id"),
+                "stage_name": stage_name,
+                "feature_ids": feature_ids,
+                "basis_path": str(basis_path),
+            }
+        )
+        if include_individual_features:
+            for feature_id in feature_ids:
+                key = (stage_name, str(basis_path), int(feature_id))
+                if key not in feature_targets:
+                    feature_targets[key] = {
+                        "target_id": _sanitize_candidate_id(f"{stage_name}_feature_{feature_id}"),
+                        "target_kind": "feature",
+                        "candidate_ids": [candidate_id],
+                        "family_ids": [candidate.get("family_id")],
+                        "stage_name": stage_name,
+                        "feature_ids": [int(feature_id)],
+                        "basis_path": str(basis_path),
+                    }
+                else:
+                    feature_targets[key]["candidate_ids"].append(candidate_id)
+                    feature_targets[key]["family_ids"].append(candidate.get("family_id"))
+    targets.extend(feature_targets[key] for key in sorted(feature_targets))
+    seen_target_ids: set[str] = set()
+    for target in targets:
+        target_id = _sanitize_candidate_id(_require_non_empty_str(target.get("target_id"), "coalition target target_id"))
+        if target_id in seen_target_ids:
+            raise ValueError(f"Duplicate coalition target_id: {target_id}")
+        seen_target_ids.add(target_id)
+    return targets
+
+
+def _coalition_neuron_layers(
+    *,
+    registry_lookup: dict[str, dict[str, Any]],
+    selected_candidate_ids: list[str],
+    extra_layers: list[int] | None,
+) -> list[int]:
+    layers: set[int] = set()
+    for candidate_id in selected_candidate_ids:
+        candidate = registry_lookup[candidate_id]
+        for index, raw_group in enumerate(_require_list(candidate.get("parameter_groups"), f"candidate {candidate_id}.parameter_groups")):
+            group = _require_dict(raw_group, f"candidate {candidate_id}.parameter_groups[{index}]")
+            kind = _require_non_empty_str(group.get("kind"), f"candidate {candidate_id}.parameter_groups[{index}].kind")
+            if kind in {"mlp_block", "mlp_neuron_group"}:
+                layers.add(_require_int(group.get("layer"), f"candidate {candidate_id}.parameter_groups[{index}].layer"))
+    if extra_layers is not None:
+        for layer in extra_layers:
+            if layer < 0:
+                raise ValueError(f"Neuron layer must be non-negative: {layer}")
+            layers.add(int(layer))
+    if not layers:
+        raise ValueError("No MLP neuron layers were found in selected candidates or provided with --neuron-layer.")
+    return sorted(layers)
+
+
+def _common_interval_pairs_for_candidates(
+    *,
+    rows_by_candidate: dict[str, list[dict[str, Any]]],
+    selected_candidate_ids: list[str],
+    start_step: int | None,
+    end_step: int | None,
+) -> list[tuple[int, int]]:
+    common_pairs: set[tuple[int, int]] | None = None
+    for candidate_id in selected_candidate_ids:
+        if candidate_id not in rows_by_candidate:
+            raise KeyError(f"Selected candidate has no gradient-link interval rows: {candidate_id}")
+        pairs = {
+            (
+                _require_int(row.get("previous_step"), f"{candidate_id}.interval.previous_step"),
+                _require_int(row.get("step"), f"{candidate_id}.interval.step"),
+            )
+            for row in rows_by_candidate[candidate_id]
+            if (start_step is None or _require_int(row.get("step"), f"{candidate_id}.interval.step") >= start_step)
+            and (end_step is None or _require_int(row.get("step"), f"{candidate_id}.interval.step") <= end_step)
+        }
+        common_pairs = pairs if common_pairs is None else common_pairs & pairs
+    if not common_pairs:
+        raise ValueError(
+            f"No common gradient-link intervals remain after filtering start_step={start_step}, end_step={end_step}."
+        )
+    return sorted(common_pairs, key=lambda pair: (pair[1], pair[0]))
+
+
+def _validate_neuron_layer_keys(state: dict[str, torch.Tensor], layer: int) -> dict[str, str]:
+    keys = {
+        "fc_in_weight": f"blocks.{layer}.ff.fc_in.weight",
+        "fc_in_bias": f"blocks.{layer}.ff.fc_in.bias",
+        "fc_out_weight": f"blocks.{layer}.ff.fc_out.weight",
+    }
+    missing = [key for key in keys.values() if key not in state]
+    if missing:
+        raise KeyError(f"Missing MLP neuron parameter keys for layer {layer}: {missing}")
+    return keys
+
+
+def _per_neuron_projection_arrays(
+    *,
+    previous_state: dict[str, torch.Tensor],
+    current_state: dict[str, torch.Tensor],
+    gradients: dict[str, torch.Tensor],
+    layer: int,
+) -> dict[str, torch.Tensor]:
+    keys = _validate_neuron_layer_keys(previous_state, layer)
+    for key in keys.values():
+        if key not in current_state:
+            raise KeyError(f"Current checkpoint is missing neuron parameter key: {key}")
+        if key not in gradients:
+            raise KeyError(f"Gradient payload is missing neuron parameter key: {key}")
+        if tuple(previous_state[key].shape) != tuple(current_state[key].shape):
+            raise ValueError(f"Checkpoint tensor shape mismatch for {key}.")
+        if tuple(previous_state[key].shape) != tuple(gradients[key].shape):
+            raise ValueError(f"Gradient tensor shape mismatch for {key}.")
+
+    update_in_weight = current_state[keys["fc_in_weight"]].float() - previous_state[keys["fc_in_weight"]].float()
+    update_in_bias = current_state[keys["fc_in_bias"]].float() - previous_state[keys["fc_in_bias"]].float()
+    update_out_weight = current_state[keys["fc_out_weight"]].float() - previous_state[keys["fc_out_weight"]].float()
+    grad_in_weight = gradients[keys["fc_in_weight"]].float()
+    grad_in_bias = gradients[keys["fc_in_bias"]].float()
+    grad_out_weight = gradients[keys["fc_out_weight"]].float()
+    return {
+        "dot": (update_in_weight * grad_in_weight).sum(dim=1)
+        + (update_in_bias * grad_in_bias)
+        + (update_out_weight * grad_out_weight).sum(dim=0),
+        "update_sq": (update_in_weight * update_in_weight).sum(dim=1)
+        + (update_in_bias * update_in_bias)
+        + (update_out_weight * update_out_weight).sum(dim=0),
+        "gradient_sq": (grad_in_weight * grad_in_weight).sum(dim=1)
+        + (grad_in_bias * grad_in_bias)
+        + (grad_out_weight * grad_out_weight).sum(dim=0),
+    }
+
+
+def _add_neuron_projection_accumulators(
+    *,
+    accumulator: dict[tuple[str, int, int], dict[str, Any]],
+    target: dict[str, Any],
+    layer: int,
+    score_arrays: dict[str, torch.Tensor],
+    loss_arrays: dict[str, torch.Tensor],
+) -> None:
+    score_dot = score_arrays["dot"].detach().cpu()
+    loss_dot = loss_arrays["dot"].detach().cpu()
+    update_sq = score_arrays["update_sq"].detach().cpu()
+    score_grad_sq = score_arrays["gradient_sq"].detach().cpu()
+    loss_grad_sq = loss_arrays["gradient_sq"].detach().cpu()
+    if score_dot.ndim != 1:
+        raise ValueError(f"Expected per-neuron score dot vector for layer {layer}, got {tuple(score_dot.shape)}")
+    d_ff = int(score_dot.shape[0])
+    if tuple(loss_dot.shape) != (d_ff,) or tuple(update_sq.shape) != (d_ff,):
+        raise ValueError(f"Per-neuron projection shape mismatch for layer {layer}.")
+    target_id = _sanitize_candidate_id(_require_non_empty_str(target.get("target_id"), "coalition target target_id"))
+    for neuron in range(d_ff):
+        key = (target_id, layer, neuron)
+        row = accumulator.setdefault(
+            key,
+            {
+                "target_id": target_id,
+                "target_kind": target["target_kind"],
+                "candidate_id": target.get("candidate_id"),
+                "candidate_ids": target.get("candidate_ids"),
+                "family_id": target.get("family_id"),
+                "family_ids": target.get("family_ids"),
+                "stage_name": target["stage_name"],
+                "feature_ids": target["feature_ids"],
+                "layer": layer,
+                "neuron": neuron,
+                "interval_count": 0,
+                "sum_score_linearized_delta": 0.0,
+                "positive_score_drive": 0.0,
+                "negative_score_drive_abs": 0.0,
+                "sum_loss_reduction_linearized": 0.0,
+                "positive_loss_reduction": 0.0,
+                "negative_loss_reduction_abs": 0.0,
+                "sum_update_sq": 0.0,
+                "sum_score_gradient_sq": 0.0,
+                "sum_loss_gradient_sq": 0.0,
+                "sum_score_dot": 0.0,
+                "sum_negative_loss_dot": 0.0,
+            },
+        )
+        current_score_dot = float(score_dot[neuron].item())
+        current_loss_reduction = -float(loss_dot[neuron].item())
+        row["interval_count"] += 1
+        row["sum_score_linearized_delta"] += current_score_dot
+        row["positive_score_drive"] += max(current_score_dot, 0.0)
+        row["negative_score_drive_abs"] += max(-current_score_dot, 0.0)
+        row["sum_loss_reduction_linearized"] += current_loss_reduction
+        row["positive_loss_reduction"] += max(current_loss_reduction, 0.0)
+        row["negative_loss_reduction_abs"] += max(-current_loss_reduction, 0.0)
+        row["sum_update_sq"] += float(update_sq[neuron].item())
+        row["sum_score_gradient_sq"] += float(score_grad_sq[neuron].item())
+        row["sum_loss_gradient_sq"] += float(loss_grad_sq[neuron].item())
+        row["sum_score_dot"] += current_score_dot
+        row["sum_negative_loss_dot"] += current_loss_reduction
+
+
+def _finalize_neuron_projection_rows(accumulator: dict[tuple[str, int, int], dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for row in accumulator.values():
+        update_norm = float(row["sum_update_sq"]) ** 0.5
+        score_grad_norm = float(row["sum_score_gradient_sq"]) ** 0.5
+        loss_grad_norm = float(row["sum_loss_gradient_sq"]) ** 0.5
+        rows.append(
+            {
+                **row,
+                "update_l2_norm": update_norm,
+                "score_gradient_l2_norm": score_grad_norm,
+                "loss_gradient_l2_norm": loss_grad_norm,
+                "update_score_gradient_cosine": _safe_ratio(
+                    float(row["sum_score_dot"]),
+                    update_norm * score_grad_norm,
+                ),
+                "update_negative_loss_gradient_cosine": _safe_ratio(
+                    float(row["sum_negative_loss_dot"]),
+                    update_norm * loss_grad_norm,
+                ),
+            }
+        )
+    rows.sort(key=lambda item: abs(float(item["sum_score_linearized_delta"])), reverse=True)
+    return rows
+
+
+def _gradient_vector_dot_for_neuron_layers(
+    *,
+    left_gradients: dict[str, torch.Tensor],
+    right_gradients: dict[str, torch.Tensor],
+    layers: list[int],
+) -> dict[str, float]:
+    dot = 0.0
+    left_sq = 0.0
+    right_sq = 0.0
+    for layer in layers:
+        keys = _validate_neuron_layer_keys(left_gradients, layer)
+        for key in keys.values():
+            if key not in right_gradients:
+                raise KeyError(f"Right gradient payload is missing key: {key}")
+            left = left_gradients[key].float()
+            right = right_gradients[key].float()
+            if tuple(left.shape) != tuple(right.shape):
+                raise ValueError(f"Gradient shape mismatch for {key}: {tuple(left.shape)} vs {tuple(right.shape)}")
+            dot += float(torch.sum(left * right).item())
+            left_sq += float(torch.sum(left * left).item())
+            right_sq += float(torch.sum(right * right).item())
+    return {
+        "dot": dot,
+        "left_l2_norm": left_sq ** 0.5,
+        "right_l2_norm": right_sq ** 0.5,
+        "cosine": _safe_ratio(dot, (left_sq ** 0.5) * (right_sq ** 0.5)),
+    }
+
+
+def _target_feature_score_at_step(
+    *,
+    target: dict[str, Any],
+    step: int,
+    basis_cache: dict[str, dict[str, Any]],
+    feature_score_cache: dict[tuple[str, int], dict[str, Any]],
+    model_loader: Any,
+    batches: list[dict[str, Any]],
+    device: torch.device,
+) -> dict[str, Any]:
+    target_id = _sanitize_candidate_id(_require_non_empty_str(target.get("target_id"), "coalition target target_id"))
+    cache_key = (target_id, step)
+    cached = feature_score_cache.get(cache_key)
+    if cached is not None:
+        return cached
+    basis_path = Path(_require_non_empty_str(target.get("basis_path"), f"target {target_id}.basis_path"))
+    basis_cache_key = str(basis_path)
+    basis = basis_cache.get(basis_cache_key)
+    if basis is None:
+        basis = _load_shared_basis(basis_path, device)
+        basis_cache[basis_cache_key] = basis
+    model = model_loader(step)
+    payload = _compute_feature_score_and_gradients(
+        model=model,
+        batches=batches,
+        basis=basis,
+        stage_name=_require_non_empty_str(target.get("stage_name"), f"target {target_id}.stage_name"),
+        feature_ids=_coerce_int_list(target.get("feature_ids"), f"target {target_id}.feature_ids"),
+    )
+    feature_score_cache[cache_key] = payload
+    return payload
+
+
+def _coalition_pairwise_gradient_rows(
+    *,
+    target_specs: list[dict[str, Any]],
+    score_gradients_by_target: dict[str, dict[str, torch.Tensor]],
+    neuron_layers: list[int],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for left_index, left_target in enumerate(target_specs):
+        left_id = str(left_target["target_id"])
+        for right_target in target_specs[left_index + 1:]:
+            right_id = str(right_target["target_id"])
+            stats = _gradient_vector_dot_for_neuron_layers(
+                left_gradients=score_gradients_by_target[left_id],
+                right_gradients=score_gradients_by_target[right_id],
+                layers=neuron_layers,
+            )
+            rows.append(
+                {
+                    "target_a": left_id,
+                    "target_b": right_id,
+                    "score_gradient_dot": stats["dot"],
+                    "target_a_score_gradient_l2_norm": stats["left_l2_norm"],
+                    "target_b_score_gradient_l2_norm": stats["right_l2_norm"],
+                    "score_gradient_cosine": stats["cosine"],
+                }
+            )
+    return rows
+
+
+def _summarize_pairwise_gradient_rows(pairwise_interval_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in pairwise_interval_rows:
+        grouped[(str(row["target_a"]), str(row["target_b"]))].append(row)
+    summary_rows: list[dict[str, Any]] = []
+    for (left_id, right_id), rows in sorted(grouped.items()):
+        cosine_values = [
+            _require_number(row["score_gradient_cosine"], "pairwise.score_gradient_cosine")
+            for row in rows
+            if row["score_gradient_cosine"] is not None
+        ]
+        summary_rows.append(
+            {
+                "target_a": left_id,
+                "target_b": right_id,
+                "interval_count": len(rows),
+                "cosine_interval_count": len(cosine_values),
+                "cosine_null_interval_count": len(rows) - len(cosine_values),
+                "mean_score_gradient_cosine": None if not cosine_values else sum(cosine_values) / len(cosine_values),
+                "min_score_gradient_cosine": None if not cosine_values else min(cosine_values),
+                "max_score_gradient_cosine": None if not cosine_values else max(cosine_values),
+            }
+        )
+    return summary_rows
+
+
+def _target_neuron_score_lookup(neuron_rows: list[dict[str, Any]], target_ids: list[str]) -> dict[tuple[int, int], dict[str, float]]:
+    lookup: dict[tuple[int, int], dict[str, float]] = defaultdict(dict)
+    target_set = set(target_ids)
+    for row in neuron_rows:
+        target_id = str(row["target_id"])
+        if target_id not in target_set:
+            continue
+        key = (_require_int(row.get("layer"), "neuron_row.layer"), _require_int(row.get("neuron"), "neuron_row.neuron"))
+        lookup[key][target_id] = _require_number(row.get("sum_score_linearized_delta"), "neuron_row.sum_score_linearized_delta")
+    return lookup
+
+
+def _coalition_category_summary(
+    *,
+    neuron_rows: list[dict[str, Any]],
+    candidate_target_ids: list[str],
+    sign_epsilon: float,
+) -> dict[str, Any]:
+    if sign_epsilon < 0.0:
+        raise ValueError("sign_epsilon must be non-negative.")
+    score_lookup = _target_neuron_score_lookup(neuron_rows, candidate_target_ids)
+    category_rows: list[dict[str, Any]] = []
+    summaries: dict[str, dict[str, Any]] = {}
+    for (layer, neuron), scores in sorted(score_lookup.items()):
+        missing = sorted(set(candidate_target_ids) - set(scores))
+        if missing:
+            raise KeyError(f"Neuron L{layer}N{neuron} is missing candidate scores for {missing}")
+        positive_targets = [target_id for target_id, value in scores.items() if value > sign_epsilon]
+        negative_targets = [target_id for target_id, value in scores.items() if value < -sign_epsilon]
+        if len(positive_targets) == len(candidate_target_ids):
+            category = "shared_positive"
+        elif len(negative_targets) == len(candidate_target_ids):
+            category = "shared_negative"
+        elif len(positive_targets) == 1 and not negative_targets:
+            category = f"specific_positive:{positive_targets[0]}"
+        elif positive_targets and negative_targets:
+            category = "conflict"
+        else:
+            category = "flat_or_mixed"
+        positive_sum = sum(max(value, 0.0) for value in scores.values())
+        negative_abs_sum = sum(max(-value, 0.0) for value in scores.values())
+        conflict_magnitude = min(
+            sum(max(value, 0.0) for value in scores.values()),
+            sum(max(-value, 0.0) for value in scores.values()),
+        )
+        category_rows.append(
+            {
+                "layer": layer,
+                "neuron": neuron,
+                "category": category,
+                "scores_by_candidate": scores,
+                "positive_sum": positive_sum,
+                "negative_abs_sum": negative_abs_sum,
+                "conflict_magnitude": conflict_magnitude,
+                "min_candidate_score": min(scores.values()),
+                "max_candidate_score": max(scores.values()),
+            }
+        )
+        summary = summaries.setdefault(
+            category,
+            {
+                "category": category,
+                "neuron_count": 0,
+                "positive_score_sum": 0.0,
+                "negative_score_abs_sum": 0.0,
+                "conflict_magnitude_sum": 0.0,
+            },
+        )
+        summary["neuron_count"] += 1
+        summary["positive_score_sum"] += positive_sum
+        summary["negative_score_abs_sum"] += negative_abs_sum
+        summary["conflict_magnitude_sum"] += conflict_magnitude
+    category_rows.sort(
+        key=lambda row: (
+            str(row["category"]) != "shared_positive",
+            -abs(float(row["positive_sum"]) + float(row["negative_abs_sum"])),
+            int(row["layer"]),
+            int(row["neuron"]),
+        )
+    )
+    summary_rows = sorted(
+        summaries.values(),
+        key=lambda row: abs(float(row["positive_score_sum"])) + abs(float(row["negative_score_abs_sum"])),
+        reverse=True,
+    )
+    return {
+        "candidate_target_ids": candidate_target_ids,
+        "sign_epsilon": sign_epsilon,
+        "category_summaries": summary_rows,
+        "category_rows": category_rows,
+    }
+
+
+def _coalition_top_neuron_sets(
+    *,
+    neuron_rows: list[dict[str, Any]],
+    candidate_target_ids: list[str],
+    top_k: int,
+) -> dict[str, Any]:
+    if top_k <= 0:
+        raise ValueError("top_k_neurons must be positive.")
+    rows_by_target: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in neuron_rows:
+        target_id = str(row["target_id"])
+        if target_id in candidate_target_ids:
+            rows_by_target[target_id].append(row)
+    top_sets: dict[str, set[tuple[int, int]]] = {}
+    top_rows_by_target: dict[str, list[dict[str, Any]]] = {}
+    for target_id in candidate_target_ids:
+        ranked = sorted(
+            rows_by_target[target_id],
+            key=lambda row: float(row["sum_score_linearized_delta"]),
+            reverse=True,
+        )[:top_k]
+        top_rows_by_target[target_id] = ranked
+        top_sets[target_id] = {
+            (_require_int(row.get("layer"), "neuron_row.layer"), _require_int(row.get("neuron"), "neuron_row.neuron"))
+            for row in ranked
+        }
+    overlap_rows: list[dict[str, Any]] = []
+    for left_index, left_id in enumerate(candidate_target_ids):
+        for right_id in candidate_target_ids[left_index + 1:]:
+            left_set = top_sets[left_id]
+            right_set = top_sets[right_id]
+            union = left_set | right_set
+            overlap_rows.append(
+                {
+                    "target_a": left_id,
+                    "target_b": right_id,
+                    "top_k": top_k,
+                    "intersection_count": len(left_set & right_set),
+                    "union_count": len(union),
+                    "jaccard": None if not union else len(left_set & right_set) / len(union),
+                    "shared_neurons": [
+                        {"layer": layer, "neuron": neuron}
+                        for layer, neuron in sorted(left_set & right_set)
+                    ],
+                }
+            )
+    return {
+        "top_rows_by_target": top_rows_by_target,
+        "overlap_rows": overlap_rows,
+    }
+
+
+def _select_neurons_for_trajectory(
+    *,
+    coalition_summary: dict[str, Any],
+    neuron_rows: list[dict[str, Any]],
+    candidate_target_ids: list[str],
+    top_k: int,
+) -> list[dict[str, int]]:
+    if top_k <= 0:
+        raise ValueError("trajectory_top_k must be positive.")
+    selected: list[tuple[int, int]] = []
+    for row in _require_list(coalition_summary.get("category_rows"), "coalition_summary.category_rows"):
+        category_row = _require_dict(row, "coalition_summary.category_rows[]")
+        if category_row["category"] != "shared_positive":
+            continue
+        selected.append(
+            (
+                _require_int(category_row.get("layer"), "coalition_category.layer"),
+                _require_int(category_row.get("neuron"), "coalition_category.neuron"),
+            )
+        )
+        if len(selected) >= top_k:
+            break
+    if len(selected) < top_k:
+        score_lookup = _target_neuron_score_lookup(neuron_rows, candidate_target_ids)
+        ranked = sorted(
+            score_lookup,
+            key=lambda key: max(abs(value) for value in score_lookup[key].values()),
+            reverse=True,
+        )
+        for key in ranked:
+            if key not in selected:
+                selected.append(key)
+            if len(selected) >= top_k:
+                break
+    return [{"layer": layer, "neuron": neuron} for layer, neuron in selected[:top_k]]
+
+
+def _compute_neuron_activation_trajectory(
+    *,
+    model_loader: Any,
+    batches: list[dict[str, Any]],
+    steps: list[int],
+    selected_neurons: list[dict[str, int]],
+) -> list[dict[str, Any]]:
+    if not selected_neurons:
+        raise ValueError("selected_neurons must not be empty.")
+    by_layer: dict[int, list[int]] = defaultdict(list)
+    for item in selected_neurons:
+        layer = _require_int(item.get("layer"), "selected_neuron.layer")
+        neuron = _require_int(item.get("neuron"), "selected_neuron.neuron")
+        if neuron not in by_layer[layer]:
+            by_layer[layer].append(neuron)
+    trajectory_rows: list[dict[str, Any]] = []
+    for step in steps:
+        model = model_loader(step)
+        sums = {(layer, neuron): 0.0 for layer, neurons in by_layer.items() for neuron in neurons}
+        counts = {(layer, neuron): 0 for layer, neurons in by_layer.items() for neuron in neurons}
+        with torch.no_grad():
+            for batch in batches:
+                outputs = model(
+                    batch["input_ids"],
+                    attention_mask=batch["attention_mask"],
+                    return_mlp_states=True,
+                )
+                if outputs.mlp_states is None:
+                    raise RuntimeError("Neuron activation trajectory requires mlp_states.")
+                _, _, metadata = extract_answer_logits(outputs.logits, batch)
+                rows = metadata["rows"]
+                prediction_positions = metadata["prediction_positions"]
+                for layer, neurons in by_layer.items():
+                    state_key = f"layer_{layer}_hidden"
+                    if state_key not in outputs.mlp_states:
+                        raise KeyError(f"MLP state {state_key} not present in model output.")
+                    selected = outputs.mlp_states[state_key][rows, prediction_positions, :]
+                    for neuron in neurons:
+                        values = selected[:, neuron].float()
+                        sums[(layer, neuron)] += float(values.sum().item())
+                        counts[(layer, neuron)] += int(values.numel())
+        for (layer, neuron), total in sorted(sums.items()):
+            count = counts[(layer, neuron)]
+            if count <= 0:
+                raise ValueError(f"No activation values collected for L{layer}N{neuron} at step {step}.")
+            trajectory_rows.append(
+                {
+                    "step": int(step),
+                    "layer": layer,
+                    "neuron": neuron,
+                    "mean_activation": total / count,
+                    "num_values": count,
+                }
+            )
+    return trajectory_rows
+
+
+def _render_coalition_heatmap(
+    *,
+    neuron_rows: list[dict[str, Any]],
+    target_ids: list[str],
+    output_path: Path,
+    top_k: int,
+) -> Path:
+    if not neuron_rows:
+        raise ValueError("Cannot render coalition heatmap without neuron rows.")
+    if top_k <= 0:
+        raise ValueError("top_k_neurons must be positive.")
+    score_lookup = _target_neuron_score_lookup(neuron_rows, target_ids)
+    ranked_neurons = sorted(
+        score_lookup,
+        key=lambda key: max(abs(score_lookup[key].get(target_id, 0.0)) for target_id in target_ids),
+        reverse=True,
+    )[:top_k]
+    if not ranked_neurons:
+        raise ValueError("No ranked neurons available for coalition heatmap.")
+    matrix = [
+        [score_lookup[(layer, neuron)].get(target_id, 0.0) for target_id in target_ids]
+        for layer, neuron in ranked_neurons
+    ]
+    _, plt = _import_matplotlib()
+    fig, ax = plt.subplots(figsize=(max(8, 1.2 * len(target_ids)), max(6, 0.28 * len(ranked_neurons))))
+    image = ax.imshow(matrix, aspect="auto", cmap="coolwarm")
+    ax.set_title("Neuron x candidate feature-score update drive")
+    ax.set_xticks(list(range(len(target_ids))))
+    ax.set_xticklabels(target_ids, rotation=35, ha="right")
+    ax.set_yticks(list(range(len(ranked_neurons))))
+    ax.set_yticklabels([f"L{layer}N{neuron}" for layer, neuron in ranked_neurons])
+    fig.colorbar(image, ax=ax, label="sum score dot update")
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path)
+    plt.close(fig)
+    return output_path
+
+
+def _render_coalition_category_plot(
+    *,
+    coalition_summary: dict[str, Any],
+    output_path: Path,
+) -> Path:
+    summaries = _require_list(coalition_summary.get("category_summaries"), "coalition_summary.category_summaries")
+    if not summaries:
+        raise ValueError("Cannot render coalition category plot without category summaries.")
+    _, plt = _import_matplotlib()
+    fig, ax = plt.subplots(figsize=(12, 6))
+    labels = [str(row["category"]) for row in summaries]
+    x_positions = list(range(len(labels)))
+    ax.bar(
+        [position - 0.18 for position in x_positions],
+        [_require_number(row["positive_score_sum"], "category.positive_score_sum") for row in summaries],
+        width=0.36,
+        label="positive score drive",
+    )
+    ax.bar(
+        [position + 0.18 for position in x_positions],
+        [_require_number(row["negative_score_abs_sum"], "category.negative_score_abs_sum") for row in summaries],
+        width=0.36,
+        label="negative score drive abs",
+    )
+    ax.set_title("Shared vs specific neuron score-drive categories")
+    ax.set_ylabel("summed score drive")
+    ax.set_xticks(x_positions)
+    ax.set_xticklabels(labels, rotation=35, ha="right")
+    ax.grid(axis="y", alpha=0.25)
+    ax.legend()
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path)
+    plt.close(fig)
+    return output_path
+
+
+def _render_coalition_gradient_conflict_matrix(
+    *,
+    target_ids: list[str],
+    pairwise_summary_rows: list[dict[str, Any]],
+    output_path: Path,
+) -> Path:
+    if not target_ids:
+        raise ValueError("Cannot render gradient conflict matrix without targets.")
+    index_by_id = {target_id: index for index, target_id in enumerate(target_ids)}
+    matrix = [[1.0 if left == right else float("nan") for right in target_ids] for left in target_ids]
+    for row in pairwise_summary_rows:
+        left_id = str(row["target_a"])
+        right_id = str(row["target_b"])
+        value = row["mean_score_gradient_cosine"]
+        plotted = float("nan") if value is None else float(value)
+        left_index = index_by_id[left_id]
+        right_index = index_by_id[right_id]
+        matrix[left_index][right_index] = plotted
+        matrix[right_index][left_index] = plotted
+    _, plt = _import_matplotlib()
+    fig, ax = plt.subplots(figsize=(8, 7))
+    image = ax.imshow(matrix, vmin=-1.0, vmax=1.0, cmap="coolwarm")
+    ax.set_title("Feature-score gradient cosine on selected MLP-neuron parameters")
+    ax.set_xticks(list(range(len(target_ids))))
+    ax.set_xticklabels(target_ids, rotation=35, ha="right")
+    ax.set_yticks(list(range(len(target_ids))))
+    ax.set_yticklabels(target_ids)
+    for row_index, row in enumerate(matrix):
+        for column_index, value in enumerate(row):
+            label = "n/a" if value != value else f"{value:.2f}"
+            ax.text(column_index, row_index, label, ha="center", va="center", color="black", fontsize=8)
+    fig.colorbar(image, ax=ax, label="cosine")
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path)
+    plt.close(fig)
+    return output_path
+
+
+def _render_neuron_activation_trajectory_plot(
+    *,
+    trajectory_rows: list[dict[str, Any]],
+    output_path: Path,
+) -> Path:
+    if not trajectory_rows:
+        raise ValueError("Cannot render neuron trajectory plot without trajectory rows.")
+    grouped: dict[tuple[int, int], list[dict[str, Any]]] = defaultdict(list)
+    for row in trajectory_rows:
+        grouped[
+            (
+                _require_int(row.get("layer"), "trajectory_row.layer"),
+                _require_int(row.get("neuron"), "trajectory_row.neuron"),
+            )
+        ].append(row)
+    _, plt = _import_matplotlib()
+    fig, ax = plt.subplots(figsize=(12, 6))
+    for (layer, neuron), rows in sorted(grouped.items()):
+        ordered = sorted(rows, key=lambda item: int(item["step"]))
+        ax.plot(
+            [int(row["step"]) for row in ordered],
+            [_require_number(row["mean_activation"], "trajectory_row.mean_activation") for row in ordered],
+            linewidth=1.8,
+            marker="o",
+            label=f"L{layer}N{neuron}",
+        )
+    ax.set_title("Top coalition-neuron activation trajectories")
+    ax.set_xlabel("checkpoint step")
+    ax.set_ylabel("mean answer-position MLP activation")
+    ax.grid(alpha=0.25)
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path)
+    plt.close(fig)
+    return output_path
+
+
+def _render_coalition_plots(
+    *,
+    output_dir: Path,
+    neuron_rows: list[dict[str, Any]],
+    target_ids: list[str],
+    candidate_target_ids: list[str],
+    coalition_summary: dict[str, Any],
+    pairwise_summary_rows: list[dict[str, Any]],
+    trajectory_rows: list[dict[str, Any]],
+    top_k_neurons: int,
+) -> dict[str, Path]:
+    return {
+        "neuron_candidate_heatmap": _render_coalition_heatmap(
+            neuron_rows=neuron_rows,
+            target_ids=target_ids,
+            output_path=output_dir / "candidate_coalition_neuron_heatmap.svg",
+            top_k=top_k_neurons,
+        ),
+        "shared_specific": _render_coalition_category_plot(
+            coalition_summary=coalition_summary,
+            output_path=output_dir / "candidate_coalition_shared_specific.svg",
+        ),
+        "gradient_conflict_matrix": _render_coalition_gradient_conflict_matrix(
+            target_ids=candidate_target_ids,
+            pairwise_summary_rows=[
+                row
+                for row in pairwise_summary_rows
+                if row["target_a"] in candidate_target_ids and row["target_b"] in candidate_target_ids
+            ],
+            output_path=output_dir / "candidate_coalition_gradient_conflict_matrix.svg",
+        ),
+        "neuron_activation_trajectory": _render_neuron_activation_trajectory_plot(
+            trajectory_rows=trajectory_rows,
+            output_path=output_dir / "candidate_coalition_neuron_trajectories.svg",
+        ),
+    }
+
+
+def _write_coalition_markdown(
+    *,
+    output_path: Path,
+    report_payload: dict[str, Any],
+) -> Path:
+    target_rows = _require_list(report_payload.get("target_summaries"), "coalition_report.target_summaries")
+    coalition_summary = _require_dict(report_payload.get("coalition_summary"), "coalition_report.coalition_summary")
+    category_summaries = _require_list(coalition_summary.get("category_summaries"), "coalition_summary.category_summaries")
+    top_shared = [
+        row
+        for row in _require_list(coalition_summary.get("category_rows"), "coalition_summary.category_rows")
+        if _require_dict(row, "coalition_summary.category_rows[]")["category"] == "shared_positive"
+    ][:12]
+    lines = [
+        "# Candidate Coalition Map",
+        "",
+        "This report asks whether selected candidate families are supported by the same MLP neurons.",
+        "",
+        "For each selected checkpoint interval, it computes per-neuron projected update contributions:",
+        "",
+        "`Delta score_c,n ~= grad_theta_n score_c . Delta theta_n`",
+        "",
+        "where `theta_n` is the neuron-specific parameter slice: `fc_in` row, `fc_in` bias, and `fc_out` column.",
+        "",
+        "## Inputs",
+        "",
+        f"- Registry: `{report_payload['registry_path']}`",
+        f"- Gradient link: `{report_payload['gradient_link_path']}`",
+        f"- Checkpoint dir: `{report_payload['checkpoint_dir']}`",
+        f"- Selected candidates: {', '.join(report_payload['selected_candidate_ids'])}",
+        f"- Neuron layers: {', '.join(str(item) for item in report_payload['selection']['neuron_layers'])}",
+        f"- Intervals: {report_payload['interval_count']}",
+        "",
+        "## Target Summary",
+        "",
+        "| target | kind | features | top positive neuron | score drive | loss reduction |",
+        "| --- | --- | --- | --- | ---: | ---: |",
+    ]
+    for raw_target in target_rows:
+        target = _require_dict(raw_target, "coalition_report.target_summaries[]")
+        top_positive = target.get("top_positive_neuron")
+        top_label = "n/a" if top_positive is None else f"L{top_positive['layer']}N{top_positive['neuron']}"
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    str(target["target_id"]),
+                    str(target["target_kind"]),
+                    ",".join(str(item) for item in target["feature_ids"]),
+                    top_label,
+                    _markdown_number(target["sum_score_linearized_delta"]),
+                    _markdown_number(target["sum_loss_reduction_linearized"]),
+                ]
+            )
+            + " |"
+        )
+    lines.extend(["", "## Shared vs Specific Categories", ""])
+    lines.append("| category | neurons | positive score | negative score abs | conflict magnitude |")
+    lines.append("| --- | ---: | ---: | ---: | ---: |")
+    for raw_category in category_summaries:
+        category = _require_dict(raw_category, "coalition_summary.category_summaries[]")
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    str(category["category"]),
+                    str(category["neuron_count"]),
+                    _markdown_number(category["positive_score_sum"]),
+                    _markdown_number(category["negative_score_abs_sum"]),
+                    _markdown_number(category["conflict_magnitude_sum"]),
+                ]
+            )
+            + " |"
+        )
+    lines.extend(["", "## Top Shared Positive Neurons", ""])
+    if top_shared:
+        lines.append("| neuron | scores by candidate |")
+        lines.append("| --- | --- |")
+        for raw_row in top_shared:
+            row = _require_dict(raw_row, "coalition_summary.category_rows[]")
+            scores = _require_dict(row.get("scores_by_candidate"), "coalition category scores_by_candidate")
+            score_text = ", ".join(f"{target}: {_markdown_number(value)}" for target, value in sorted(scores.items()))
+            lines.append(f"| L{row['layer']}N{row['neuron']} | {score_text} |")
+    else:
+        lines.append("No shared-positive neurons were found under the current sign threshold.")
+    lines.extend(["", "## Pairwise Candidate Gradient Cosines", ""])
+    pairwise_rows = _require_list(report_payload.get("pairwise_gradient_summary"), "coalition_report.pairwise_gradient_summary")
+    lines.append("| target A | target B | mean cosine | intervals | null intervals |")
+    lines.append("| --- | --- | ---: | ---: | ---: |")
+    for raw_pair in pairwise_rows:
+        pair = _require_dict(raw_pair, "coalition_report.pairwise_gradient_summary[]")
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    str(pair["target_a"]),
+                    str(pair["target_b"]),
+                    _markdown_number(pair["mean_score_gradient_cosine"]),
+                    str(pair["cosine_interval_count"]),
+                    str(pair["cosine_null_interval_count"]),
+                ]
+            )
+            + " |"
+        )
+    lines.extend(["", "## Unsupported Claims", ""])
+    for claim in _require_list(report_payload.get("unsupported_claims"), "coalition_report.unsupported_claims"):
+        lines.append(f"- {claim}")
+    lines.extend(["", "## Plots", ""])
+    for name, plot_path in _require_dict(report_payload.get("plots"), "coalition_report.plots").items():
+        lines.append(f"- {name}: `{plot_path}`")
+    lines.append("")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text("\n".join(lines), encoding="utf-8")
+    return output_path
+
+
+def build_candidate_coalition_map(
+    *,
+    config_path: Path,
+    probe_set_path: Path,
+    registry_path: Path,
+    gradient_link_path: Path,
+    checkpoint_dir: Path,
+    output_dir: Path,
+    candidate_ids: list[str] | None = None,
+    device_name: str = "cpu",
+    start_step: int | None = None,
+    end_step: int | None = None,
+    neuron_layers: list[int] | None = None,
+    include_individual_features: bool = True,
+    top_k_neurons: int = 24,
+    trajectory_top_k: int = 8,
+    sign_epsilon: float = 0.0,
+) -> tuple[Path, Path, dict[str, Path]]:
+    if top_k_neurons <= 0:
+        raise ValueError("top_k_neurons must be positive.")
+    if trajectory_top_k <= 0:
+        raise ValueError("trajectory_top_k must be positive.")
+    spec = TrainSpec.from_path(config_path)
+    device = require_device(device_name)
+    metadata = read_symbolic_kv_stream_metadata(spec.benchmark_dir)
+    vocab = Vocabulary.from_metadata(metadata["vocabulary"])
+    batches = _load_probe_batches(spec=spec, probe_set_path=probe_set_path, vocab=vocab, device=device)
+    registry = _load_candidate_registry(registry_path)
+    gradient_payload = _load_gradient_link_payload(gradient_link_path)
+    registry_lookup = _candidate_lookup_from_registry(registry)
+    interval_rows = [
+        _require_dict(row, f"gradient_link.interval_rows[{index}]")
+        for index, row in enumerate(_require_list(gradient_payload.get("interval_rows"), "gradient_link.interval_rows"))
+    ]
+    rows_by_candidate = _group_rows_by_candidate(interval_rows)
+    selected_candidate_ids = _select_birth_model_candidate_ids(
+        registry_lookup=registry_lookup,
+        rows_by_candidate=rows_by_candidate,
+        candidate_ids=candidate_ids,
+    )
+    selected_neuron_layers = _coalition_neuron_layers(
+        registry_lookup=registry_lookup,
+        selected_candidate_ids=selected_candidate_ids,
+        extra_layers=neuron_layers,
+    )
+    target_specs = _coalition_target_specs(
+        registry_lookup=registry_lookup,
+        selected_candidate_ids=selected_candidate_ids,
+        include_individual_features=include_individual_features,
+    )
+    target_ids = [str(target["target_id"]) for target in target_specs]
+    candidate_target_ids = [
+        str(target["target_id"])
+        for target in target_specs
+        if str(target["target_kind"]) == "candidate"
+    ]
+    if len(candidate_target_ids) < 2:
+        raise ValueError("candidate-coalition-map requires at least two selected candidate targets.")
+    interval_pairs = _common_interval_pairs_for_candidates(
+        rows_by_candidate=rows_by_candidate,
+        selected_candidate_ids=selected_candidate_ids,
+        start_step=start_step,
+        end_step=end_step,
+    )
+    checkpoint_paths_by_step = _resolve_checkpoint_paths_by_step(checkpoint_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    state_cache: dict[int, dict[str, Any]] = {}
+    loss_gradient_cache: dict[int, dict[str, Any]] = {}
+    model_cache: dict[int, torch.nn.Module] = {}
+    basis_cache: dict[str, dict[str, Any]] = {}
+    feature_score_cache: dict[tuple[str, int], dict[str, Any]] = {}
+
+    def load_state(step: int) -> dict[str, Any]:
+        cached = state_cache.get(step)
+        if cached is not None:
+            return cached
+        if step not in checkpoint_paths_by_step:
+            raise FileNotFoundError(f"Checkpoint for step {step} not found in {checkpoint_dir}.")
+        payload = _load_checkpoint_state_for_analysis(checkpoint_paths_by_step[step])
+        if int(payload["step"]) != step:
+            raise ValueError(f"Checkpoint payload step mismatch for {checkpoint_paths_by_step[step]}.")
+        state_cache[step] = payload
+        return payload
+
+    def load_model_at_step(step: int) -> torch.nn.Module:
+        cached = model_cache.get(step)
+        if cached is not None:
+            return cached
+        if step not in checkpoint_paths_by_step:
+            raise FileNotFoundError(f"Checkpoint for step {step} not found in {checkpoint_dir}.")
+        checkpoint = load_checkpoint(checkpoint_paths_by_step[step], device)
+        model = build_model(spec.model, len(vocab.tokens), device)
+        load_model_state(model, checkpoint["model_state"])
+        model.eval()
+        model_cache[step] = model
+        return model
+
+    def loss_gradients_at_step(step: int) -> dict[str, Any]:
+        cached = loss_gradient_cache.get(step)
+        if cached is not None:
+            return cached
+        model = load_model_at_step(step)
+        payload = _compute_probe_loss_and_gradients(model=model, batches=batches, pad_token_id=vocab.pad_token_id)
+        loss_gradient_cache[step] = payload
+        return payload
+
+    neuron_accumulator: dict[tuple[str, int, int], dict[str, Any]] = {}
+    pairwise_interval_rows: list[dict[str, Any]] = []
+    for previous_step, current_step in interval_pairs:
+        previous_payload = load_state(previous_step)
+        current_payload = load_state(current_step)
+        previous_state = _require_dict(previous_payload["model_state"], "previous_payload.model_state")
+        current_state = _require_dict(current_payload["model_state"], "current_payload.model_state")
+        loss_gradient_payload = loss_gradients_at_step(previous_step)
+        loss_gradients = _require_dict(loss_gradient_payload["gradients"], "loss_gradient_payload.gradients")
+        _validate_state_and_gradient_keys(
+            previous_state=previous_state,
+            current_state=current_state,
+            gradients=loss_gradients,
+        )
+        score_gradients_by_target: dict[str, dict[str, torch.Tensor]] = {}
+        for target in target_specs:
+            target_id = str(target["target_id"])
+            feature_score_payload = _target_feature_score_at_step(
+                target=target,
+                step=previous_step,
+                basis_cache=basis_cache,
+                feature_score_cache=feature_score_cache,
+                model_loader=load_model_at_step,
+                batches=batches,
+                device=device,
+            )
+            score_gradients = _require_dict(feature_score_payload["gradients"], f"feature_score_payload[{target_id}].gradients")
+            _validate_state_and_gradient_keys(
+                previous_state=previous_state,
+                current_state=current_state,
+                gradients=score_gradients,
+            )
+            score_gradients_by_target[target_id] = score_gradients
+            for layer in selected_neuron_layers:
+                score_arrays = _per_neuron_projection_arrays(
+                    previous_state=previous_state,
+                    current_state=current_state,
+                    gradients=score_gradients,
+                    layer=layer,
+                )
+                loss_arrays = _per_neuron_projection_arrays(
+                    previous_state=previous_state,
+                    current_state=current_state,
+                    gradients=loss_gradients,
+                    layer=layer,
+                )
+                _add_neuron_projection_accumulators(
+                    accumulator=neuron_accumulator,
+                    target=target,
+                    layer=layer,
+                    score_arrays=score_arrays,
+                    loss_arrays=loss_arrays,
+                )
+        pairwise_rows = _coalition_pairwise_gradient_rows(
+            target_specs=target_specs,
+            score_gradients_by_target=score_gradients_by_target,
+            neuron_layers=selected_neuron_layers,
+        )
+        for row in pairwise_rows:
+            pairwise_interval_rows.append(
+                {
+                    **row,
+                    "previous_step": previous_step,
+                    "step": current_step,
+                }
+            )
+
+    neuron_rows = _finalize_neuron_projection_rows(neuron_accumulator)
+    coalition_summary = _coalition_category_summary(
+        neuron_rows=neuron_rows,
+        candidate_target_ids=candidate_target_ids,
+        sign_epsilon=sign_epsilon,
+    )
+    top_sets = _coalition_top_neuron_sets(
+        neuron_rows=neuron_rows,
+        candidate_target_ids=candidate_target_ids,
+        top_k=top_k_neurons,
+    )
+    pairwise_summary_rows = _summarize_pairwise_gradient_rows(pairwise_interval_rows)
+    selected_trajectory_neurons = _select_neurons_for_trajectory(
+        coalition_summary=coalition_summary,
+        neuron_rows=neuron_rows,
+        candidate_target_ids=candidate_target_ids,
+        top_k=trajectory_top_k,
+    )
+    trajectory_steps = sorted({interval_pairs[0][0]} | {current_step for _, current_step in interval_pairs})
+    trajectory_rows = _compute_neuron_activation_trajectory(
+        model_loader=load_model_at_step,
+        batches=batches,
+        steps=trajectory_steps,
+        selected_neurons=selected_trajectory_neurons,
+    )
+
+    target_summaries: list[dict[str, Any]] = []
+    for target in target_specs:
+        target_id = str(target["target_id"])
+        rows = [row for row in neuron_rows if str(row["target_id"]) == target_id]
+        if not rows:
+            raise ValueError(f"No neuron rows were computed for target {target_id}.")
+        positive_rows = [row for row in rows if float(row["sum_score_linearized_delta"]) > sign_epsilon]
+        top_positive = None
+        if positive_rows:
+            best = max(positive_rows, key=lambda row: float(row["sum_score_linearized_delta"]))
+            top_positive = {
+                "layer": int(best["layer"]),
+                "neuron": int(best["neuron"]),
+                "sum_score_linearized_delta": float(best["sum_score_linearized_delta"]),
+            }
+        target_summaries.append(
+            {
+                "target_id": target_id,
+                "target_kind": target["target_kind"],
+                "candidate_id": target.get("candidate_id"),
+                "candidate_ids": target.get("candidate_ids"),
+                "family_id": target.get("family_id"),
+                "family_ids": target.get("family_ids"),
+                "stage_name": target["stage_name"],
+                "feature_ids": target["feature_ids"],
+                "neuron_count": len(rows),
+                "sum_score_linearized_delta": sum(float(row["sum_score_linearized_delta"]) for row in rows),
+                "positive_score_drive": sum(float(row["positive_score_drive"]) for row in rows),
+                "negative_score_drive_abs": sum(float(row["negative_score_drive_abs"]) for row in rows),
+                "sum_loss_reduction_linearized": sum(float(row["sum_loss_reduction_linearized"]) for row in rows),
+                "top_positive_neuron": top_positive,
+            }
+        )
+    target_summaries.sort(key=lambda row: abs(float(row["sum_score_linearized_delta"])), reverse=True)
+
+    plot_paths = _render_coalition_plots(
+        output_dir=output_dir,
+        neuron_rows=neuron_rows,
+        target_ids=target_ids,
+        candidate_target_ids=candidate_target_ids,
+        coalition_summary=coalition_summary,
+        pairwise_summary_rows=pairwise_summary_rows,
+        trajectory_rows=trajectory_rows,
+        top_k_neurons=top_k_neurons,
+    )
+    unsupported_claims = [
+        "complete_dense_circuit_decomposition",
+        "causal_necessity_of_shared_neurons",
+        "cross_seed_coalition_stability",
+        "per_minibatch_neuron_update_trace",
+    ]
+    report_path = output_dir / "candidate_coalition_map_report.json"
+    markdown_path = output_dir / "candidate_coalition_map_report.md"
+    report_payload = {
+        "schema_version": COALITION_MAP_SCHEMA_VERSION,
+        "config_path": str(config_path),
+        "probe_set_path": str(probe_set_path),
+        "registry_path": str(registry_path),
+        "gradient_link_path": str(gradient_link_path),
+        "checkpoint_dir": str(checkpoint_dir),
+        "device": device_name,
+        "selected_candidate_ids": selected_candidate_ids,
+        "target_specs": target_specs,
+        "selection": {
+            "candidate_ids": candidate_ids,
+            "start_step": start_step,
+            "end_step": end_step,
+            "neuron_layers": selected_neuron_layers,
+            "include_individual_features": include_individual_features,
+            "top_k_neurons": top_k_neurons,
+            "trajectory_top_k": trajectory_top_k,
+            "sign_epsilon": sign_epsilon,
+        },
+        "interval_count": len(interval_pairs),
+        "interval_pairs": [{"previous_step": previous, "step": current} for previous, current in interval_pairs],
+        "target_summaries": target_summaries,
+        "neuron_rows": neuron_rows,
+        "coalition_summary": coalition_summary,
+        "top_neuron_sets": top_sets,
+        "pairwise_gradient_summary": pairwise_summary_rows,
+        "pairwise_gradient_interval_rows": pairwise_interval_rows,
+        "selected_trajectory_neurons": selected_trajectory_neurons,
+        "neuron_activation_trajectory_rows": trajectory_rows,
+        "unsupported_claims": unsupported_claims,
+        "plots": {name: str(path) for name, path in plot_paths.items()},
+    }
+    write_json(report_path, report_payload)
+    _write_coalition_markdown(output_path=markdown_path, report_payload=report_payload)
+    return report_path, markdown_path, plot_paths
+
+
+def _load_coalition_map_payload(coalition_map_path: Path) -> dict[str, Any]:
+    payload = _load_json_dict(coalition_map_path, "candidate coalition map")
+    schema_version = payload.get("schema_version")
+    if schema_version != COALITION_MAP_SCHEMA_VERSION:
+        raise ValueError(
+            f"Unsupported coalition-map schema_version {schema_version}; expected {COALITION_MAP_SCHEMA_VERSION}."
+        )
+    _require_list(payload.get("target_specs"), "coalition_map.target_specs")
+    coalition_summary = _require_dict(payload.get("coalition_summary"), "coalition_map.coalition_summary")
+    _require_list(coalition_summary.get("category_rows"), "coalition_map.coalition_summary.category_rows")
+    _require_dict(payload.get("top_neuron_sets"), "coalition_map.top_neuron_sets")
+    return payload
+
+
+def _neuron_key_from_row(row: dict[str, Any], label: str) -> tuple[int, int]:
+    return (
+        _require_int(row.get("layer"), f"{label}.layer"),
+        _require_int(row.get("neuron"), f"{label}.neuron"),
+    )
+
+
+def _candidate_intervention_targets(
+    *,
+    coalition_payload: dict[str, Any],
+    score_individual_features: bool,
+) -> list[dict[str, Any]]:
+    raw_targets = _require_list(coalition_payload.get("target_specs"), "coalition_map.target_specs")
+    targets: list[dict[str, Any]] = []
+    for index, raw_target in enumerate(raw_targets):
+        target = _require_dict(raw_target, f"coalition_map.target_specs[{index}]")
+        target_kind = _require_non_empty_str(target.get("target_kind"), f"coalition_map.target_specs[{index}].target_kind")
+        if target_kind != "candidate" and not score_individual_features:
+            continue
+        targets.append(target)
+    if not targets:
+        raise ValueError("No feature-score targets selected for candidate-neuron-intervention.")
+    return targets
+
+
+def _coalition_candidate_target_ids(coalition_payload: dict[str, Any]) -> list[str]:
+    coalition_summary = _require_dict(coalition_payload.get("coalition_summary"), "coalition_map.coalition_summary")
+    candidate_target_ids = [
+        _sanitize_candidate_id(_require_non_empty_str(item, "coalition_map.coalition_summary.candidate_target_ids[]"))
+        for item in _require_list(coalition_summary.get("candidate_target_ids"), "coalition_map.coalition_summary.candidate_target_ids")
+    ]
+    if len(candidate_target_ids) < 2:
+        raise ValueError("candidate-neuron-intervention requires at least two coalition candidate targets.")
+    return candidate_target_ids
+
+
+def _category_lookup_by_neuron(coalition_payload: dict[str, Any]) -> dict[tuple[int, int], dict[str, Any]]:
+    coalition_summary = _require_dict(coalition_payload.get("coalition_summary"), "coalition_map.coalition_summary")
+    lookup: dict[tuple[int, int], dict[str, Any]] = {}
+    for index, raw_row in enumerate(_require_list(coalition_summary.get("category_rows"), "coalition_summary.category_rows")):
+        row = _require_dict(raw_row, f"coalition_summary.category_rows[{index}]")
+        key = _neuron_key_from_row(row, f"coalition_summary.category_rows[{index}]")
+        if key in lookup:
+            raise ValueError(f"Duplicate coalition category row for L{key[0]}N{key[1]}.")
+        lookup[key] = row
+    if not lookup:
+        raise ValueError("Coalition map contains no category rows.")
+    return lookup
+
+
+def _intervention_neuron_record(
+    *,
+    layer: int,
+    neuron: int,
+    category_lookup: dict[tuple[int, int], dict[str, Any]],
+) -> dict[str, Any]:
+    key = (layer, neuron)
+    if key not in category_lookup:
+        raise KeyError(f"Coalition category row not found for L{layer}N{neuron}.")
+    category_row = category_lookup[key]
+    return {
+        "layer": layer,
+        "neuron": neuron,
+        "label": f"L{layer}N{neuron}",
+        "category": category_row["category"],
+        "scores_by_candidate": category_row["scores_by_candidate"],
+        "positive_sum": category_row["positive_sum"],
+        "negative_abs_sum": category_row["negative_abs_sum"],
+        "conflict_magnitude": category_row["conflict_magnitude"],
+    }
+
+
+def _make_intervention_set_row(
+    *,
+    neuron_set_id: str,
+    set_kind: str,
+    source: str,
+    selected_keys: list[tuple[int, int]],
+    category_lookup: dict[tuple[int, int], dict[str, Any]],
+    candidate_target_ids: list[str],
+    selection_metric: str,
+    candidate_id: str | None = None,
+) -> dict[str, Any]:
+    seen: set[tuple[int, int]] = set()
+    unique_keys: list[tuple[int, int]] = []
+    for key in selected_keys:
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_keys.append(key)
+    if not unique_keys:
+        raise ValueError(f"Cannot build empty neuron intervention set: {neuron_set_id}")
+    neurons = [
+        _intervention_neuron_record(layer=layer, neuron=neuron, category_lookup=category_lookup)
+        for layer, neuron in unique_keys
+    ]
+    candidate_score_sums = {candidate_id: 0.0 for candidate_id in candidate_target_ids}
+    for neuron_row in neurons:
+        scores = _require_dict(neuron_row.get("scores_by_candidate"), f"{neuron_set_id}.scores_by_candidate")
+        for target_id in candidate_target_ids:
+            if target_id not in scores:
+                raise KeyError(f"Neuron {neuron_row['label']} is missing score for candidate {target_id}.")
+            candidate_score_sums[target_id] += _require_number(scores[target_id], f"{neuron_set_id}.{target_id}.score")
+    return {
+        "neuron_set_id": _sanitize_candidate_id(neuron_set_id),
+        "set_kind": set_kind,
+        "candidate_id": candidate_id,
+        "source": source,
+        "selection_metric": selection_metric,
+        "neuron_count": len(neurons),
+        "neurons": neurons,
+        "category_score_sums": {
+            "positive_sum": sum(_require_number(row["positive_sum"], f"{neuron_set_id}.positive_sum") for row in neurons),
+            "negative_abs_sum": sum(_require_number(row["negative_abs_sum"], f"{neuron_set_id}.negative_abs_sum") for row in neurons),
+            "conflict_magnitude": sum(_require_number(row["conflict_magnitude"], f"{neuron_set_id}.conflict_magnitude") for row in neurons),
+        },
+        "candidate_score_sums": candidate_score_sums,
+    }
+
+
+def _build_candidate_intervention_sets(
+    *,
+    coalition_payload: dict[str, Any],
+    top_k_per_set: int,
+) -> dict[str, Any]:
+    if top_k_per_set <= 0:
+        raise ValueError("top_k_per_set must be positive.")
+    candidate_target_ids = _coalition_candidate_target_ids(coalition_payload)
+    category_lookup = _category_lookup_by_neuron(coalition_payload)
+    category_rows = list(category_lookup.values())
+    intervention_sets: list[dict[str, Any]] = []
+    omitted_empty_set_ids: list[str] = []
+
+    def add_category_set(neuron_set_id: str, category: str, metric_name: str) -> None:
+        ranked = sorted(
+            [row for row in category_rows if str(row["category"]) == category],
+            key=lambda row: _require_number(row.get(metric_name), f"{category}.{metric_name}"),
+            reverse=True,
+        )
+        if not ranked:
+            omitted_empty_set_ids.append(neuron_set_id)
+            return
+        intervention_sets.append(
+            _make_intervention_set_row(
+                neuron_set_id=neuron_set_id,
+                set_kind=category,
+                source="coalition_category",
+                selected_keys=[_neuron_key_from_row(row, f"{category}.row") for row in ranked[:top_k_per_set]],
+                category_lookup=category_lookup,
+                candidate_target_ids=candidate_target_ids,
+                selection_metric=metric_name,
+            )
+        )
+
+    add_category_set("shared_positive", "shared_positive", "positive_sum")
+    add_category_set("conflict", "conflict", "conflict_magnitude")
+    add_category_set("shared_negative", "shared_negative", "negative_abs_sum")
+
+    top_neuron_sets = _require_dict(coalition_payload.get("top_neuron_sets"), "coalition_map.top_neuron_sets")
+    top_rows_by_target = _require_dict(top_neuron_sets.get("top_rows_by_target"), "coalition_map.top_neuron_sets.top_rows_by_target")
+    top_keys_by_target: dict[str, list[tuple[int, int]]] = {}
+    for target_id in candidate_target_ids:
+        rows = [
+            _require_dict(row, f"top_rows_by_target.{target_id}[]")
+            for row in _require_list(top_rows_by_target.get(target_id), f"top_rows_by_target.{target_id}")
+        ]
+        if not rows:
+            raise ValueError(f"Coalition map has no top neuron rows for candidate target {target_id}.")
+        top_keys_by_target[target_id] = [_neuron_key_from_row(row, f"top_rows_by_target.{target_id}[]") for row in rows]
+
+    shared_top_keys = set(top_keys_by_target[candidate_target_ids[0]])
+    for target_id in candidate_target_ids[1:]:
+        shared_top_keys &= set(top_keys_by_target[target_id])
+    if shared_top_keys:
+        ranked_shared_top = sorted(
+            shared_top_keys,
+            key=lambda key: _require_number(category_lookup[key].get("positive_sum"), "top_overlap.positive_sum"),
+            reverse=True,
+        )
+        intervention_sets.append(
+            _make_intervention_set_row(
+                neuron_set_id="top_overlap",
+                set_kind="top_overlap",
+                source="top_neuron_set_intersection",
+                selected_keys=ranked_shared_top[:top_k_per_set],
+                category_lookup=category_lookup,
+                candidate_target_ids=candidate_target_ids,
+                selection_metric="positive_sum",
+            )
+        )
+    else:
+        omitted_empty_set_ids.append("top_overlap")
+
+    for target_id in candidate_target_ids:
+        other_keys: set[tuple[int, int]] = set()
+        for other_target_id, keys in top_keys_by_target.items():
+            if other_target_id != target_id:
+                other_keys.update(keys)
+        specific_keys = [key for key in top_keys_by_target[target_id] if key not in other_keys]
+        if not specific_keys:
+            omitted_empty_set_ids.append(f"candidate_specific:{target_id}")
+            continue
+        ranked_specific = sorted(
+            specific_keys,
+            key=lambda key: _require_number(
+                category_lookup[key]["scores_by_candidate"][target_id],
+                f"candidate_specific:{target_id}.score",
+            ),
+            reverse=True,
+        )
+        intervention_sets.append(
+            _make_intervention_set_row(
+                neuron_set_id=f"candidate_specific:{target_id}",
+                set_kind="candidate_specific_top",
+                source="candidate_top_neurons_minus_other_candidate_top_neurons",
+                selected_keys=ranked_specific[:top_k_per_set],
+                category_lookup=category_lookup,
+                candidate_target_ids=candidate_target_ids,
+                selection_metric=f"scores_by_candidate.{target_id}",
+                candidate_id=target_id,
+            )
+        )
+
+    if not intervention_sets:
+        raise ValueError("No non-empty neuron intervention sets could be built from the coalition map.")
+    return {
+        "candidate_target_ids": candidate_target_ids,
+        "intervention_sets": intervention_sets,
+        "omitted_empty_set_ids": omitted_empty_set_ids,
+    }
+
+
+def _neuron_mask_for_records(
+    *,
+    spec: TrainSpec,
+    neurons: list[dict[str, Any]],
+    device: torch.device,
+) -> dict[int, torch.Tensor]:
+    if not neurons:
+        raise ValueError("neurons must not be empty.")
+    neurons_by_layer: dict[int, set[int]] = defaultdict(set)
+    for index, raw_neuron in enumerate(neurons):
+        neuron = _require_dict(raw_neuron, f"intervention_set.neurons[{index}]")
+        layer = _require_int(neuron.get("layer"), f"intervention_set.neurons[{index}].layer")
+        neuron_id = _require_int(neuron.get("neuron"), f"intervention_set.neurons[{index}].neuron")
+        if layer < 0 or layer >= spec.model.n_layers:
+            raise ValueError(f"Layer {layer} is out of range for n_layers={spec.model.n_layers}.")
+        if neuron_id < 0 or neuron_id >= spec.model.d_ff:
+            raise ValueError(f"Neuron {neuron_id} is out of range for d_ff={spec.model.d_ff}.")
+        neurons_by_layer[layer].add(neuron_id)
+    masks: dict[int, torch.Tensor] = {}
+    for layer, neuron_ids in sorted(neurons_by_layer.items()):
+        mask = torch.ones(spec.model.d_ff, device=device)
+        index = torch.tensor(sorted(neuron_ids), device=device, dtype=torch.long)
+        mask.index_fill_(0, index, 0.0)
+        masks[layer] = mask
+    return masks
+
+
+@torch.no_grad()
+def _evaluate_intervention_probe_metrics(
+    *,
+    model: torch.nn.Module,
+    batches: list[dict[str, Any]],
+    pad_token_id: int,
+    neuron_mask: dict[int, torch.Tensor] | None = None,
+) -> dict[str, Any]:
+    model.eval()
+    total_loss = 0.0
+    total_token_correct = 0.0
+    total_tokens = 0
+    answer_correct = 0
+    answer_total = 0
+    split_correct: dict[str, int] = defaultdict(int)
+    split_total: dict[str, int] = defaultdict(int)
+    for batch in batches:
+        token_count = int(batch["attention_mask"][:, 1:].sum().item())
+        if token_count <= 0:
+            raise ValueError("Probe batch has no non-padding next-token targets.")
+        outputs = model(
+            batch["input_ids"],
+            attention_mask=batch["attention_mask"],
+            neuron_mask=neuron_mask,
+        )
+        loss, token_accuracy = compute_lm_loss(
+            logits=outputs.logits,
+            input_ids=batch["input_ids"],
+            attention_mask=batch["attention_mask"],
+            pad_token_id=pad_token_id,
+        )
+        total_loss += float(loss.item()) * token_count
+        total_token_correct += float(token_accuracy.detach().cpu().item()) * token_count
+        total_tokens += token_count
+
+        answer_logits, answer_targets, metadata = extract_answer_logits(outputs.logits, batch)
+        predictions = answer_logits.argmax(dim=-1)
+        matches = predictions == answer_targets
+        answer_correct += int(matches.sum().item())
+        answer_total += int(answer_targets.numel())
+        for answer_index, row_index in enumerate(metadata["rows"].tolist()):
+            split_name = str(batch["records"][row_index]["split"])
+            split_total[split_name] += 1
+            if bool(matches[answer_index].item()):
+                split_correct[split_name] += 1
+    if total_tokens <= 0:
+        raise ValueError("Probe set has no non-padding next-token targets.")
+    if answer_total <= 0:
+        raise ValueError("Probe set has no answer targets.")
+    split_accuracy = {
+        split_name: split_correct[split_name] / split_total[split_name]
+        for split_name in sorted(split_total)
+    }
+    return {
+        "loss": total_loss / total_tokens,
+        "token_accuracy": total_token_correct / total_tokens,
+        "answer_accuracy": answer_correct / answer_total,
+        "heldout_answer_accuracy": split_accuracy.get("heldout_pairs", 0.0),
+        "structural_ood_answer_accuracy": split_accuracy.get("structural_ood", 0.0),
+        "split_answer_accuracy": split_accuracy,
+        "num_tokens": total_tokens,
+        "num_answers": answer_total,
+        "num_batches": len(batches),
+    }
+
+
+@torch.no_grad()
+def _compute_feature_score_without_gradients(
+    *,
+    model: torch.nn.Module,
+    batches: list[dict[str, Any]],
+    basis: dict[str, Any],
+    stage_name: str,
+    feature_ids: list[int],
+    neuron_mask: dict[int, torch.Tensor] | None = None,
+) -> dict[str, Any]:
+    if str(basis["stage_name"]) != stage_name:
+        raise ValueError(f"Basis stage {basis['stage_name']} does not match target stage {stage_name}.")
+    if not feature_ids:
+        raise ValueError("feature_ids must not be empty.")
+    num_features = int(basis["num_features"])
+    invalid_feature_ids = [feature_id for feature_id in feature_ids if feature_id < 0 or feature_id >= num_features]
+    if invalid_feature_ids:
+        raise ValueError(f"Feature ids out of range for basis with {num_features} features: {invalid_feature_ids}")
+    sae = basis["sae"]
+    normalization_mean = basis["normalization_mean"]
+    normalization_std = basis["normalization_std"]
+    feature_index = torch.tensor(sorted(feature_ids), device=normalization_mean.device, dtype=torch.long)
+
+    model.eval()
+    total_score = 0.0
+    total_feature_values = 0
+    total_answers = 0
+    for batch in batches:
+        outputs = model(
+            batch["input_ids"],
+            attention_mask=batch["attention_mask"],
+            return_residual_streams=True,
+            neuron_mask=neuron_mask,
+        )
+        if outputs.residual_streams is None:
+            raise RuntimeError("Feature-score intervention requires residual streams.")
+        if stage_name not in outputs.residual_streams:
+            raise KeyError(f"Residual stage {stage_name} not found in model outputs.")
+        _, _, metadata = extract_answer_logits(outputs.logits, batch)
+        rows = metadata["rows"]
+        prediction_positions = metadata["prediction_positions"]
+        selected_stage = outputs.residual_streams[stage_name][rows, prediction_positions, :]
+        normalized = _normalize_activations(selected_stage, normalization_mean, normalization_std)
+        features = torch.relu(sae.encoder(normalized))
+        selected_features = features.index_select(1, feature_index)
+        total_score += float(selected_features.sum().item())
+        total_feature_values += int(selected_features.numel())
+        total_answers += int(selected_features.size(0))
+    if total_feature_values <= 0:
+        raise ValueError("Feature-score intervention had no feature activations to score.")
+    return {
+        "score": total_score / float(total_feature_values),
+        "num_answers": total_answers,
+        "num_feature_values": total_feature_values,
+    }
+
+
+def _feature_scores_for_intervention_targets(
+    *,
+    model: torch.nn.Module,
+    batches: list[dict[str, Any]],
+    target_specs: list[dict[str, Any]],
+    basis_cache: dict[str, dict[str, Any]],
+    device: torch.device,
+    neuron_mask: dict[int, torch.Tensor] | None = None,
+) -> dict[str, dict[str, Any]]:
+    scores: dict[str, dict[str, Any]] = {}
+    for index, raw_target in enumerate(target_specs):
+        target = _require_dict(raw_target, f"intervention.target_specs[{index}]")
+        target_id = _sanitize_candidate_id(
+            _require_non_empty_str(target.get("target_id"), f"intervention.target_specs[{index}].target_id")
+        )
+        basis_path = Path(_require_non_empty_str(target.get("basis_path"), f"target {target_id}.basis_path"))
+        basis_key = str(basis_path)
+        basis = basis_cache.get(basis_key)
+        if basis is None:
+            basis = _load_shared_basis(basis_path, device)
+            basis_cache[basis_key] = basis
+        scores[target_id] = _compute_feature_score_without_gradients(
+            model=model,
+            batches=batches,
+            basis=basis,
+            stage_name=_require_non_empty_str(target.get("stage_name"), f"target {target_id}.stage_name"),
+            feature_ids=_coerce_int_list(target.get("feature_ids"), f"target {target_id}.feature_ids"),
+            neuron_mask=neuron_mask,
+        )
+    return scores
+
+
+def _target_score_rows(
+    *,
+    baseline_scores: dict[str, dict[str, Any]],
+    intervened_scores: dict[str, dict[str, Any]],
+    candidate_target_ids: list[str],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    candidate_score_drops: list[float] = []
+    for target_id in sorted(baseline_scores):
+        if target_id not in intervened_scores:
+            raise KeyError(f"Intervened feature scores are missing target {target_id}.")
+        baseline_score = _require_number(baseline_scores[target_id]["score"], f"{target_id}.baseline_score")
+        intervened_score = _require_number(intervened_scores[target_id]["score"], f"{target_id}.intervened_score")
+        score_delta = intervened_score - baseline_score
+        score_drop = baseline_score - intervened_score
+        is_candidate_target = target_id in candidate_target_ids
+        if is_candidate_target:
+            candidate_score_drops.append(score_drop)
+        rows.append(
+            {
+                "target_id": target_id,
+                "is_candidate_target": is_candidate_target,
+                "baseline_score": baseline_score,
+                "intervened_score": intervened_score,
+                "score_delta": score_delta,
+                "score_drop": score_drop,
+                "num_answers": intervened_scores[target_id]["num_answers"],
+                "num_feature_values": intervened_scores[target_id]["num_feature_values"],
+            }
+        )
+    if not candidate_score_drops:
+        raise ValueError("No candidate target score drops were computed.")
+    return rows, {
+        "candidate_target_count": len(candidate_score_drops),
+        "candidate_score_drop_sum": sum(candidate_score_drops),
+        "candidate_score_drop_mean": sum(candidate_score_drops) / len(candidate_score_drops),
+        "candidate_score_drop_min": min(candidate_score_drops),
+        "candidate_score_drop_max": max(candidate_score_drops),
+        "all_candidate_scores_drop": all(value > 0.0 for value in candidate_score_drops),
+        "any_candidate_score_increases": any(value < 0.0 for value in candidate_score_drops),
+    }
+
+
+def _intervention_metric_deltas(
+    *,
+    baseline: dict[str, Any],
+    intervened: dict[str, Any],
+) -> dict[str, Any]:
+    keys = [
+        "loss",
+        "token_accuracy",
+        "answer_accuracy",
+        "heldout_answer_accuracy",
+        "structural_ood_answer_accuracy",
+    ]
+    deltas = {
+        f"{key}_delta": _require_number(intervened[key], f"intervened.{key}") - _require_number(baseline[key], f"baseline.{key}")
+        for key in keys
+    }
+    drops = {
+        f"{key}_drop": _require_number(baseline[key], f"baseline.{key}") - _require_number(intervened[key], f"intervened.{key}")
+        for key in keys
+        if key != "loss"
+    }
+    drops["loss_increase"] = _require_number(intervened["loss"], "intervened.loss") - _require_number(baseline["loss"], "baseline.loss")
+    return {
+        "deltas": deltas,
+        "drops": drops,
+    }
+
+
+def _render_neuron_intervention_behavior_plot(
+    *,
+    intervention_rows: list[dict[str, Any]],
+    output_path: Path,
+) -> Path:
+    if not intervention_rows:
+        raise ValueError("Cannot render behavior plot without intervention rows.")
+    labels = [str(row["neuron_set_id"]) for row in intervention_rows]
+    metrics = ["answer_accuracy_drop", "heldout_answer_accuracy_drop", "structural_ood_answer_accuracy_drop"]
+    _, plt = _import_matplotlib()
+    fig, ax = plt.subplots(figsize=(max(9, 0.8 * len(labels)), 6))
+    x_positions = list(range(len(labels)))
+    width = 0.24
+    for metric_index, metric_name in enumerate(metrics):
+        offset = (metric_index - 1) * width
+        values = [
+            _require_number(row["behavior_effect"]["drops"][metric_name], f"{row['neuron_set_id']}.{metric_name}")
+            for row in intervention_rows
+        ]
+        ax.bar([position + offset for position in x_positions], values, width=width, label=metric_name)
+    ax.axhline(0.0, color="black", linewidth=0.8)
+    ax.set_title("Neuron-set ablation behavior effect")
+    ax.set_ylabel("baseline - ablated accuracy")
+    ax.set_xticks(x_positions)
+    ax.set_xticklabels(labels, rotation=35, ha="right")
+    ax.grid(axis="y", alpha=0.25)
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path)
+    plt.close(fig)
+    return output_path
+
+
+def _render_neuron_intervention_score_plot(
+    *,
+    intervention_rows: list[dict[str, Any]],
+    target_ids: list[str],
+    output_path: Path,
+) -> Path:
+    if not intervention_rows:
+        raise ValueError("Cannot render score plot without intervention rows.")
+    if not target_ids:
+        raise ValueError("Cannot render score plot without target ids.")
+    matrix: list[list[float]] = []
+    for row in intervention_rows:
+        scores_by_target = {
+            str(score_row["target_id"]): _require_number(score_row["score_drop"], "target_score.score_drop")
+            for score_row in _require_list(row.get("target_score_rows"), f"{row['neuron_set_id']}.target_score_rows")
+        }
+        matrix.append([scores_by_target[target_id] for target_id in target_ids])
+    _, plt = _import_matplotlib()
+    fig, ax = plt.subplots(figsize=(max(8, 1.4 * len(target_ids)), max(5, 0.55 * len(intervention_rows))))
+    image = ax.imshow(matrix, aspect="auto", cmap="coolwarm")
+    ax.set_title("Feature-score drop after neuron-set ablation")
+    ax.set_xlabel("target")
+    ax.set_ylabel("neuron set")
+    ax.set_xticks(list(range(len(target_ids))))
+    ax.set_xticklabels(target_ids, rotation=35, ha="right")
+    ax.set_yticks(list(range(len(intervention_rows))))
+    ax.set_yticklabels([str(row["neuron_set_id"]) for row in intervention_rows])
+    for row_index, row in enumerate(matrix):
+        for column_index, value in enumerate(row):
+            ax.text(column_index, row_index, f"{value:.3g}", ha="center", va="center", fontsize=8)
+    fig.colorbar(image, ax=ax, label="baseline score - ablated score")
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path)
+    plt.close(fig)
+    return output_path
+
+
+def _render_neuron_intervention_set_size_plot(
+    *,
+    intervention_sets: list[dict[str, Any]],
+    output_path: Path,
+) -> Path:
+    if not intervention_sets:
+        raise ValueError("Cannot render set-size plot without intervention sets.")
+    labels = [str(row["neuron_set_id"]) for row in intervention_sets]
+    counts = [_require_int(row.get("neuron_count"), f"{row['neuron_set_id']}.neuron_count") for row in intervention_sets]
+    _, plt = _import_matplotlib()
+    fig, ax = plt.subplots(figsize=(max(8, 0.7 * len(labels)), 5))
+    ax.bar(list(range(len(labels))), counts)
+    ax.set_title("Selected intervention neuron-set sizes")
+    ax.set_ylabel("neurons")
+    ax.set_xticks(list(range(len(labels))))
+    ax.set_xticklabels(labels, rotation=35, ha="right")
+    ax.grid(axis="y", alpha=0.25)
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path)
+    plt.close(fig)
+    return output_path
+
+
+def _render_single_neuron_intervention_plot(
+    *,
+    single_neuron_rows: list[dict[str, Any]],
+    output_path: Path,
+) -> Path:
+    if not single_neuron_rows:
+        raise ValueError("Cannot render single-neuron plot without rows.")
+    labels = [str(row["neuron_label"]) for row in single_neuron_rows]
+    values = [
+        _require_number(row["candidate_score_drop_summary"]["candidate_score_drop_mean"], f"{row['neuron_label']}.score_drop_mean")
+        for row in single_neuron_rows
+    ]
+    _, plt = _import_matplotlib()
+    fig, ax = plt.subplots(figsize=(max(8, 0.6 * len(labels)), 5))
+    ax.bar(list(range(len(labels))), values)
+    ax.axhline(0.0, color="black", linewidth=0.8)
+    ax.set_title("Single-neuron candidate feature-score drop")
+    ax.set_ylabel("mean candidate score drop")
+    ax.set_xticks(list(range(len(labels))))
+    ax.set_xticklabels(labels, rotation=35, ha="right")
+    ax.grid(axis="y", alpha=0.25)
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path)
+    plt.close(fig)
+    return output_path
+
+
+def _render_neuron_intervention_plots(
+    *,
+    output_dir: Path,
+    intervention_sets: list[dict[str, Any]],
+    intervention_rows: list[dict[str, Any]],
+    target_ids: list[str],
+    single_neuron_rows: list[dict[str, Any]],
+) -> dict[str, Path]:
+    plot_paths = {
+        "behavior": _render_neuron_intervention_behavior_plot(
+            intervention_rows=intervention_rows,
+            output_path=output_dir / "candidate_neuron_intervention_behavior.svg",
+        ),
+        "feature_scores": _render_neuron_intervention_score_plot(
+            intervention_rows=intervention_rows,
+            target_ids=target_ids,
+            output_path=output_dir / "candidate_neuron_intervention_feature_scores.svg",
+        ),
+        "set_sizes": _render_neuron_intervention_set_size_plot(
+            intervention_sets=intervention_sets,
+            output_path=output_dir / "candidate_neuron_intervention_set_sizes.svg",
+        ),
+    }
+    if single_neuron_rows:
+        plot_paths["single_neurons"] = _render_single_neuron_intervention_plot(
+            single_neuron_rows=single_neuron_rows,
+            output_path=output_dir / "candidate_neuron_intervention_single_neurons.svg",
+        )
+    return plot_paths
+
+
+def _write_neuron_intervention_markdown(
+    *,
+    output_path: Path,
+    report_payload: dict[str, Any],
+) -> Path:
+    baseline = _require_dict(report_payload.get("baseline"), "neuron_intervention.baseline")
+    intervention_rows = _require_list(report_payload.get("intervention_rows"), "neuron_intervention.intervention_rows")
+    lines = [
+        "# Candidate Neuron Intervention",
+        "",
+        "This report tests whether neuron sets from a coalition map are causally required by ablating their MLP hidden activations.",
+        "",
+        "## Inputs",
+        "",
+        f"- Coalition map: `{report_payload['coalition_map_path']}`",
+        f"- Checkpoint dir: `{report_payload['checkpoint_dir']}`",
+        f"- Checkpoint step: {report_payload['checkpoint_step']}",
+        f"- Selected score targets: {', '.join(report_payload['target_ids'])}",
+        f"- Top K per set: {report_payload['selection']['top_k_per_set']}",
+        "",
+        "## Baseline",
+        "",
+        "| loss | token accuracy | answer accuracy | heldout accuracy | structural OOD accuracy |",
+        "| ---: | ---: | ---: | ---: | ---: |",
+        "| "
+        + " | ".join(
+            [
+                _markdown_number(baseline["loss"]),
+                _markdown_number(baseline["token_accuracy"]),
+                _markdown_number(baseline["answer_accuracy"]),
+                _markdown_number(baseline["heldout_answer_accuracy"]),
+                _markdown_number(baseline["structural_ood_answer_accuracy"]),
+            ]
+        )
+        + " |",
+        "",
+        "## Neuron-Set Ablations",
+        "",
+        "| neuron set | neurons | answer drop | heldout drop | structural OOD drop | loss increase | mean candidate score drop | all candidate scores drop |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+    ]
+    for raw_row in intervention_rows:
+        row = _require_dict(raw_row, "neuron_intervention.intervention_rows[]")
+        drops = _require_dict(row["behavior_effect"]["drops"], f"{row['neuron_set_id']}.drops")
+        score_summary = _require_dict(row["candidate_score_drop_summary"], f"{row['neuron_set_id']}.candidate_score_drop_summary")
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    str(row["neuron_set_id"]),
+                    str(row["neuron_count"]),
+                    _markdown_number(drops["answer_accuracy_drop"]),
+                    _markdown_number(drops["heldout_answer_accuracy_drop"]),
+                    _markdown_number(drops["structural_ood_answer_accuracy_drop"]),
+                    _markdown_number(drops["loss_increase"]),
+                    _markdown_number(score_summary["candidate_score_drop_mean"]),
+                    str(score_summary["all_candidate_scores_drop"]),
+                ]
+            )
+            + " |"
+        )
+    lines.extend(["", "## Target Score Drops", ""])
+    lines.append("| neuron set | target | score drop | baseline score | ablated score |")
+    lines.append("| --- | --- | ---: | ---: | ---: |")
+    for raw_row in intervention_rows:
+        row = _require_dict(raw_row, "neuron_intervention.intervention_rows[]")
+        for raw_score in _require_list(row.get("target_score_rows"), f"{row['neuron_set_id']}.target_score_rows"):
+            score = _require_dict(raw_score, f"{row['neuron_set_id']}.target_score_rows[]")
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        str(row["neuron_set_id"]),
+                        str(score["target_id"]),
+                        _markdown_number(score["score_drop"]),
+                        _markdown_number(score["baseline_score"]),
+                        _markdown_number(score["intervened_score"]),
+                    ]
+                )
+                + " |"
+            )
+    single_rows = _require_list(report_payload.get("single_neuron_rows"), "neuron_intervention.single_neuron_rows")
+    if single_rows:
+        lines.extend(["", "## Single-Neuron Ablations", ""])
+        lines.append("| neuron | answer drop | mean candidate score drop | all candidate scores drop |")
+        lines.append("| --- | ---: | ---: | --- |")
+        for raw_row in single_rows:
+            row = _require_dict(raw_row, "neuron_intervention.single_neuron_rows[]")
+            drops = _require_dict(row["behavior_effect"]["drops"], f"{row['neuron_label']}.drops")
+            score_summary = _require_dict(row["candidate_score_drop_summary"], f"{row['neuron_label']}.score_summary")
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        str(row["neuron_label"]),
+                        _markdown_number(drops["answer_accuracy_drop"]),
+                        _markdown_number(score_summary["candidate_score_drop_mean"]),
+                        str(score_summary["all_candidate_scores_drop"]),
+                    ]
+                )
+                + " |"
+            )
+    omitted = _require_list(report_payload.get("omitted_empty_set_ids"), "neuron_intervention.omitted_empty_set_ids")
+    if omitted:
+        lines.extend(["", "## Empty Sets Not Run", ""])
+        for set_id in omitted:
+            lines.append(f"- {set_id}")
+    lines.extend(["", "## Unsupported Claims", ""])
+    for claim in _require_list(report_payload.get("unsupported_claims"), "neuron_intervention.unsupported_claims"):
+        lines.append(f"- {claim}")
+    lines.extend(["", "## Plots", ""])
+    for name, plot_path in _require_dict(report_payload.get("plots"), "neuron_intervention.plots").items():
+        lines.append(f"- {name}: `{plot_path}`")
+    lines.append("")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text("\n".join(lines), encoding="utf-8")
+    return output_path
+
+
+def build_candidate_neuron_intervention(
+    *,
+    config_path: Path,
+    probe_set_path: Path,
+    coalition_map_path: Path,
+    checkpoint_dir: Path,
+    output_dir: Path,
+    checkpoint_step: int,
+    device_name: str = "cpu",
+    top_k_per_set: int = 8,
+    single_neuron_top_k: int = 0,
+    score_individual_features: bool = False,
+) -> tuple[Path, Path, dict[str, Path]]:
+    if checkpoint_step < 0:
+        raise ValueError("checkpoint_step must be non-negative.")
+    if top_k_per_set <= 0:
+        raise ValueError("top_k_per_set must be positive.")
+    if single_neuron_top_k < 0:
+        raise ValueError("single_neuron_top_k must be non-negative.")
+
+    spec = TrainSpec.from_path(config_path)
+    device = require_device(device_name)
+    metadata = read_symbolic_kv_stream_metadata(spec.benchmark_dir)
+    vocab = Vocabulary.from_metadata(metadata["vocabulary"])
+    batches = _load_probe_batches(spec=spec, probe_set_path=probe_set_path, vocab=vocab, device=device)
+    coalition_payload = _load_coalition_map_payload(coalition_map_path)
+    target_specs = _candidate_intervention_targets(
+        coalition_payload=coalition_payload,
+        score_individual_features=score_individual_features,
+    )
+    target_ids = [
+        _sanitize_candidate_id(_require_non_empty_str(target.get("target_id"), "intervention.target.target_id"))
+        for target in target_specs
+    ]
+    candidate_target_ids = _coalition_candidate_target_ids(coalition_payload)
+    intervention_set_payload = _build_candidate_intervention_sets(
+        coalition_payload=coalition_payload,
+        top_k_per_set=top_k_per_set,
+    )
+    intervention_sets = [
+        _require_dict(row, "intervention_sets[]")
+        for row in _require_list(intervention_set_payload.get("intervention_sets"), "intervention_sets")
+    ]
+
+    checkpoint_paths_by_step = _resolve_checkpoint_paths_by_step(checkpoint_dir)
+    if checkpoint_step not in checkpoint_paths_by_step:
+        raise FileNotFoundError(f"Checkpoint for step {checkpoint_step} not found in {checkpoint_dir}.")
+    checkpoint_path = checkpoint_paths_by_step[checkpoint_step]
+    checkpoint = load_checkpoint(checkpoint_path, device)
+    if int(checkpoint["step"]) != checkpoint_step:
+        raise ValueError(f"Checkpoint payload step mismatch for {checkpoint_path}: {checkpoint['step']} != {checkpoint_step}.")
+    model = build_model(spec.model, len(vocab.tokens), device)
+    load_model_state(model, checkpoint["model_state"])
+    model.eval()
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    basis_cache: dict[str, dict[str, Any]] = {}
+    baseline = _evaluate_intervention_probe_metrics(
+        model=model,
+        batches=batches,
+        pad_token_id=vocab.pad_token_id,
+    )
+    baseline_scores = _feature_scores_for_intervention_targets(
+        model=model,
+        batches=batches,
+        target_specs=target_specs,
+        basis_cache=basis_cache,
+        device=device,
+    )
+
+    intervention_rows: list[dict[str, Any]] = []
+    for intervention_set in intervention_sets:
+        neuron_mask = _neuron_mask_for_records(
+            spec=spec,
+            neurons=_require_list(intervention_set.get("neurons"), f"{intervention_set['neuron_set_id']}.neurons"),
+            device=device,
+        )
+        intervened = _evaluate_intervention_probe_metrics(
+            model=model,
+            batches=batches,
+            pad_token_id=vocab.pad_token_id,
+            neuron_mask=neuron_mask,
+        )
+        intervened_scores = _feature_scores_for_intervention_targets(
+            model=model,
+            batches=batches,
+            target_specs=target_specs,
+            basis_cache=basis_cache,
+            device=device,
+            neuron_mask=neuron_mask,
+        )
+        target_score_rows, candidate_score_drop_summary = _target_score_rows(
+            baseline_scores=baseline_scores,
+            intervened_scores=intervened_scores,
+            candidate_target_ids=candidate_target_ids,
+        )
+        intervention_rows.append(
+            {
+                "neuron_set_id": intervention_set["neuron_set_id"],
+                "set_kind": intervention_set["set_kind"],
+                "candidate_id": intervention_set.get("candidate_id"),
+                "source": intervention_set["source"],
+                "selection_metric": intervention_set["selection_metric"],
+                "neuron_count": intervention_set["neuron_count"],
+                "neurons": intervention_set["neurons"],
+                "category_score_sums": intervention_set["category_score_sums"],
+                "candidate_score_sums": intervention_set["candidate_score_sums"],
+                "intervened": intervened,
+                "behavior_effect": _intervention_metric_deltas(baseline=baseline, intervened=intervened),
+                "target_score_rows": target_score_rows,
+                "candidate_score_drop_summary": candidate_score_drop_summary,
+            }
+        )
+
+    single_neuron_rows: list[dict[str, Any]] = []
+    if single_neuron_top_k > 0:
+        shared_positive_sets = [row for row in intervention_sets if str(row["neuron_set_id"]) == "shared_positive"]
+        if not shared_positive_sets:
+            raise ValueError("single_neuron_top_k was requested, but the shared_positive intervention set is absent.")
+        for raw_neuron in _require_list(shared_positive_sets[0].get("neurons"), "shared_positive.neurons")[:single_neuron_top_k]:
+            neuron = _require_dict(raw_neuron, "shared_positive.neurons[]")
+            neuron_mask = _neuron_mask_for_records(spec=spec, neurons=[neuron], device=device)
+            intervened = _evaluate_intervention_probe_metrics(
+                model=model,
+                batches=batches,
+                pad_token_id=vocab.pad_token_id,
+                neuron_mask=neuron_mask,
+            )
+            intervened_scores = _feature_scores_for_intervention_targets(
+                model=model,
+                batches=batches,
+                target_specs=target_specs,
+                basis_cache=basis_cache,
+                device=device,
+                neuron_mask=neuron_mask,
+            )
+            target_score_rows, candidate_score_drop_summary = _target_score_rows(
+                baseline_scores=baseline_scores,
+                intervened_scores=intervened_scores,
+                candidate_target_ids=candidate_target_ids,
+            )
+            single_neuron_rows.append(
+                {
+                    "neuron_label": neuron["label"],
+                    "layer": neuron["layer"],
+                    "neuron": neuron["neuron"],
+                    "intervened": intervened,
+                    "behavior_effect": _intervention_metric_deltas(baseline=baseline, intervened=intervened),
+                    "target_score_rows": target_score_rows,
+                    "candidate_score_drop_summary": candidate_score_drop_summary,
+                }
+            )
+
+    plot_paths = _render_neuron_intervention_plots(
+        output_dir=output_dir,
+        intervention_sets=intervention_sets,
+        intervention_rows=intervention_rows,
+        target_ids=target_ids,
+        single_neuron_rows=single_neuron_rows,
+    )
+    unsupported_claims = [
+        "causal_sufficiency_of_shared_neurons",
+        "source_to_target_neuron_activation_patch",
+        "cross_seed_intervention_stability",
+        "per_minibatch_intervention_trace",
+        "complete_dense_circuit_decomposition",
+    ]
+    report_path = output_dir / "candidate_neuron_intervention_report.json"
+    markdown_path = output_dir / "candidate_neuron_intervention_report.md"
+    report_payload = {
+        "schema_version": NEURON_INTERVENTION_SCHEMA_VERSION,
+        "config_path": str(config_path),
+        "probe_set_path": str(probe_set_path),
+        "coalition_map_path": str(coalition_map_path),
+        "checkpoint_dir": str(checkpoint_dir),
+        "checkpoint_path": str(checkpoint_path),
+        "checkpoint_step": checkpoint_step,
+        "checkpoint_recorded_step": int(checkpoint["step"]),
+        "device": device_name,
+        "candidate_target_ids": candidate_target_ids,
+        "target_ids": target_ids,
+        "target_specs": target_specs,
+        "selection": {
+            "top_k_per_set": top_k_per_set,
+            "single_neuron_top_k": single_neuron_top_k,
+            "score_individual_features": score_individual_features,
+        },
+        "baseline": baseline,
+        "baseline_target_scores": baseline_scores,
+        "intervention_sets": intervention_sets,
+        "omitted_empty_set_ids": intervention_set_payload["omitted_empty_set_ids"],
+        "intervention_rows": intervention_rows,
+        "single_neuron_rows": single_neuron_rows,
+        "unsupported_claims": unsupported_claims,
+        "plots": {name: str(path) for name, path in plot_paths.items()},
+    }
+    write_json(report_path, report_payload)
+    _write_neuron_intervention_markdown(output_path=markdown_path, report_payload=report_payload)
+    return report_path, markdown_path, plot_paths

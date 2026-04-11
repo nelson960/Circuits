@@ -1357,3 +1357,315 @@ The next birth-model iteration needs additional factors that distinguish early g
 - separate treatment of `f54`, `f27`, `f1`, and `f59`
 
 This strengthens the current conclusion: the repo can now test a proposed "why" story, and the first simple story fails. The research should now improve the explanatory model rather than only adding more descriptive traces.
+
+### Candidate Coalition Map
+
+After the first birth-model failure, the next tool added was `candidate-coalition-map`.
+
+Purpose:
+
+- test whether selected candidate families are separate circuits or sibling readouts of one dense MLP-neuron coalition
+- compute per-neuron projected feature-score update drive
+- compare candidate score gradients on neuron-specific MLP parameter slices
+- produce shared-vs-specific neuron categories and plots
+
+The neuron-specific parameter slice is:
+
+```text
+fc_in row + fc_in bias + fc_out column
+```
+
+For each candidate `c` and neuron `n`, the tool computes:
+
+```text
+Delta score_c,n ~= grad_theta_n score_c . Delta theta_n
+```
+
+Implemented command:
+
+- `candidate-coalition-map`
+
+Current outputs:
+
+- `candidate_coalition_map_report.json`
+- `candidate_coalition_map_report.md`
+- `candidate_coalition_neuron_heatmap.svg`
+- `candidate_coalition_shared_specific.svg`
+- `candidate_coalition_gradient_conflict_matrix.svg`
+- `candidate_coalition_neuron_trajectories.svg`
+
+Initial bounded smoke test:
+
+- output directory: `artifacts/runs/symbolic_kv_reference_formation/analysis/traced_candidates/layer2_family7_family4/coalition_map_early`
+- candidates: `layer2_family7_top2`, `layer2_family4_top2`
+- window: `1750 -> 2500`
+- neuron layers: `0`, `2`
+- individual features included: `f1`, `f27`, `f54`, `f59`
+
+Important environment note:
+
+- running with `--device mps` failed because this execution environment reported MPS unavailable
+- the bounded smoke test was then run with `--device cpu`
+- the tool did not silently fall back
+
+Initial result:
+
+- `layer2_family7_top2` vs `layer2_family4_top2` mean score-gradient cosine on selected MLP-neuron parameters: about `0.738406`
+- `layer2_family7_top2` vs `f54`: about `0.975703`
+- `layer2_family4_top2` vs `f1`: about `0.969959`
+
+Shared-vs-specific category summary for the bounded early window:
+
+- shared positive neurons: `484`
+- shared positive score drive: `0.50029`
+- shared negative neurons: `316`
+- shared negative score magnitude: `0.304594`
+- conflict neurons: `224`
+- conflict positive score: `0.0351674`
+- conflict negative score magnitude: `0.0303447`
+
+Interpretation:
+
+- This is early evidence for the dense-coalition hypothesis.
+- Family7 and family4 are probably not independent clean circuits.
+- They look like sibling feature-family readouts supported by many of the same MLP neurons.
+
+Unsupported:
+
+- causal necessity of the shared-positive neurons
+- whether family7-specific neurons explain the heldout advantage
+- whether family4-specific neurons explain raw amplification without heldout
+- cross-seed stability of the same coalition
+
+Next tests:
+
+- run the coalition map over additional windows: `2750 -> 3750`, `3500 -> 4500`, `4250 -> 4500`, `5500 -> 6000`
+- run targeted shared/specific/conflict neuron ablation with `candidate-neuron-intervention`
+- defer targeted shared/specific/conflict neuron patching until attention/path geometry clarifies what should be patched
+- feed coalition-level factors into the next birth model
+
+## Candidate Neuron Intervention Tool
+
+Built after the early coalition map result to move from update-geometry evidence to causal necessity evidence.
+
+Implemented command:
+
+- `candidate-neuron-intervention`
+
+Inputs:
+
+- config
+- probe set
+- coalition-map report JSON
+- checkpoint directory
+- explicit checkpoint step
+
+Why the explicit checkpoint step matters:
+
+- the tool does not infer or silently choose a checkpoint
+- the user must decide whether to test the early window endpoint, a later consolidated checkpoint, or another formation stage
+
+What it does:
+
+- loads the selected checkpoint
+- builds neuron sets from `candidate-coalition-map`
+- zeros selected MLP hidden neurons with the model's `neuron_mask`
+- recomputes probe loss, token accuracy, answer accuracy, heldout answer accuracy, and structural-OOD answer accuracy
+- recomputes candidate feature-family scores under each ablation
+- reports score drops as `baseline feature score - ablated feature score`
+
+Neuron sets generated from the coalition map:
+
+- `shared_positive`
+- `conflict`
+- `shared_negative`
+- `top_overlap`
+- `candidate_specific:<candidate_id>`
+
+Outputs:
+
+- `candidate_neuron_intervention_report.json`
+- `candidate_neuron_intervention_report.md`
+- `candidate_neuron_intervention_behavior.svg`
+- `candidate_neuron_intervention_feature_scores.svg`
+- `candidate_neuron_intervention_set_sizes.svg`
+- optional `candidate_neuron_intervention_single_neurons.svg`
+
+Interpretation rule:
+
+- if `shared_positive` ablation drops both family7 and family4 feature-family scores, that supports causal shared-neuron necessity
+- if a `candidate_specific:<candidate_id>` ablation mainly drops one family, that supports family-specific specialization inside the dense coalition
+- if `conflict` ablation helps one target and hurts another, that is evidence for internal competition rather than shared support
+
+Still unsupported:
+
+- causal sufficiency of the shared-positive neurons
+- source-to-target neuron activation patching
+- cross-seed stability
+- per-minibatch intervention trace
+
+## Candidate Neuron Intervention Result And Mathematical Pivot
+
+After building `candidate-neuron-intervention`, it was run on the early family7/family4 coalition map.
+
+Artifact:
+
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/traced_candidates/layer2_family7_family4/neuron_intervention_early_step2500/candidate_neuron_intervention_report.json`
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/traced_candidates/layer2_family7_family4/neuron_intervention_early_step2500/candidate_neuron_intervention_report.md`
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/traced_candidates/layer2_family7_family4/neuron_intervention_early_step2500/candidate_neuron_intervention_behavior.svg`
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/traced_candidates/layer2_family7_family4/neuron_intervention_early_step2500/candidate_neuron_intervention_feature_scores.svg`
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/traced_candidates/layer2_family7_family4/neuron_intervention_early_step2500/candidate_neuron_intervention_set_sizes.svg`
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/traced_candidates/layer2_family7_family4/neuron_intervention_early_step2500/candidate_neuron_intervention_single_neurons.svg`
+
+Settings:
+
+- coalition map: `coalition_map_early`
+- checkpoint step: `2500`
+- device: `mps`
+- top K per set: `8`
+- individual feature scores included: `f1`, `f27`, `f54`, `f59`
+
+Baseline at checkpoint `2500`:
+
+| metric | value |
+| --- | ---: |
+| loss | `2.45865` |
+| token accuracy | `0.489369` |
+| answer accuracy | `0.364845` |
+| heldout accuracy | `0.104575` |
+| structural OOD accuracy | `0.142857` |
+
+Feature-family score proof:
+
+| ablated set | family4 score drop | family7 score drop | mean candidate score drop | all candidate scores drop |
+| --- | ---: | ---: | ---: | --- |
+| `shared_positive` | `0.01124` (`5.84%`) | `0.00586` (`3.19%`) | `0.00855` | true |
+| `top_overlap` | `0.00790` (`4.10%`) | `0.00379` (`2.07%`) | `0.00584` | true |
+| `shared_negative` | `0.03691` (`19.19%`) | `0.03818` (`20.79%`) | `0.03754` | true |
+| `conflict` | `-0.00311` (`-1.62%`) | `0.00046` (`0.25%`) | `-0.00133` | false |
+
+Supported by this result:
+
+- `shared_positive` neurons causally support both family7 and family4 feature-family scores.
+- `top_overlap` neurons also causally support both family scores.
+- `conflict` neurons behave like actual internal competition, not shared support.
+- `shared_negative` neurons are the strongest current score carriers even though the update direction over the early interval pushed against the candidate scores.
+
+Important correction:
+
+The signs from the coalition map are training-update signs, not static causal utility labels.
+
+`shared_negative` means:
+
+```text
+During the selected checkpoint interval,
+the SGD update through those neuron parameter slices pushed against the candidate score.
+```
+
+It does not mean:
+
+```text
+Those neurons do not currently carry the feature-family signal.
+```
+
+In fact, ablating the top `shared_negative` set at checkpoint `2500` produced the largest candidate feature-score drop:
+
+```text
+family4 drop ~= 19.19%
+family7 drop ~= 20.79%
+```
+
+This is strong evidence that the current circuit is dense, mixed, and dynamically rebalanced. A static neuron list is not enough.
+
+Behavior-level result:
+
+| ablated set | answer drop | heldout drop | structural OOD drop | loss increase |
+| --- | ---: | ---: | ---: | ---: |
+| `shared_positive` | `-0.00443` | `0.01307` | `-0.00461` | `-0.00062` |
+| `top_overlap` | `-0.00591` | `0` | `-0.00922` | `0.00064` |
+| `shared_negative` | `-0.00739` | `0.00654` | `-0.00461` | `-0.03991` |
+| `candidate_specific:layer2_family4_top2` | `0.00148` | `0.01961` | `-0.01382` | `-0.00721` |
+
+Interpretation:
+
+- The intervention proves causal feature-score support.
+- It does not yet prove clean task-behavior necessity.
+- The task behavior is compensated across dense overlapping routes.
+- Neuron-level intervention is necessary, but it is not sufficient to explain circuit selection.
+
+Single-neuron proof inside the shared-positive set:
+
+| neuron | mean candidate score drop | interpretation |
+| --- | ---: | --- |
+| `L0N326` | `0.012998` | strong shared support |
+| `L0N376` | `0.012859` | strong shared support |
+| `L0N488` | `0.006657` | moderate shared support |
+| `L0N411` | `0.006526` | moderate shared support |
+| `L0N302` | `-0.019708` | ablation increases family scores |
+| `L0N36` | `-0.008512` | ablation increases family scores |
+
+This is direct evidence against a simple sparse-neuron story.
+
+Current conclusion:
+
+The family7/family4 result is now stronger than observation:
+
+```text
+dense shared coalition -> causal family-score support -> behavior still compensated
+```
+
+That means the research has reached a dead end for the current style of tool if the goal is the why question. More neuron lists will not explain why SGD chooses one internal algorithm over another.
+
+The next object must be mathematical geometry:
+
+```text
+dataset relation d(x, y)
+  -> attention retrieval geometry
+  -> MLP feature geometry
+  -> path-level logit contribution
+  -> SGD gradient alignment
+  -> selected circuit
+```
+
+Next planned tools:
+
+1. `dataset-geometry-report`
+2. `attention-geometry-trace`
+3. `path-logit-decomposition`
+4. `example-gradient-geometry`
+5. `mechanism-hypothesis-tester`
+
+The new mathematical target:
+
+```text
+m_t(x, y) =
+  logit_t(y | x) - logsumexp_{z != y} logit_t(z | x)
+```
+
+and:
+
+```text
+m_t(x, y) ~= sum_P C_P(theta_t, x, y)
+```
+
+where `C_P` is a path-level contribution.
+
+The circuit-selection hypothesis should be tested as:
+
+```text
+Circuit P wins over circuit Q when:
+
+E_D[<grad_theta C_P(theta_t, x, y), -grad_theta L(theta_t, x, y)>]
+>
+E_D[<grad_theta C_Q(theta_t, x, y), -grad_theta L(theta_t, x, y)>]
+```
+
+subject to architecture, initialization, superposition, interference, and causal faithfulness constraints.
+
+Updated research stance:
+
+- The dense interconnected-family hypothesis is supported.
+- The shared-neuron causal-score hypothesis is supported.
+- The clean behavior-necessity hypothesis is unsupported.
+- The neuron-only explanation path is insufficient for the main question.
+- The next phase must analyze dataset geometry, attention scores, QK/OV structure, path margins, and gradient geometry.

@@ -12,8 +12,10 @@ from circuit.analysis.birth_windows import analyze_birth_windows
 from circuit.analysis.birth_window_compare import compare_birth_window_checkpoints
 from circuit.analysis.candidate_dynamics import (
     build_candidate_birth_model,
+    build_candidate_coalition_map,
     build_candidate_circuit_registry,
     build_candidate_mechanism_report,
+    build_candidate_neuron_intervention,
     run_candidate_sweep,
     run_circuit_gradient_link,
 )
@@ -636,6 +638,76 @@ def test_analysis_and_training_pipeline(tmp_path: Path, benchmark_config_path: P
     assert "Candidate Birth Model" in birth_model_markdown
     assert {"birth_order", "factors", "scoreboard"} == set(birth_model_plot_paths)
     for plot_path in birth_model_plot_paths.values():
+        assert plot_path.exists()
+
+    coalition_registry_path = build_candidate_circuit_registry(
+        feature_family_trace_paths=[family_trace_path, family_trace_path],
+        subset_trajectory_paths=[subset_trajectory_path, subset_trajectory_path],
+        candidate_ids=["test_candidate_a", "test_candidate_b"],
+        basis_paths=[basis_path, basis_path],
+        subset_birth_paths=[subset_birth_path, subset_birth_path],
+        family_update_link_paths=[family_update_link_path, family_update_link_path],
+        output_path=shared_basis_dir / "coalition_candidate_registry.json",
+    )
+    coalition_gradient_link_path = run_circuit_gradient_link(
+        config_path=train_config,
+        probe_set_path=probe_set_path,
+        registry_path=coalition_registry_path,
+        checkpoint_dir=run_dir / "checkpoints",
+        sweep_metrics_path=metrics_path,
+        output_path=shared_basis_dir / "coalition_gradient_link.json",
+        device_name="cpu",
+    )
+
+    coalition_report_path, coalition_markdown_path, coalition_plot_paths = build_candidate_coalition_map(
+        config_path=train_config,
+        probe_set_path=probe_set_path,
+        registry_path=coalition_registry_path,
+        gradient_link_path=coalition_gradient_link_path,
+        checkpoint_dir=run_dir / "checkpoints",
+        output_dir=shared_basis_dir / "candidate_coalition",
+        candidate_ids=["test_candidate_a", "test_candidate_b"],
+    )
+    coalition_payload = read_json(coalition_report_path)
+    coalition_markdown = coalition_markdown_path.read_text(encoding="utf-8")
+
+    assert coalition_report_path.exists()
+    assert coalition_markdown_path.exists()
+    assert coalition_payload["interval_count"] == 1
+    assert coalition_payload["neuron_rows"]
+    assert coalition_payload["coalition_summary"]["category_summaries"]
+    assert "Candidate Coalition Map" in coalition_markdown
+    assert {
+        "gradient_conflict_matrix",
+        "neuron_activation_trajectory",
+        "neuron_candidate_heatmap",
+        "shared_specific",
+    } == set(coalition_plot_paths)
+    for plot_path in coalition_plot_paths.values():
+        assert plot_path.exists()
+
+    intervention_report_path, intervention_markdown_path, intervention_plot_paths = build_candidate_neuron_intervention(
+        config_path=train_config,
+        probe_set_path=probe_set_path,
+        coalition_map_path=coalition_report_path,
+        checkpoint_dir=run_dir / "checkpoints",
+        output_dir=shared_basis_dir / "candidate_neuron_intervention",
+        checkpoint_step=4,
+        device_name="cpu",
+        top_k_per_set=2,
+    )
+    intervention_payload = read_json(intervention_report_path)
+    intervention_markdown = intervention_markdown_path.read_text(encoding="utf-8")
+
+    assert intervention_report_path.exists()
+    assert intervention_markdown_path.exists()
+    assert intervention_payload["checkpoint_step"] == 4
+    assert intervention_payload["baseline"]["num_answers"] > 0
+    assert intervention_payload["intervention_rows"]
+    assert intervention_payload["intervention_rows"][0]["target_score_rows"]
+    assert "Candidate Neuron Intervention" in intervention_markdown
+    assert {"behavior", "feature_scores", "set_sizes"} == set(intervention_plot_paths)
+    for plot_path in intervention_plot_paths.values():
         assert plot_path.exists()
 
     candidate_sweep_summary_path, candidate_sweep_plot_paths = run_candidate_sweep(

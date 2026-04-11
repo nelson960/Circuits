@@ -43,13 +43,16 @@ Current supported result:
 - family7 at `layer_2_post_mlp`, features `27` and `54`, is the strongest current generalizing candidate
 - family4, features `1` and `59`, is a related but weaker sibling candidate
 - both candidates share traced component ancestry through `layer0_head3`, `layer0_mlp`, and a `layer2` neuron group
+- family7 and family4 share a dense layer-0-heavy MLP-neuron coalition during the early `1750 -> 2500` formation window
+- targeted neuron ablation at checkpoint `2500` causally drops both family feature scores, but does not yet cleanly drop overall task behavior
 
 Current negative result:
 
 - the first transparent `candidate-birth-model` does not yet predict family7 over family4 from shared strict pre-birth evidence
 - this means the current "why" model is incomplete
+- neuron-level coalition tracing alone is not enough to explain why SGD selects the final circuit
 
-The paper should therefore be read as a live mechanistic research record: the tools now expose formation, but the explanation of SGD circuit selection is still under active construction.
+The paper should therefore be read as a live mechanistic research record. The project has moved from component observation into the harder mathematical question: how the dataset relation `d(x, y)` becomes attention geometry, MLP feature geometry, path-level logit contribution, and finally an SGD-selected internal circuit.
 
 ## Claim Status Legend
 
@@ -83,13 +86,18 @@ flowchart TD
   J --> K["Circuit-gradient link"]
   K --> L["Candidate mechanism report"]
   K --> M["Candidate birth model"]
+  K --> P["Candidate coalition map"]
+  P --> R["Candidate neuron intervention"]
   L --> N["What formed?"]
   M --> O["Can pre-birth factors predict why it forms?"]
+  P --> Q["Are families one dense neuron coalition?"]
+  R --> S["Which shared neurons are causally carrying family scores?"]
+  S --> T["Next: dataset and attention geometry"]
 ```
 
 Current best hypothesis:
 
-SGD first builds a shared dense retrieval/write coalition. Different feature families then become sibling branches of that coalition. Family7 appears to be the more generalizing branch; family4 receives strong feature amplification but generalizes much less.
+SGD first builds a shared dense retrieval/write coalition. Different feature families then become sibling branches of that coalition. Family7 appears to be the more generalizing branch; family4 receives strong feature amplification but generalizes much less. The shared coalition is real, but a neuron-list explanation is no longer enough: some neurons that look helpful by update geometry suppress the feature score at the current checkpoint, while some shared-negative neurons are strong current carriers.
 
 Negative result:
 
@@ -97,7 +105,7 @@ The first birth model ranks family4 above family7 at the shared pre-birth cutoff
 
 Unsupported:
 
-The repo does not yet support a final mathematical derivation of SGD circuit selection.
+The repo does not yet support a final mathematical derivation of SGD circuit selection, attention retrieval geometry, or path-level logit decomposition.
 
 ## Relation To The Prior Paper
 
@@ -138,7 +146,7 @@ Given candidate circuit families c_1, c_2, ..., c_n,
 can we predict before useful birth which one SGD will reinforce?
 ```
 
-The mathematical target is:
+The first mathematical target was:
 
 ```text
 Delta S_c(t) ~= grad_theta S_c(theta_t) . Delta theta_t
@@ -158,15 +166,55 @@ Delta S_c(t) ~= -eta_t <grad_theta S_c(theta_t), grad_theta L(theta_t)>
 
 That means a candidate should form when the update direction repeatedly aligns with the direction that increases that candidate, while also reducing training loss and avoiding excessive interference.
 
+This is useful but not sufficient. The recent coalition and intervention results show that the same neuron set can support multiple candidate families, oppose a subfeature, and still leave task behavior partly compensated. The next mathematical target must move from a candidate-family score to a path-level explanation:
+
+```text
+m_t(x, y) =
+  logit_t(y | x) - logsumexp_{z != y} logit_t(z | x)
+```
+
+where `m_t(x, y)` is the correct-answer margin for a dataset relation `d(x, y)`.
+
+The circuit question becomes:
+
+```text
+m_t(x, y) ~= sum_P C_P(theta_t, x, y)
+```
+
+where `C_P` is the contribution of a candidate computational path:
+
+- dataset relation
+- query/key attention geometry
+- value-write geometry
+- MLP feature geometry
+- residual stream readout
+- unembedding direction
+
+The SGD selection question becomes:
+
+```text
+E_D[Delta C_P]
+  ~= -eta_t E_D[<grad_theta C_P(theta_t, x, y), grad_theta L(theta_t, x, y)>]
+```
+
+So the real target is no longer just "which family score increased?" It is:
+
+```text
+Which path contribution aligns with the data-induced loss gradient,
+and why does that path win over other possible paths?
+```
+
 Supported so far:
 
 - the repo can measure candidate score movement across checkpoints
 - the repo can measure projected update alignment with loss and feature-score gradients
 - the repo can compare candidate families
+- the repo can show dense shared neuron support and targeted causal feature-score drops
 
 Unsupported:
 
 - the repo cannot yet predict the correct candidate family before birth with the first simple factor model
+- the repo cannot yet decompose the correct-answer margin into mathematical attention/MLP/readout path terms
 
 ## Dataset Development Story
 
@@ -398,6 +446,15 @@ flowchart LR
   U --> V["circuit-gradient-link"]
   V --> W["candidate-mechanism-report"]
   V --> X["candidate-birth-model"]
+  V --> Y["candidate-coalition-map"]
+  Y --> Z["candidate-neuron-intervention"]
+  D --> AA["dataset-geometry-report"]
+  E --> AB["attention-geometry-trace"]
+  AA --> AB
+  AB --> AC["path-logit-decomposition"]
+  Z --> AC
+  AC --> AD["example-gradient-geometry"]
+  AD --> AE["mechanism-hypothesis-tester"]
 ```
 
 ### Current Tool Inventory
@@ -427,6 +484,13 @@ flowchart LR
 | `circuit-gradient-link` | connect checkpoint updates to loss and feature-score gradients | gradient-link report |
 | `candidate-mechanism-report` | summarize what formed and which components contributed | mechanism report |
 | `candidate-birth-model` | test whether pre-birth factors predict candidate birth | birth-model report |
+| `candidate-coalition-map` | test whether candidate families share the same supporting MLP neurons | coalition report |
+| `candidate-neuron-intervention` | causally ablate shared/specific/conflict coalition neurons | intervention report |
+| `dataset-geometry-report` | planned: make the symbolic relation `d(x, y)` explicit | not built |
+| `attention-geometry-trace` | planned: trace QK retrieval and OV write geometry across checkpoints | not built |
+| `path-logit-decomposition` | planned: decompose answer margin into computational path contributions | not built |
+| `example-gradient-geometry` | planned: compare per-example gradient alignment and conflict | not built |
+| `mechanism-hypothesis-tester` | planned: test explicit mathematical circuit hypotheses | not built |
 
 Supported:
 
@@ -434,7 +498,7 @@ This stack exists and runs end to end on the current traced family7/family4 arti
 
 Unsupported:
 
-It does not yet produce a final complete circuit decomposition.
+It does not yet produce a final complete circuit decomposition. The next tools must connect dataset geometry, attention geometry, path contributions, and SGD gradient alignment.
 
 ## Shared Feature Layer
 
@@ -676,6 +740,204 @@ Build per-feature birth models for:
 
 The likely missing distinction is that family7 contains the better generalizing carrier, while family4 contains a stronger but less generalizing amplification signal.
 
+## Candidate Coalition Map
+
+The `candidate-coalition-map` tool was added after the first birth-model failure.
+
+Purpose:
+
+```text
+Test whether family7 and family4 are separate circuits,
+or two projections of one dense MLP-neuron coalition.
+```
+
+Method:
+
+For each selected checkpoint interval, each candidate, and each selected MLP neuron, the tool computes:
+
+```text
+Delta score_c,n ~= grad_theta_n score_c . Delta theta_n
+```
+
+where `theta_n` is the neuron-specific MLP parameter slice:
+
+- `fc_in` row
+- `fc_in` bias
+- `fc_out` column
+
+The tool also computes pairwise feature-score gradient cosines restricted to the selected MLP-neuron parameters.
+
+Initial bounded smoke-test report:
+
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/traced_candidates/layer2_family7_family4/coalition_map_early/candidate_coalition_map_report.md`
+
+Settings:
+
+| field | value |
+| --- | --- |
+| candidates | `layer2_family7_top2`, `layer2_family4_top2` |
+| interval window | `1750 -> 2500` |
+| neuron layers | `0`, `2` |
+| individual features included | `f1`, `f27`, `f54`, `f59` |
+| device requested first | `mps` |
+| device used for smoke test | `cpu`, because this execution environment reported MPS unavailable |
+
+![Candidate coalition neuron heatmap](assets/figures/candidate_coalition_neuron_heatmap.svg)
+
+![Candidate coalition shared-specific categories](assets/figures/candidate_coalition_shared_specific.svg)
+
+![Candidate coalition gradient conflict matrix](assets/figures/candidate_coalition_gradient_conflict_matrix.svg)
+
+![Candidate coalition neuron trajectories](assets/figures/candidate_coalition_neuron_trajectories.svg)
+
+Supported by the bounded smoke test:
+
+- family7 and family4 have strongly positive score-gradient cosine on selected MLP-neuron parameters
+- early family7/family4 mean score-gradient cosine is about `0.738`
+- many neurons are shared-positive for both families under the `1750 -> 2500` window
+- `f54` and family7 are almost identical by this restricted score-gradient cosine, about `0.976`
+- `f1` and family4 are also almost identical by this restricted score-gradient cosine, about `0.970`
+
+Initial shared/specific category summary:
+
+| category | neurons | positive score | negative score abs |
+| --- | ---: | ---: | ---: |
+| shared positive | `484` | `0.50029` | `0` |
+| shared negative | `316` | `0` | `0.304594` |
+| conflict | `224` | `0.0351674` | `0.0303447` |
+
+Current best hypothesis:
+
+This is early evidence that family7 and family4 are not separate clean circuits. They are likely sibling readouts of a shared dense MLP-neuron coalition.
+
+Unsupported:
+
+This is not yet a causal necessity result. It does not prove that the shared-positive neurons are necessary for behavior. That requires targeted ablation or patching of:
+
+- top shared-positive neurons
+- family7-specific neurons
+- family4-specific neurons
+- conflict neurons
+
+## Candidate Neuron Intervention
+
+The `candidate-neuron-intervention` tool is the next causal test after the coalition map.
+
+Purpose:
+
+```text
+Take the neuron sets discovered by candidate-coalition-map,
+zero their MLP hidden activations at a chosen checkpoint,
+and measure whether candidate feature scores and task behavior drop.
+```
+
+The tool builds these intervention sets from the coalition map:
+
+- `shared_positive`
+- `conflict`
+- `shared_negative`
+- `top_overlap`
+- `candidate_specific:<candidate_id>`
+
+The key readout is:
+
+```text
+baseline feature score - ablated feature score
+```
+
+If the shared-positive ablation drops both candidate feature-family scores, the dense-coalition hypothesis becomes causal evidence instead of only update-geometry evidence.
+
+Implemented command:
+
+- `candidate-neuron-intervention`
+
+Current outputs:
+
+- `candidate_neuron_intervention_report.json`
+- `candidate_neuron_intervention_report.md`
+- `candidate_neuron_intervention_behavior.svg`
+- `candidate_neuron_intervention_feature_scores.svg`
+- `candidate_neuron_intervention_set_sizes.svg`
+- optional `candidate_neuron_intervention_single_neurons.svg`
+
+First run:
+
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/traced_candidates/layer2_family7_family4/neuron_intervention_early_step2500/candidate_neuron_intervention_report.md`
+- checkpoint step: `2500`
+- device: `mps`
+- top K per set: `8`
+- individual features included: `f1`, `f27`, `f54`, `f59`
+
+![Candidate neuron intervention behavior](assets/figures/candidate_neuron_intervention_behavior.svg)
+
+![Candidate neuron intervention feature scores](assets/figures/candidate_neuron_intervention_feature_scores.svg)
+
+![Candidate neuron intervention set sizes](assets/figures/candidate_neuron_intervention_set_sizes.svg)
+
+![Candidate neuron intervention single neurons](assets/figures/candidate_neuron_intervention_single_neurons.svg)
+
+Baseline at checkpoint `2500`:
+
+| metric | value |
+| --- | ---: |
+| loss | `2.45865` |
+| token accuracy | `0.489369` |
+| answer accuracy | `0.364845` |
+| heldout accuracy | `0.104575` |
+| structural OOD accuracy | `0.142857` |
+
+Feature-family score proof:
+
+| ablated set | family4 score drop | family7 score drop | mean candidate score drop | all candidate scores drop |
+| --- | ---: | ---: | ---: | --- |
+| `shared_positive` | `0.01124` (`5.84%`) | `0.00586` (`3.19%`) | `0.00855` | true |
+| `top_overlap` | `0.00790` (`4.10%`) | `0.00379` (`2.07%`) | `0.00584` | true |
+| `shared_negative` | `0.03691` (`19.19%`) | `0.03818` (`20.79%`) | `0.03754` | true |
+| `conflict` | `-0.00311` (`-1.62%`) | `0.00046` (`0.25%`) | `-0.00133` | false |
+
+Supported:
+
+- the shared-positive coalition is causally supporting both family feature scores
+- the top-overlap set is also a causal shared carrier
+- the conflict set behaves like actual internal competition
+- the strongest current score carrier is unexpectedly `shared_negative`
+
+Important correction:
+
+`shared_negative` does not mean useless. It means the checkpoint update direction over `1750 -> 2500` pushed against those candidate scores. At checkpoint `2500`, those neurons still carry large candidate feature-score signal. This is why a pure "positive update means useful neuron" story fails.
+
+Behavior-level result:
+
+| ablated set | answer drop | heldout drop | structural OOD drop | loss increase |
+| --- | ---: | ---: | ---: | ---: |
+| `shared_positive` | `-0.00443` | `0.01307` | `-0.00461` | `-0.00062` |
+| `top_overlap` | `-0.00591` | `0` | `-0.00922` | `0.00064` |
+| `shared_negative` | `-0.00739` | `0.00654` | `-0.00461` | `-0.03991` |
+| `candidate_specific:layer2_family4_top2` | `0.00148` | `0.01961` | `-0.01382` | `-0.00721` |
+
+This is the key limitation:
+
+The neuron intervention proves causal support for feature-family scores, but not clean necessity for final task behavior. The model has compensation, dense overlap, and mixed directions. A neuron-only path can keep producing evidence, but it will not by itself explain why SGD chooses one algorithmic circuit over another.
+
+Single-neuron proof inside the shared-positive set:
+
+| neuron | mean candidate score drop | interpretation |
+| --- | ---: | --- |
+| `L0N326` | `0.012998` | strong shared support |
+| `L0N376` | `0.012859` | strong shared support |
+| `L0N488` | `0.006657` | moderate shared support |
+| `L0N411` | `0.006526` | moderate shared support |
+| `L0N302` | `-0.019708` | ablation increases family scores |
+| `L0N36` | `-0.008512` | ablation increases family scores |
+
+This is direct evidence for dense, internally mixed circuit structure rather than a sparse natural-neuron explanation.
+
+Still unsupported:
+
+- source-to-target neuron activation patching
+- causal sufficiency of the shared neurons
+- cross-seed intervention stability
+
 ## Current Research Progress
 
 Supported:
@@ -696,7 +958,11 @@ flowchart TD
   J --> K["Family7/family4 traced candidates"]
   K --> L["Mechanism report"]
   L --> M["Birth-model negative result"]
-  M --> N["Next: per-feature why model"]
+  M --> N["Coalition map"]
+  N --> O["Neuron intervention"]
+  O --> P["Dense shared-score carrier proven"]
+  P --> Q["Task behavior not cleanly explained"]
+  Q --> R["Next: geometric math"]
 ```
 
 Current status by research layer:
@@ -713,6 +979,9 @@ Current status by research layer:
 | feature families | Supported with caveat | family7/family4 traced; not final semantic units |
 | mechanism report | Supported | current component and phase report exists |
 | why model | Negative result | first simple model fails |
+| coalition map | Supported | family7/family4 share many MLP neurons and aligned score gradients |
+| neuron intervention | Supported with caveat | shared neurons causally drop family scores, but not cleanly task behavior |
+| geometric theory | Next test | dataset relation, attention geometry, and path margins not yet decomposed |
 | cross-seed | Unsupported | not yet replicated |
 | final theory | Unsupported | no closed-form circuit-selection model yet |
 
@@ -734,99 +1003,193 @@ Current blockers:
 1. Family-level aggregation hides per-feature roles.
 2. The first birth model lacks heldout-specific gradient alignment.
 3. The current feature basis may be sensitive to SAE hyperparameters.
-4. The causal patch window used for family7/family4 was late and negative.
-5. Dense overlap means the same components feed multiple families.
-6. The current result is one run, not a seed matrix.
+4. Dense overlap means the same components feed multiple families.
+5. Current neuron interventions affect feature scores more clearly than behavior.
+6. The same neuron can be update-positive, currently suppressive, and behavior-compensated.
+7. The current result is one run, not a seed matrix.
+8. The dataset relation and attention retrieval geometry have not yet been formalized.
 
 ## Next Research Stages
 
-### Stage 1: Per-Feature Birth Models
+The earlier next step was "more per-feature birth modeling." That is still useful, but the intervention result shows it is not the main path to the why question. The current bottleneck is mathematical: we need to understand how the dataset relation becomes geometry inside the model.
 
-Next test:
+### Stage 1: Dataset Geometry Report
 
-Split the family-level candidates into individual feature candidates:
+Next tool:
 
-| feature | current interpretation to test |
-| --- | --- |
-| `f54` | likely strongest heldout/generalization carrier |
-| `f27` | likely correctness-supporting family7 partner |
-| `f1` | useful family4 member |
-| `f59` | weak or harmful family4 passenger |
+- `dataset-geometry-report`
 
-Goal:
+Purpose:
 
-Explain why family7 beats family4 by decomposing family7 and family4 into their feature-level members.
-
-### Stage 2: Early Causal Patch Windows
-
-Next test:
-
-Run subpatch and lineage in early positive formation windows, not only `7500 -> 14000`.
-
-Target windows:
-
-- `1750 -> 2500`
-- `2750 -> 3750`
-- `4250 -> 4500`
-- `3500 -> 4500`
-- `5500 -> 6000`
-
-### Stage 3: Heldout-Specific Gradient Alignment
-
-Next test:
-
-Compute candidate score alignment separately for:
-
-- IID probe loss
-- heldout-pair probe loss
-- structural OOD probe loss
-
-Reason:
-
-Family4 can have strong feature-score drive without strong heldout gain. The current birth model needs to distinguish amplification from generalizing utility.
-
-### Stage 4: Interference And Competition
-
-Next test:
-
-Measure whether forming one candidate suppresses another.
+Make the relation `d(x, y)` explicit before looking inside the model.
 
 Needed quantities:
 
-- pairwise feature-score gradient cosine
-- shared parameter capacity
-- simultaneous gain intervals
-- sign-conflict intervals
-- candidate A score gradient projected onto candidate B update
+- key identity classes
+- value identity classes
+- read/write event graph
+- latest-value dependency for each read
+- distractor key/value structure
+- train/heldout/OOD relation matrix
+- minimal symbolic algorithm for the benchmark
 
-### Stage 5: Cross-Seed Replication
+Question answered:
+
+```text
+What geometric structure does the dataset ask SGD to internalize?
+```
+
+### Stage 2: Attention Geometry Trace
+
+Next tool:
+
+- `attention-geometry-trace`
+
+Purpose:
+
+Track whether attention heads learn the correct retrieval geometry.
+
+Needed quantities:
+
+- query-to-correct-key attention
+- query-to-distractor-key attention
+- QK correct-key margin
+- attention entropy
+- OV value-write score
+- direct logit effect of attended value
+- role-conditioned attention maps
+- QK and OV singular directions
+
+Question answered:
+
+```text
+When does the model learn the lookup geometry needed by d(x, y)?
+```
+
+### Stage 3: Path Logit Decomposition
+
+Next tool:
+
+- `path-logit-decomposition`
+
+Purpose:
+
+Decompose the answer margin into path-level contributions instead of component lists.
+
+Target expression:
+
+```text
+m_t(x, y) ~= sum_P C_P(theta_t, x, y)
+```
+
+Candidate paths:
+
+- embedding to attention to unembedding
+- embedding to MLP to attention to unembedding
+- attention to MLP to unembedding
+- lower MLP to upper MLP to unembedding
+- attention to residual feature to MLP readout
+
+Question answered:
+
+```text
+Which computational paths carry the correct-answer margin?
+```
+
+### Stage 4: Example Gradient Geometry
+
+Next tool:
+
+- `example-gradient-geometry`
+
+Purpose:
+
+Measure which dataset examples push the same internal circuit and which examples interfere.
+
+Needed quantity:
+
+```text
+G_ij = <grad_theta L(x_i, y_i), grad_theta L(x_j, y_j)>
+```
+
+Group by:
+
+- same query key
+- same answer value
+- same write/read relation
+- heldout vs train
+- correct vs incorrect
+- examples that support family7
+- examples that support family4
+
+Question answered:
+
+```text
+Which parts of the dataset reinforce the same path, and which parts compete?
+```
+
+### Stage 5: Mechanism Hypothesis Tester
+
+Next tool:
+
+- `mechanism-hypothesis-tester`
+
+Purpose:
+
+Stop testing vague component sets. Test explicit mathematical circuit hypotheses.
+
+Example hypothesis:
+
+```text
+The model solves symbolic KV by learning a QK retrieval head that maps
+query-key representations to matching written-key positions, then an OV/value
+path writes the associated value into the residual stream, while layer-0 MLP
+features shape the key/value subspace used by the later readout.
+```
+
+Required tests:
+
+- QK-only patch
+- OV-only patch
+- attention path patch
+- MLP feature/neuron patch
+- path logit recovery
+- heldout/OOD recovery
+
+### Stage 6: Cross-Seed Replication
 
 Next test:
 
 Repeat the formation run over multiple seeds and compare:
 
-- birth windows
-- top heads
-- top MLP blocks
+- dataset-geometry readouts
+- attention geometry birth
+- path contribution birth
 - feature families
-- traced components
-- birth-model rank predictions
+- neuron coalition categories
+- intervention effects
 
 Until this is done, family7 is a current-run candidate, not a universal circuit family.
 
-### Stage 6: Reduced Mathematical Model
+### Current Mathematical Target
 
 Current best target:
 
 ```text
-FormationAdvantage(c)
-  = gradient_alignment(c)
-  + heldout_utility(c)
-  + component_accessibility(c)
-  + amplification(c)
-  - interference_cost(c)
-  - formation_delay(c)
+Circuit P wins over circuit Q when:
+
+E_D[<grad_theta C_P(theta_t, x, y), -grad_theta L(theta_t, x, y)>]
+>
+E_D[<grad_theta C_Q(theta_t, x, y), -grad_theta L(theta_t, x, y)>]
 ```
+
+subject to:
+
+- architecture constraints
+- initialization geometry
+- feature superposition
+- path interference
+- behavioral faithfulness
 
 Unsupported:
 
@@ -857,6 +1220,8 @@ This equation is a research target, not yet a supported result.
 
 - `artifacts/runs/symbolic_kv_reference_formation/analysis/traced_candidates/layer2_family7_family4/mechanism_report/candidate_mechanism_report.md`
 - `artifacts/runs/symbolic_kv_reference_formation/analysis/traced_candidates/layer2_family7_family4/birth_model/candidate_birth_model_report.md`
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/traced_candidates/layer2_family7_family4/coalition_map_early/candidate_coalition_map_report.md`
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/traced_candidates/layer2_family7_family4/neuron_intervention_early_step2500/candidate_neuron_intervention_report.md`
 
 ## Current Conclusion
 
@@ -872,22 +1237,25 @@ The project now has enough tooling to observe circuit formation at multiple scal
 - feature families
 - candidate circuits
 - projected gradient links
+- dense neuron coalitions
+- targeted neuron ablations
 
 Current best hypothesis:
 
-SGD forms a shared dense retrieval/write coalition first. Family7 and family4 are sibling branches of that coalition. Family7 becomes the more generalizing branch; family4 receives stronger raw pre-birth feature amplification but weaker heldout utility.
+SGD forms a shared dense retrieval/write coalition first. Family7 and family4 are sibling branches of that coalition. Family7 becomes the more generalizing branch; family4 receives stronger raw pre-birth feature amplification but weaker heldout utility. The coalition is causally real at the feature-score level, but task behavior remains compensated and distributed.
 
 Negative result:
 
-The first pre-birth factor model fails to predict family7 over family4. This shows that the project has not yet answered the why question.
+The first pre-birth factor model fails to predict family7 over family4. The first neuron-intervention result proves shared score support but does not cleanly explain behavior. Together, these show that the project has not yet answered the why question.
 
 Next test:
 
-The next decisive step is per-feature birth modeling with heldout-specific gradient alignment.
+The next decisive step is mathematical geometry: dataset relation, attention QK/OV geometry, path-level logit decomposition, and example-gradient alignment.
 
 The scientific standard from here is:
 
 ```text
-If a proposed explanation cannot predict the useful family before it is useful,
+If a proposed explanation cannot express the dataset relation,
+decompose the answer margin, and predict which path SGD reinforces,
 it is only a post-hoc story.
 ```

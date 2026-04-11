@@ -16,7 +16,9 @@ from circuit.analysis.birth_window_compare import compare_birth_window_checkpoin
 from circuit.analysis.checkpoint_sweep import generate_probe_set, run_checkpoint_sweep
 from circuit.analysis.candidate_dynamics import (
     build_candidate_birth_model,
+    build_candidate_coalition_map,
     build_candidate_mechanism_report,
+    build_candidate_neuron_intervention,
     build_candidate_circuit_registry,
     run_candidate_sweep,
     run_circuit_gradient_link,
@@ -406,6 +408,35 @@ def main() -> None:
     candidate_birth_parser.add_argument("--prediction-cutoff-step", type=int, default=None)
     candidate_birth_parser.add_argument("--lookback-intervals", type=int, default=None)
     candidate_birth_parser.add_argument("--birth-score-threshold", type=float, default=0.0)
+
+    candidate_coalition_parser = subparsers.add_parser("candidate-coalition-map")
+    candidate_coalition_parser.add_argument("--config", type=Path, required=True)
+    candidate_coalition_parser.add_argument("--probe-set", type=Path, required=True)
+    candidate_coalition_parser.add_argument("--registry", type=Path, required=True)
+    candidate_coalition_parser.add_argument("--gradient-link", type=Path, required=True)
+    candidate_coalition_parser.add_argument("--checkpoint-dir", type=Path, required=True)
+    candidate_coalition_parser.add_argument("--output-dir", type=Path, required=True)
+    candidate_coalition_parser.add_argument("--candidate-id", type=str, action="append", default=None)
+    candidate_coalition_parser.add_argument("--device", type=str, default="cpu")
+    candidate_coalition_parser.add_argument("--start-step", type=int, default=None)
+    candidate_coalition_parser.add_argument("--end-step", type=int, default=None)
+    candidate_coalition_parser.add_argument("--neuron-layer", type=int, action="append", default=None)
+    candidate_coalition_parser.add_argument("--candidate-only", action="store_true")
+    candidate_coalition_parser.add_argument("--top-k-neurons", type=int, default=24)
+    candidate_coalition_parser.add_argument("--trajectory-top-k", type=int, default=8)
+    candidate_coalition_parser.add_argument("--sign-epsilon", type=float, default=0.0)
+
+    candidate_neuron_intervention_parser = subparsers.add_parser("candidate-neuron-intervention")
+    candidate_neuron_intervention_parser.add_argument("--config", type=Path, required=True)
+    candidate_neuron_intervention_parser.add_argument("--probe-set", type=Path, required=True)
+    candidate_neuron_intervention_parser.add_argument("--coalition-map", type=Path, required=True)
+    candidate_neuron_intervention_parser.add_argument("--checkpoint-dir", type=Path, required=True)
+    candidate_neuron_intervention_parser.add_argument("--output-dir", type=Path, required=True)
+    candidate_neuron_intervention_parser.add_argument("--checkpoint-step", type=int, required=True)
+    candidate_neuron_intervention_parser.add_argument("--device", type=str, default="cpu")
+    candidate_neuron_intervention_parser.add_argument("--top-k-per-set", type=int, default=8)
+    candidate_neuron_intervention_parser.add_argument("--single-neuron-top-k", type=int, default=0)
+    candidate_neuron_intervention_parser.add_argument("--score-individual-features", action="store_true")
 
     feature_compare_parser = subparsers.add_parser("feature-compare")
     feature_compare_parser.add_argument("--trajectories", type=Path, required=True)
@@ -821,6 +852,53 @@ def main() -> None:
             prediction_cutoff_step=args.prediction_cutoff_step,
             lookback_intervals=args.lookback_intervals,
             birth_score_threshold=args.birth_score_threshold,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "plots": {key: str(value) for key, value in plot_paths.items()},
+            }
+        )
+        return
+    if args.command == "candidate-coalition-map":
+        report_path, markdown_path, plot_paths = build_candidate_coalition_map(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            registry_path=args.registry,
+            gradient_link_path=args.gradient_link,
+            checkpoint_dir=args.checkpoint_dir,
+            output_dir=args.output_dir,
+            candidate_ids=args.candidate_id,
+            device_name=args.device,
+            start_step=args.start_step,
+            end_step=args.end_step,
+            neuron_layers=args.neuron_layer,
+            include_individual_features=not args.candidate_only,
+            top_k_neurons=args.top_k_neurons,
+            trajectory_top_k=args.trajectory_top_k,
+            sign_epsilon=args.sign_epsilon,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "plots": {key: str(value) for key, value in plot_paths.items()},
+            }
+        )
+        return
+    if args.command == "candidate-neuron-intervention":
+        report_path, markdown_path, plot_paths = build_candidate_neuron_intervention(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            coalition_map_path=args.coalition_map,
+            checkpoint_dir=args.checkpoint_dir,
+            output_dir=args.output_dir,
+            checkpoint_step=args.checkpoint_step,
+            device_name=args.device,
+            top_k_per_set=args.top_k_per_set,
+            single_neuron_top_k=args.single_neuron_top_k,
+            score_individual_features=args.score_individual_features,
         )
         print(
             {
