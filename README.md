@@ -1,4 +1,4 @@
-# circut formation
+# circuit formation
 
 Mechanistic interpretability research repo for studying circuit formation in small decoder-only next-token models.
 
@@ -8,8 +8,8 @@ The project is closely related to prior work on motif emergence:
 
 - [Mechanistic Transparency](https://nelson960.github.io/Mechanistic-Transparency/)
 
-For current research progress, benchmark history, training results, checkpoint-analysis findings, and the evolving formation-analysis plan, see [results.md](/Users/nelson/py/circut/results.md).
+For current research progress, benchmark history, training results, checkpoint-analysis findings, and the evolving formation-analysis plan, see [results.md](results.md).
 
-For a plain-language overview of the main terms and analysis objects, see [notes.md](/Users/nelson/py/circut/notes.md).
+For a plain-language overview of the main terms and analysis objects, see [notes.md](notes.md).
 
-For the layered checkpoint-analysis program, see [docs/checkpoint_analysis_plan.md](/Users/nelson/py/circut/docs/checkpoint_analysis_plan.md).
+For the layered checkpoint-analysis program, see [docs/checkpoint_analysis_plan.md](docs/checkpoint_analysis_plan.md).

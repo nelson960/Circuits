@@ -8,8 +8,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from circut.config import ModelSpec
-from circut.model.decoder import DecoderOnlyTransformer
+from circuit.config import ModelSpec
+from circuit.model.decoder import DecoderOnlyTransformer
 
 
 def set_seed(seed: int) -> None:

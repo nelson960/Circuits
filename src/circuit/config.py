@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from circut.io import read_json
+from circuit.io import read_json
 
 
 def _pop_required(payload: dict[str, Any], key: str, context: str) -> Any:

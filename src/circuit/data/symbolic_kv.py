@@ -10,9 +10,9 @@ from typing import Any
 import torch
 from torch.utils.data import Dataset
 
-from circut.config import BenchmarkSpec, SplitSpec
-from circut.io import iter_jsonl, write_json, write_jsonl
-from circut.vocab import Vocabulary
+from circuit.config import BenchmarkSpec, SplitSpec
+from circuit.io import iter_jsonl, write_json, write_jsonl
+from circuit.vocab import Vocabulary
 
 
 WRITE_TOKENS = 5
@@ -660,7 +660,7 @@ def read_symbolic_kv_metadata(benchmark_dir: Path) -> dict[str, Any]:
     metadata_path = benchmark_dir / "metadata.json"
     if not metadata_path.exists():
         raise FileNotFoundError(f"Benchmark metadata not found: {metadata_path}")
-    from circut.io import read_json
+    from circuit.io import read_json
 
     return read_json(metadata_path)
 

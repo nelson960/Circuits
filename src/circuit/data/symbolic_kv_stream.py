@@ -10,8 +10,8 @@ from typing import Any
 import torch
 from torch.utils.data import Dataset
 
-from circut.io import iter_jsonl, read_json, write_json, write_jsonl
-from circut.vocab import Vocabulary
+from circuit.io import iter_jsonl, read_json, write_json, write_jsonl
+from circuit.vocab import Vocabulary
 
 
 def _pop_required(payload: dict[str, Any], key: str, context: str) -> Any:

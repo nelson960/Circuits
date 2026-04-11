@@ -810,3 +810,323 @@ The current evidence is consistent with the view that:
 - lower layers bootstrap the scaffold
 - upper-layer writeout and readout become the decisive late mechanism
 - the right path to the SGD question is stable feature trajectories plus causal validation, not raw neuron-by-neuron tracking
+
+## Canonical Current State Report
+
+This section freezes the current reference story after the shared-feature and feature-family analysis work.
+
+It should be treated as the current top-level summary. Earlier sections that describe shared features as only a planned next direction are now partly stale: the shared-feature stack has been implemented and run for the main formation artifacts, but it is not yet a final mechanistic proof.
+
+### Current Research Object
+
+The project is studying circuit formation in a small decoder-only transformer trained with plain autoregressive next-token prediction.
+
+The current benchmark is the stream-based symbolic KV retrieval task:
+
+```text
+<bos> W K00 V12 W K03 V04 R K00 V12 W K00 V07 R K03 V04 R K00 V07 <eos>
+```
+
+This benchmark remains the right object because it has:
+
+- repeated answer-bearing read events inside the LM objective
+- no answer mask
+- no classifier head
+- no task-specific architecture
+- explicit control over keys, values, overwrites, query count, and query lag
+- heldout-pair and structural-OOD splits for separating interpolation from broader abstraction
+
+The benchmark config remains:
+
+- `configs/benchmark/symbolic_kv_base.json`
+- generated data: `data/generated/symbolic_kv_stream_learnability`
+
+The reference model remains intentionally small:
+
+- `d_model = 128`
+- `n_layers = 3`
+- `n_heads = 4`
+- `d_ff = 512`
+- parameters: `626,048`
+
+### Current Selected Checkpoint
+
+The current selected reference checkpoint is still the heldout-selected generalization run:
+
+- run: `artifacts/runs/symbolic_kv_heldout_generalization`
+- checkpoint: `artifacts/runs/symbolic_kv_heldout_generalization/checkpoints/best.pt`
+- step: `13000`
+- selection split: `heldout_pairs`
+- selection metric: `answer_accuracy`
+- selection value: `0.873018247083458`
+
+Full selected-checkpoint answer accuracies:
+
+- `validation_iid.answer_accuracy = 0.9578527137637138`
+- `test_iid.answer_accuracy = 0.9578204743320324`
+- `heldout_pairs.answer_accuracy = 0.873018247083458`
+- `structural_ood.answer_accuracy = 0.5081577525661805`
+- `counterfactual.answer_accuracy = 0.9599219453617532`
+
+Interpretation:
+
+- IID behavior is solved well enough for mechanistic work.
+- Heldout-pair generalization is strong enough to be scientifically meaningful.
+- Structural OOD remains weak and should not be described as solved.
+- The selected checkpoint is a good mechanistic reference, not a final robust-reasoning model.
+
+### Current Formation Run
+
+The current formation run remains:
+
+- config: `configs/train/symbolic_kv_formation.json`
+- run: `artifacts/runs/symbolic_kv_reference_formation`
+- checkpoint directory: `artifacts/runs/symbolic_kv_reference_formation/checkpoints`
+- checkpoint cadence: every `250` steps
+- analyzed checkpoints: `64`
+- probe set: `artifacts/runs/symbolic_kv_reference_formation/analysis/probe_set.jsonl`
+
+The current birth-window summary identifies:
+
+- early birth window: `1500-2000`, centered at `1750`
+- mid consolidation window: `4250-4750`, centered at `4500`
+- late reorganization window: `7500-8000`, centered at `7750`
+
+Top sweep triggers:
+
+- top answer gain step: `1750`
+- top heldout gain step: `4500`
+- top `Q` gain step: `7750`
+
+Current interpretation of these windows:
+
+- `1500-2000`: first usable behavior appears; lower-layer scaffold and upper-layer answer state become behaviorally meaningful.
+- `4250-4750`: heldout-pair performance improves; routing/writeout becomes more mature.
+- `7500-8000`: upper-stage representations reorganize; late changes concentrate around `layer_2_post_mlp` and `final_norm`.
+
+### Current Shared-Feature Layer
+
+The shared-feature layer is no longer only a plan.
+
+Shared feature bases now exist for:
+
+- `layer_2_post_mlp`
+- `final_norm`
+
+Both use:
+
+- `64` features
+- input dimension `128`
+- fit checkpoints: `7500`, `14000`, `16000`
+- probe set: `artifacts/runs/symbolic_kv_reference_formation/analysis/probe_set.jsonl`
+
+Current shared-feature fit metrics:
+
+- `layer_2_post_mlp`
+  - explained variance: `0.7457791864871979`
+  - active fraction: `0.5410973429679871`
+  - reconstruction loss: `0.2546698749065399`
+- `final_norm`
+  - explained variance: `0.7311904430389404`
+  - active fraction: `0.5383508801460266`
+  - reconstruction loss: `0.26917073130607605`
+
+Important caveat:
+
+- These bases are useful enough for trajectory and family screening.
+- They are still too dense for strong semantic feature claims.
+- A feature ID should be treated as an analysis coordinate, not automatically as a natural mechanistic unit.
+
+### Current Feature-Family Layer
+
+The most developed family-level analysis is at `layer_2_post_mlp`.
+
+Artifacts include:
+
+- shared basis: `artifacts/runs/symbolic_kv_reference_formation/analysis/shared_features/layer_2_post_mlp/shared_feature_basis.json`
+- feature trajectories: `artifacts/runs/symbolic_kv_reference_formation/analysis/shared_features/layer_2_post_mlp/trajectories/feature_trajectories.jsonl`
+- feature births: `artifacts/runs/symbolic_kv_reference_formation/analysis/shared_features/layer_2_post_mlp/births/feature_births.json`
+- feature families: `artifacts/runs/symbolic_kv_reference_formation/analysis/shared_features/layer_2_post_mlp/families/feature_families.json`
+- family births: `artifacts/runs/symbolic_kv_reference_formation/analysis/shared_features/layer_2_post_mlp/families/births/feature_family_births.json`
+- family traces:
+  - `artifacts/runs/symbolic_kv_reference_formation/analysis/shared_features/layer_2_post_mlp/families/feature_family_trace_0_top3_14000.json`
+  - `artifacts/runs/symbolic_kv_reference_formation/analysis/shared_features/layer_2_post_mlp/families/feature_family_trace_1_top3_14000.json`
+- family update-link reports:
+  - `artifacts/runs/symbolic_kv_reference_formation/analysis/shared_features/layer_2_post_mlp/families/feature_family_update_link_0_top3_14000.json`
+  - `artifacts/runs/symbolic_kv_reference_formation/analysis/shared_features/layer_2_post_mlp/families/feature_family_update_link_1_top3_14000.json`
+
+The `layer_2_post_mlp` family clustering currently found:
+
+- `64` features
+- `43` families
+- `8` multi-feature families
+
+The two most developed family traces are:
+
+#### Family 0
+
+- family ID: `0`
+- representative feature: `55`
+- members: `6, 8, 13, 21, 29, 35, 42, 49, 55`
+- family birth step: `750`
+- family useful birth step: `1000`
+- selected top-3 subset: `55, 42, 8`
+- selected subset patch, `14000 -> 7500`:
+  - answer delta: `0.0`
+  - heldout delta: `0.006535947712418277`
+  - structural OOD delta: `-0.004608294930875667`
+- top linked head: `layer 0 head 1`
+- top linked MLP: `layer 0 MLP`
+- top linked neuron group: `layer 2`, neurons `180, 121, 427, 39`
+
+Interpretation:
+
+- Family 0 is a plausible useful coalition candidate.
+- It has early feature-level birth signals and positive heldout-linked movement.
+- Its patch effect is real but small.
+- It does not improve structural OOD.
+
+#### Family 1
+
+- family ID: `1`
+- representative feature: `44`
+- members: `7, 10, 28, 39, 43, 44, 62`
+- family birth step: `750`
+- family useful birth step: `null`
+- selected top-3 subset: `7, 10, 44`
+- selected subset patch, `14000 -> 7500`:
+  - answer delta: `0.004431314623338234`
+  - heldout delta: `0.006535947712418277`
+  - structural OOD delta: `0.009216589861751112`
+- top linked head: `layer 0 head 1`
+- top linked MLP: `layer 0 MLP`
+- top linked neuron group: `layer 2`, neurons `180, 121, 427, 39`
+
+Interpretation:
+
+- Family 1 is a comparison coalition, not yet a clearly useful family.
+- Its selected subset patch has slightly better broad metric deltas than Family 0, but the family-level trajectory does not meet the current useful-birth rule.
+- This is a useful warning that patch effects, family-level trajectories, and semantic interpretation can diverge.
+
+### Current Coalition / Subset Layer
+
+The analysis now has an explicit subset layer, which is effectively the current "coalition" layer.
+
+Current subset artifacts:
+
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/shared_features/layer_2_post_mlp/subsets/subset_trajectory_family0_top3.json`
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/shared_features/layer_2_post_mlp/subsets/subset_birth_family0_top3.json`
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/shared_features/layer_2_post_mlp/subsets/subset_trajectory_family1_top3.json`
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/shared_features/layer_2_post_mlp/subsets/subset_birth_family1_top3.json`
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/shared_features/layer_2_post_mlp/subsets/subset_trajectory_cross_55_7_42.json`
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/shared_features/layer_2_post_mlp/subsets/subset_birth_cross_55_7_42.json`
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/shared_features/layer_2_post_mlp/subsets/subset_competition_family0_top3_vs_family1_top3.json`
+
+Current subset-birth findings:
+
+- Family 0 top-3 subset `55, 42, 8`
+  - subset birth step: `750`
+  - useful birth step: `1000`
+  - active-fraction birth: `4750-5000`
+- Family 1 top-3 subset `7, 10, 44`
+  - subset birth step: `750`
+  - useful birth step: `null`
+  - active-fraction birth: `4750-5000`
+- Cross-family subset `7, 42, 55`
+  - subset birth step: `750`
+  - useful birth step: `1000`
+  - active-fraction birth: `4750-5000`
+
+Interpretation:
+
+- Several feature coalitions show early birth-like behavior at the feature-statistic level.
+- Their active-fraction maturation aligns more with the mid consolidation window around `4750-5000`.
+- This is consistent with a two-part picture: early useful directions exist before the coalition becomes active/stable in its mature regime.
+
+### Current Update-Link Layer
+
+The newest family-level artifacts link subset changes across checkpoint intervals to update magnitudes in the associated head, MLP, and neuron group.
+
+For Family 0 top-3:
+
+- selected features: `8, 42, 55`
+- top head: `layer 0 head 1`
+- top MLP: `layer 0 MLP`
+- top neuron group: `layer 2`, neurons `180, 121, 427, 39`
+- analyzed intervals: `63`
+
+Top update-link correlations for Family 0 include:
+
+- sweep answer delta vs `delta_r`: `0.7250690435592169`
+- subset correctness-gap delta vs `delta_r`: `-0.6018879141749028`
+- sweep heldout-answer delta vs `delta_w`: `0.5633165757389528`
+- sweep answer delta vs top-head attention update share: `-0.5290955525260733`
+- subset useful delta vs `delta_r`: `-0.5119173264233698`
+
+For Family 1 top-3:
+
+- selected features: `7, 10, 44`
+- top head: `layer 0 head 1`
+- top MLP: `layer 0 MLP`
+- top neuron group: `layer 2`, neurons `180, 121, 427, 39`
+- analyzed intervals: `63`
+
+Top update-link correlations for Family 1 include:
+
+- sweep answer delta vs `delta_r`: `0.7250690435592169`
+- sweep heldout-answer delta vs `delta_w`: `0.5633165757389528`
+- subset correctness-gap delta vs global relative update norm: `-0.5454852764946101`
+- subset correctness-gap delta vs `delta_r`: `-0.5362913133922584`
+- sweep answer delta vs top-head attention update share: `-0.5290955525260733`
+
+Interpretation:
+
+- The update-link layer is now the closest artifact to the SGD question.
+- It does not yet prove why SGD selected a mechanism.
+- It does provide a concrete bridge between checkpoint-to-checkpoint parameter updates, feature-coalition trajectories, and known component candidates.
+
+### Current Mechanistic Hypothesis
+
+The current best working hypothesis is:
+
+1. A lower-layer scaffold appears early.
+2. `layer 0` components, especially `L0H0` in the earlier birth-window analysis and `L0H1` in the current feature-family lineage/update-link layer, are strongly implicated in early feature and routing structure.
+3. Upper-layer answer state becomes usable around the early birth window, especially by `layer_2_post_mlp` and `final_norm`.
+4. Heldout improvement is delayed relative to first IID behavior and is concentrated in upper-stage writeout/readout refinements.
+5. Feature families at `layer_2_post_mlp` expose candidate coalitions whose trajectories and small patch effects are consistent with late heldout tuning.
+6. The learned mechanism is distributed: single-neuron ablations remain small relative to head, MLP-block, residual-stage, and feature-coalition effects.
+
+This hypothesis is supported enough to guide the next experiments, but it is not a final explanation.
+
+### Current Unsupported Claims
+
+The current repo still does not support claiming:
+
+- a finalized circuit decomposition
+- a natural semantic interpretation of individual shared features
+- that Family 0 or Family 1 is a complete circuit
+- that the identified feature coalitions are necessary and sufficient
+- strong structural OOD generalization
+- cross-seed stability of the same heads, MLP blocks, features, or families
+- that SGD has been explained rather than correlated with feature-family/update trajectories
+- that all relevant neurons have been tracked across all checkpoints
+- that the feature-family layer is independent of SAE hyperparameters
+
+### Next Canonical Research Steps
+
+The next useful work is no longer simply "build shared features"; that is partly done.
+
+The next stages are:
+
+1. Broaden coalition analysis beyond Family 0 and Family 1.
+2. Run the same family/subset birth, competition, trace, lineage, and update-link stack for the strongest `final_norm` families.
+3. Add stronger necessity/sufficiency tests for selected feature coalitions.
+4. Check sensitivity to shared-feature fit hyperparameters.
+5. Repeat the formation run across seeds and compare:
+   - birth windows
+   - top heads
+   - top MLP blocks
+   - selected feature families
+   - coalition useful-birth timing
+   - update-link correlations
+6. Only after cross-seed replication, start treating feature-family strengths as candidate state variables for a reduced dynamical model.

@@ -6,11 +6,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from circut.io import ensure_parent_dir, iter_jsonl, read_json, write_json
+from circuit.io import ensure_parent_dir, iter_jsonl, read_json, write_json
 
 
 def _import_matplotlib() -> tuple[Any, Any]:
-    from circut.analysis.shared_feature_dynamics import _import_matplotlib as _shared_import_matplotlib
+    from circuit.analysis.shared_feature_dynamics import _import_matplotlib as _shared_import_matplotlib
 
     return _shared_import_matplotlib()
 
@@ -575,7 +575,7 @@ def build_analysis_report(
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>circut analysis report</title>
+  <title>circuit analysis report</title>
   <style>
     body {{
       font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
@@ -742,7 +742,7 @@ def build_analysis_report(
 <body>
   <div class="page">
     <div class="hero">
-      <h1>circut analysis report</h1>
+      <h1>circuit analysis report</h1>
       <p>
         This report is a read-only interpretation surface over the existing CLI artifacts in
         <code>{html.escape(str(analysis_dir))}</code>. It does not recompute the science. It assembles the checkpoint sweep,

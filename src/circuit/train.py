@@ -13,16 +13,16 @@ from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
-from circut.config import OptimizationSpec, TrainSpec
-from circut.data.symbolic_kv_stream import (
+from circuit.config import OptimizationSpec, TrainSpec
+from circuit.data.symbolic_kv_stream import (
     SymbolicKVDataset,
     collate_symbolic_kv,
     read_symbolic_kv_stream_metadata,
 )
-from circut.eval import evaluate_split
-from circut.io import append_jsonl, read_json, write_json
-from circut.runtime import build_model, compute_lm_loss, load_checkpoint, load_model_state, require_device, save_checkpoint, set_seed
-from circut.vocab import Vocabulary
+from circuit.eval import evaluate_split
+from circuit.io import append_jsonl, read_json, write_json
+from circuit.runtime import build_model, compute_lm_loss, load_checkpoint, load_model_state, require_device, save_checkpoint, set_seed
+from circuit.vocab import Vocabulary
 
 
 def _to_jsonable(value: Any) -> Any:

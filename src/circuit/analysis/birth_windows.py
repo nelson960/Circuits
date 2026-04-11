@@ -4,7 +4,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from circut.io import iter_jsonl, read_json, write_json
+from circuit.io import iter_jsonl, read_json, write_json
 
 
 def _require_non_empty_rows(rows: list[dict[str, Any]], path: Path) -> list[dict[str, Any]]:

@@ -7,13 +7,13 @@ from typing import Any
 import torch
 from torch.utils.data import DataLoader
 
-from circut.analysis.formation import extract_answer_logits
-from circut.analysis.checkpoint_sweep import load_probe_set
-from circut.config import TrainSpec
-from circut.data.symbolic_kv_stream import collate_symbolic_kv, read_symbolic_kv_stream_metadata
-from circut.io import iter_jsonl, write_json
-from circut.runtime import build_model, load_checkpoint, load_model_state, move_batch_to_device
-from circut.vocab import Vocabulary
+from circuit.analysis.formation import extract_answer_logits
+from circuit.analysis.checkpoint_sweep import load_probe_set
+from circuit.config import TrainSpec
+from circuit.data.symbolic_kv_stream import collate_symbolic_kv, read_symbolic_kv_stream_metadata
+from circuit.io import iter_jsonl, write_json
+from circuit.runtime import build_model, load_checkpoint, load_model_state, move_batch_to_device
+from circuit.vocab import Vocabulary
 
 
 def _make_probe_loader(

@@ -11,7 +11,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from circut.analysis.feature_analysis import (
+from circuit.analysis.feature_analysis import (
     SparseAutoencoder,
     StageFeatureDataset,
     _encode_features,
@@ -20,19 +20,19 @@ from circut.analysis.feature_analysis import (
     fit_sparse_autoencoder,
     summarize_features,
 )
-from circut.analysis.formation import extract_answer_logits
-from circut.analysis.checkpoint_sweep import load_probe_set
-from circut.config import TrainSpec
-from circut.data.symbolic_kv_stream import read_symbolic_kv_stream_metadata
-from circut.io import ensure_parent_dir, iter_jsonl, read_json, write_json, write_jsonl
-from circut.runtime import (
+from circuit.analysis.formation import extract_answer_logits
+from circuit.analysis.checkpoint_sweep import load_probe_set
+from circuit.config import TrainSpec
+from circuit.data.symbolic_kv_stream import read_symbolic_kv_stream_metadata
+from circuit.io import ensure_parent_dir, iter_jsonl, read_json, write_json, write_jsonl
+from circuit.runtime import (
     _migrate_legacy_feedforward_state_dict,
     build_model,
     load_checkpoint,
     load_model_state,
     move_batch_to_device,
 )
-from circut.vocab import Vocabulary
+from circuit.vocab import Vocabulary
 
 DEFAULT_FAMILY_CLUSTER_METRICS = (
     "mean_activation",
@@ -259,7 +259,7 @@ def _safe_topk_feature_ids(
 
 
 def _import_matplotlib() -> tuple[Any, Any]:
-    cache_root = Path(tempfile.gettempdir()) / "circut-mpl-cache"
+    cache_root = Path(tempfile.gettempdir()) / "circuit-mpl-cache"
     cache_root.mkdir(parents=True, exist_ok=True)
     os.environ["MPLCONFIGDIR"] = str(cache_root)
     os.environ["XDG_CACHE_HOME"] = str(cache_root)

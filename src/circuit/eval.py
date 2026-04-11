@@ -5,8 +5,8 @@ from typing import Any
 
 import torch
 
-from circut.analysis.formation import compute_qrw_batch, extract_answer_logits
-from circut.runtime import compute_lm_loss, move_batch_to_device
+from circuit.analysis.formation import compute_qrw_batch, extract_answer_logits
+from circuit.runtime import compute_lm_loss, move_batch_to_device
 
 
 def _build_token_role_map(record: dict[str, Any]) -> dict[int, str]:

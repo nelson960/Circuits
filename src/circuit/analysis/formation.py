@@ -4,7 +4,7 @@ from typing import Any
 
 import torch
 
-from circut.runtime import move_batch_to_device
+from circuit.runtime import move_batch_to_device
 
 
 def extract_answer_logits(

@@ -4,18 +4,18 @@ import argparse
 from pathlib import Path
 from typing import Any
 
-from circut.analysis.formation import (
+from circuit.analysis.formation import (
     collect_analysis_batches,
     compute_head_ablation_importance,
     compute_head_localization,
     summarize_formation_trace,
 )
-from circut.analysis.analysis_report import build_analysis_report
-from circut.analysis.birth_windows import analyze_birth_windows
-from circut.analysis.birth_window_compare import compare_birth_window_checkpoints
-from circut.analysis.checkpoint_sweep import generate_probe_set, run_checkpoint_sweep
-from circut.analysis.feature_analysis import analyze_checkpoint_features
-from circut.analysis.shared_feature_dynamics import (
+from circuit.analysis.analysis_report import build_analysis_report
+from circuit.analysis.birth_windows import analyze_birth_windows
+from circuit.analysis.birth_window_compare import compare_birth_window_checkpoints
+from circuit.analysis.checkpoint_sweep import generate_probe_set, run_checkpoint_sweep
+from circuit.analysis.feature_analysis import analyze_checkpoint_features
+from circuit.analysis.shared_feature_dynamics import (
     family_update_link,
     feature_birth_analyze,
     feature_compare,
@@ -35,13 +35,13 @@ from circut.analysis.shared_feature_dynamics import (
     subset_birth_analyze,
     subset_trajectory,
 )
-from circut.config import TrainSpec
-from circut.data.symbolic_kv import generate_symbolic_kv_benchmark
-from circut.data.symbolic_kv_stream import generate_symbolic_kv_stream_benchmark
-from circut.eval import evaluate_split
-from circut.io import append_jsonl, write_json
-from circut.reference import select_reference_configuration
-from circut.train import load_model_from_checkpoint, make_data_loader, train_from_config
+from circuit.config import TrainSpec
+from circuit.data.symbolic_kv import generate_symbolic_kv_benchmark
+from circuit.data.symbolic_kv_stream import generate_symbolic_kv_stream_benchmark
+from circuit.eval import evaluate_split
+from circuit.io import append_jsonl, write_json
+from circuit.reference import select_reference_configuration
+from circuit.train import load_model_from_checkpoint, make_data_loader, train_from_config
 
 
 def _list_checkpoints(checkpoint_dir: Path) -> list[Path]:
@@ -185,7 +185,7 @@ def _formation_trace_command(config_path: Path, checkpoint_dir: Path | None, out
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="circut")
+    parser = argparse.ArgumentParser(prog="circuit")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     generate_parser = subparsers.add_parser("generate-benchmark")
@@ -462,7 +462,7 @@ def main() -> None:
 
     args = parser.parse_args()
     if args.command == "generate-benchmark":
-        from circut.io import read_json
+        from circuit.io import read_json
 
         raw_config = read_json(args.config)
         benchmark_type = raw_config.get("benchmark_type")

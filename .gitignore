@@ -21,4 +21,3 @@ dist/
 *.egg-info/
 artifacts/
 data/generated/
-tests/

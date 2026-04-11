@@ -9,18 +9,18 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
-from circut.analysis.formation import (
+from circuit.analysis.formation import (
     compute_head_ablation_importance,
     compute_head_localization,
     compute_qrw_batch,
     extract_answer_logits,
 )
-from circut.config import TrainSpec
-from circut.data.symbolic_kv_stream import SymbolicKVDataset, collate_symbolic_kv, read_symbolic_kv_stream_metadata
-from circut.eval import evaluate_split
-from circut.io import append_jsonl, iter_jsonl, read_json, write_json, write_jsonl
-from circut.runtime import build_model, load_checkpoint, load_model_state, move_batch_to_device
-from circut.vocab import Vocabulary
+from circuit.config import TrainSpec
+from circuit.data.symbolic_kv_stream import SymbolicKVDataset, collate_symbolic_kv, read_symbolic_kv_stream_metadata
+from circuit.eval import evaluate_split
+from circuit.io import append_jsonl, iter_jsonl, read_json, write_json, write_jsonl
+from circuit.runtime import build_model, load_checkpoint, load_model_state, move_batch_to_device
+from circuit.vocab import Vocabulary
 
 PROBE_SPLITS = ["validation_iid", "heldout_pairs", "structural_ood", "counterfactual"]
 TOP_MLP_LAYERS_FOR_NEURON_SCREEN = 2

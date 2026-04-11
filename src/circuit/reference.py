@@ -5,13 +5,13 @@ from typing import Any
 
 import torch
 
-from circut.config import TrainSpec
-from circut.data.symbolic_kv_stream import read_symbolic_kv_stream_metadata
-from circut.eval import evaluate_split
-from circut.io import read_json
-from circut.runtime import build_model, load_checkpoint, load_model_state
-from circut.train import make_data_loader
-from circut.vocab import Vocabulary
+from circuit.config import TrainSpec
+from circuit.data.symbolic_kv_stream import read_symbolic_kv_stream_metadata
+from circuit.eval import evaluate_split
+from circuit.io import read_json
+from circuit.runtime import build_model, load_checkpoint, load_model_state
+from circuit.train import make_data_loader
+from circuit.vocab import Vocabulary
 
 REFERENCE_SPLITS = [
     "validation_iid",

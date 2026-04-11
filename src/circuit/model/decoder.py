@@ -8,7 +8,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from circut.config import ModelSpec
+from circuit.config import ModelSpec
 
 
 class CausalSelfAttention(nn.Module):
