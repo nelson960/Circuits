@@ -966,23 +966,17 @@ The project has progressed through these stages:
 
 ```mermaid
 flowchart TD
-  A["Bad terminal-answer task rejected"] --> B["Stream symbolic KV benchmark"]
-  B --> C["Reference model trained"]
-  C --> D["Heldout-selected checkpoint"]
-  C --> E["Dense formation run"]
-  E --> F["Checkpoint sweep"]
-  F --> G["Birth windows"]
-  G --> H["Checkpoint patching"]
-  H --> I["Shared feature basis"]
-  I --> J["Feature families"]
-  J --> K["Family7/family4 traced candidates"]
-  K --> L["Mechanism report"]
-  L --> M["Birth-model negative result"]
-  M --> N["Coalition map"]
-  N --> O["Neuron intervention"]
-  O --> P["Dense shared-score carrier proven"]
-  P --> Q["Task behavior not cleanly explained"]
-  Q --> R["Next: geometric math"]
+  A["Stream KV benchmark"] --> B["Reference training"]
+  B --> C["Checkpoint sweep"]
+  C --> D["Shared features"]
+  D --> E["Family7 / family4"]
+  E --> F["Gradient link"]
+  F --> G["Birth-model failure"]
+  F --> H["Coalition map"]
+  H --> I["Neuron intervention"]
+  I --> J["Feature-score support"]
+  J --> K["Behavior still compensated"]
+  K --> L["Next: geometry"]
 ```
 
 Current status by research layer:
