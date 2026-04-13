@@ -21,6 +21,13 @@ from circuit.analysis.candidate_dynamics import (
 )
 from circuit.analysis.checkpoint_sweep import generate_probe_set, run_checkpoint_sweep
 from circuit.analysis.feature_analysis import analyze_checkpoint_features
+from circuit.analysis.geometric_mechanisms import (
+    build_dataset_geometry_report,
+    run_attention_geometry_trace,
+    run_geometry_subspace_intervention,
+    run_path_logit_decomposition,
+    run_prompt_neuron_trace,
+)
 from circuit.analysis.shared_feature_dynamics import (
     family_update_link,
     feature_birth_analyze,
@@ -120,6 +127,130 @@ def test_analysis_and_training_pipeline(tmp_path: Path, benchmark_config_path: P
         examples_per_split=2,
         seed=13,
     )
+
+    dataset_geometry_report_path, dataset_geometry_markdown_path, dataset_geometry_plot_paths = build_dataset_geometry_report(
+        benchmark_dir=benchmark_dir,
+        output_dir=tmp_path / "dataset_geometry",
+        top_k_pairs=5,
+    )
+    dataset_geometry_payload = read_json(dataset_geometry_report_path)
+
+    assert dataset_geometry_report_path.exists()
+    assert dataset_geometry_markdown_path.exists()
+    assert all(path.exists() for path in dataset_geometry_plot_paths.values())
+    assert dataset_geometry_payload["task_relation"]["minimal_symbolic_algorithm"]
+    assert "train" in dataset_geometry_payload["splits"]
+    assert dataset_geometry_payload["splits"]["train"]["distractor_geometry"]
+
+    attention_geometry_report_path, attention_geometry_markdown_path, attention_geometry_rows_path, attention_geometry_plot_paths = run_attention_geometry_trace(
+        config_path=train_config,
+        probe_set_path=probe_set_path,
+        checkpoint_dir=run_dir / "checkpoints",
+        checkpoint_paths=[run_dir / "checkpoints" / "step_000002.pt", checkpoint_path],
+        output_dir=tmp_path / "attention_geometry",
+        device_name="cpu",
+        top_k_tokens=3,
+        top_k_plot_heads=2,
+    )
+    attention_geometry_payload = read_json(attention_geometry_report_path)
+    attention_geometry_rows = list(iter_jsonl(attention_geometry_rows_path))
+
+    assert attention_geometry_report_path.exists()
+    assert attention_geometry_markdown_path.exists()
+    assert attention_geometry_rows_path.exists()
+    assert all(path.exists() for path in attention_geometry_plot_paths.values())
+    assert len(attention_geometry_rows) == 8
+    assert "support_value_qk_margin_mean" in attention_geometry_rows[0]
+    assert "attended_ov_value_margin_mean" in attention_geometry_rows[0]
+    assert "qk_key_key_subspace_alignment" in attention_geometry_rows[0]
+    assert "ov_output_value_subspace_alignment" in attention_geometry_rows[0]
+    assert "role_attention_mean" in attention_geometry_rows[0]
+    assert attention_geometry_payload["summary"]["num_checkpoints"] == 2
+
+    geometry_report_path, geometry_markdown_path, geometry_rows_path, geometry_query_rows_path, geometry_plot_paths = run_geometry_subspace_intervention(
+        config_path=train_config,
+        probe_set_path=probe_set_path,
+        checkpoint_dir=run_dir / "checkpoints",
+        checkpoint_paths=[checkpoint_path],
+        output_dir=tmp_path / "geometry_subspace_intervention",
+        device_name="cpu",
+        stage_name="embedding",
+        subspace_name="embedding_key_identity",
+        rank=1,
+        operation="remove",
+        position_role="query_key",
+        query_mode="batch_union",
+        progress_every_queries=0,
+    )
+    geometry_payload = read_json(geometry_report_path)
+    geometry_rows = list(iter_jsonl(geometry_rows_path))
+    geometry_query_rows = list(iter_jsonl(geometry_query_rows_path))
+
+    assert geometry_report_path.exists()
+    assert geometry_markdown_path.exists()
+    assert geometry_rows_path.exists()
+    assert geometry_query_rows_path.exists()
+    assert all(path.exists() for path in geometry_plot_paths.values())
+    assert geometry_payload["summary"]["num_checkpoints"] == 1
+    assert geometry_payload["subspace"]["subspace_name"] == "embedding_key_identity"
+    assert geometry_rows
+    assert geometry_query_rows
+    assert "margin_drop_mean" in geometry_rows[0]
+    assert "patched_positions" in geometry_query_rows[0]
+
+    path_logit_report_path, path_logit_markdown_path, path_logit_plot_paths = run_path_logit_decomposition(
+        config_path=train_config,
+        probe_set_path=probe_set_path,
+        checkpoint_dir=run_dir / "checkpoints",
+        checkpoint_paths=[run_dir / "checkpoints" / "step_000002.pt", checkpoint_path],
+        output_dir=tmp_path / "path_logit_decomposition",
+        device_name="cpu",
+        ablation_top_k=1,
+        ablation_steps=[4],
+        top_k_plot_components=2,
+    )
+    path_logit_payload = read_json(path_logit_report_path)
+
+    assert path_logit_report_path.exists()
+    assert path_logit_markdown_path.exists()
+    assert all(path.exists() for path in path_logit_plot_paths.values())
+    assert Path(path_logit_payload["component_rows_path"]).exists()
+    assert Path(path_logit_payload["stage_rows_path"]).exists()
+    assert Path(path_logit_payload["checkpoint_rows_path"]).exists()
+    assert Path(path_logit_payload["ablation_rows_path"]).exists()
+    assert path_logit_payload["summary"]["num_checkpoints"] == 2
+    assert path_logit_payload["summary"]["top_final_positive_direct_components"]
+
+    prompt_neuron_report_path, prompt_neuron_markdown_path, prompt_neuron_plot_paths = run_prompt_neuron_trace(
+        config_path=train_config,
+        probe_set_path=probe_set_path,
+        checkpoint_dir=run_dir / "checkpoints",
+        checkpoint_paths=[run_dir / "checkpoints" / "step_000002.pt", checkpoint_path],
+        output_dir=tmp_path / "prompt_neuron_trace",
+        device_name="cpu",
+        mlp_layers=[0],
+        top_k_per_query=2,
+        ablation_top_k_per_layer=1,
+        ablation_steps=[4],
+        top_k_plot_neurons=2,
+    )
+    prompt_neuron_payload = read_json(prompt_neuron_report_path)
+    prompt_neuron_rows = list(iter_jsonl(Path(prompt_neuron_payload["neuron_rows_path"])))
+    prompt_top_rows = list(iter_jsonl(Path(prompt_neuron_payload["top_query_neuron_rows_path"])))
+    prompt_ablation_rows = list(iter_jsonl(Path(prompt_neuron_payload["ablation_rows_path"])))
+
+    assert prompt_neuron_report_path.exists()
+    assert prompt_neuron_markdown_path.exists()
+    assert all(path.exists() for path in prompt_neuron_plot_paths.values())
+    assert prompt_neuron_payload["summary"]["num_checkpoints"] == 2
+    assert prompt_neuron_payload["summary"]["top_final_abs_dla_neurons"]
+    assert prompt_neuron_rows
+    assert prompt_top_rows
+    assert prompt_ablation_rows
+    assert "direct_margin_contribution_abs_mean" in prompt_neuron_rows[0]
+    assert "selection_kind" in prompt_top_rows[0]
+    assert "margin_drop" in prompt_ablation_rows[0]
+
     metrics_path, summary_path = run_checkpoint_sweep(
         config_path=train_config,
         probe_set_path=probe_set_path,

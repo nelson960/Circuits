@@ -24,6 +24,13 @@ from circuit.analysis.candidate_dynamics import (
     run_circuit_gradient_link,
 )
 from circuit.analysis.feature_analysis import analyze_checkpoint_features
+from circuit.analysis.geometric_mechanisms import (
+    build_dataset_geometry_report,
+    run_attention_geometry_trace,
+    run_geometry_subspace_intervention,
+    run_path_logit_decomposition,
+    run_prompt_neuron_trace,
+)
 from circuit.analysis.shared_feature_dynamics import (
     family_update_link,
     feature_birth_analyze,
@@ -557,6 +564,64 @@ def main() -> None:
     reference_parser.add_argument("--min-validation-answer-accuracy", type=float, default=0.9)
     reference_parser.add_argument("--output", type=Path, default=None)
 
+    dataset_geometry_parser = subparsers.add_parser("dataset-geometry-report")
+    dataset_geometry_parser.add_argument("--benchmark-dir", type=Path, required=True)
+    dataset_geometry_parser.add_argument("--output-dir", type=Path, required=True)
+    dataset_geometry_parser.add_argument("--top-k-pairs", type=int, default=20)
+
+    attention_geometry_parser = subparsers.add_parser("attention-geometry-trace")
+    attention_geometry_parser.add_argument("--config", type=Path, required=True)
+    attention_geometry_parser.add_argument("--probe-set", type=Path, required=True)
+    attention_geometry_parser.add_argument("--checkpoint-dir", type=Path, required=True)
+    attention_geometry_parser.add_argument("--output-dir", type=Path, required=True)
+    attention_geometry_parser.add_argument("--device", type=str, default="mps")
+    attention_geometry_parser.add_argument("--checkpoint", type=Path, action="append", default=None)
+    attention_geometry_parser.add_argument("--top-k-tokens", type=int, default=8)
+    attention_geometry_parser.add_argument("--top-k-plot-heads", type=int, default=6)
+
+    path_logit_parser = subparsers.add_parser("path-logit-decomposition")
+    path_logit_parser.add_argument("--config", type=Path, required=True)
+    path_logit_parser.add_argument("--probe-set", type=Path, required=True)
+    path_logit_parser.add_argument("--checkpoint-dir", type=Path, required=True)
+    path_logit_parser.add_argument("--output-dir", type=Path, required=True)
+    path_logit_parser.add_argument("--device", type=str, default="mps")
+    path_logit_parser.add_argument("--checkpoint", type=Path, action="append", default=None)
+    path_logit_parser.add_argument("--ablation-top-k", type=int, default=3)
+    path_logit_parser.add_argument("--ablation-step", type=int, action="append", default=None)
+    path_logit_parser.add_argument("--top-k-plot-components", type=int, default=8)
+
+    prompt_neuron_parser = subparsers.add_parser("prompt-neuron-trace")
+    prompt_neuron_parser.add_argument("--config", type=Path, required=True)
+    prompt_neuron_parser.add_argument("--probe-set", type=Path, required=True)
+    prompt_neuron_parser.add_argument("--checkpoint-dir", type=Path, required=True)
+    prompt_neuron_parser.add_argument("--output-dir", type=Path, required=True)
+    prompt_neuron_parser.add_argument("--device", type=str, default="mps")
+    prompt_neuron_parser.add_argument("--checkpoint", type=Path, action="append", default=None)
+    prompt_neuron_parser.add_argument("--mlp-layer", type=int, action="append", default=None)
+    prompt_neuron_parser.add_argument("--activation-threshold", type=float, default=0.0)
+    prompt_neuron_parser.add_argument("--top-k-per-query", type=int, default=8)
+    prompt_neuron_parser.add_argument("--ablation-top-k-per-layer", type=int, default=4)
+    prompt_neuron_parser.add_argument("--ablation-step", type=int, action="append", default=None)
+    prompt_neuron_parser.add_argument("--ablation-neuron", type=str, action="append", default=None)
+    prompt_neuron_parser.add_argument("--top-k-plot-neurons", type=int, default=12)
+
+    geometry_subspace_parser = subparsers.add_parser("geometry-subspace-intervention")
+    geometry_subspace_parser.add_argument("--config", type=Path, required=True)
+    geometry_subspace_parser.add_argument("--probe-set", type=Path, required=True)
+    geometry_subspace_parser.add_argument("--checkpoint-dir", type=Path, required=True)
+    geometry_subspace_parser.add_argument("--output-dir", type=Path, required=True)
+    geometry_subspace_parser.add_argument("--device", type=str, default="mps")
+    geometry_subspace_parser.add_argument("--checkpoint", type=Path, action="append", default=None)
+    geometry_subspace_parser.add_argument("--stage", type=str, required=True)
+    geometry_subspace_parser.add_argument("--subspace", type=str, required=True)
+    geometry_subspace_parser.add_argument("--rank", type=int, required=True)
+    geometry_subspace_parser.add_argument("--operation", type=str, required=True)
+    geometry_subspace_parser.add_argument("--position-role", type=str, required=True)
+    geometry_subspace_parser.add_argument("--query-mode", type=str, required=True)
+    geometry_subspace_parser.add_argument("--head-layer", type=int, default=None)
+    geometry_subspace_parser.add_argument("--head", type=int, default=None)
+    geometry_subspace_parser.add_argument("--progress-every-queries", type=int, default=100)
+
     args = parser.parse_args()
     if args.command == "generate-benchmark":
         from circuit.io import read_json
@@ -1089,6 +1154,112 @@ def main() -> None:
             print(args.output)
         else:
             print(result)
+        return
+    if args.command == "dataset-geometry-report":
+        report_path, markdown_path, plot_paths = build_dataset_geometry_report(
+            benchmark_dir=args.benchmark_dir,
+            output_dir=args.output_dir,
+            top_k_pairs=args.top_k_pairs,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "plots": {key: str(value) for key, value in plot_paths.items()},
+            }
+        )
+        return
+    if args.command == "attention-geometry-trace":
+        report_path, markdown_path, rows_path, plot_paths = run_attention_geometry_trace(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            checkpoint_dir=args.checkpoint_dir,
+            output_dir=args.output_dir,
+            device_name=args.device,
+            checkpoint_paths=args.checkpoint,
+            top_k_tokens=args.top_k_tokens,
+            top_k_plot_heads=args.top_k_plot_heads,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "rows": str(rows_path),
+                "plots": {key: str(value) for key, value in plot_paths.items()},
+            }
+        )
+        return
+    if args.command == "path-logit-decomposition":
+        report_path, markdown_path, plot_paths = run_path_logit_decomposition(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            checkpoint_dir=args.checkpoint_dir,
+            output_dir=args.output_dir,
+            device_name=args.device,
+            checkpoint_paths=args.checkpoint,
+            ablation_top_k=args.ablation_top_k,
+            ablation_steps=args.ablation_step,
+            top_k_plot_components=args.top_k_plot_components,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "plots": {key: str(value) for key, value in plot_paths.items()},
+            }
+        )
+        return
+    if args.command == "prompt-neuron-trace":
+        report_path, markdown_path, plot_paths = run_prompt_neuron_trace(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            checkpoint_dir=args.checkpoint_dir,
+            output_dir=args.output_dir,
+            device_name=args.device,
+            checkpoint_paths=args.checkpoint,
+            mlp_layers=args.mlp_layer,
+            activation_threshold=args.activation_threshold,
+            top_k_per_query=args.top_k_per_query,
+            ablation_top_k_per_layer=args.ablation_top_k_per_layer,
+            ablation_steps=args.ablation_step,
+            ablation_neurons=args.ablation_neuron,
+            top_k_plot_neurons=args.top_k_plot_neurons,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "plots": {key: str(value) for key, value in plot_paths.items()},
+            }
+        )
+        return
+    if args.command == "geometry-subspace-intervention":
+        report_path, markdown_path, aggregate_rows_path, query_rows_path, plot_paths = run_geometry_subspace_intervention(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            checkpoint_dir=args.checkpoint_dir,
+            output_dir=args.output_dir,
+            device_name=args.device,
+            checkpoint_paths=args.checkpoint,
+            stage_name=args.stage,
+            subspace_name=args.subspace,
+            rank=args.rank,
+            operation=args.operation,
+            position_role=args.position_role,
+            query_mode=args.query_mode,
+            head_layer=args.head_layer,
+            head=args.head,
+            progress_every_queries=args.progress_every_queries,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "aggregate_rows": str(aggregate_rows_path),
+                "query_rows": str(query_rows_path),
+                "plots": {key: str(value) for key, value in plot_paths.items()},
+            }
+        )
         return
     raise RuntimeError(f"Unhandled command: {args.command}")
 

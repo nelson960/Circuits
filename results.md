@@ -1669,3 +1669,834 @@ Updated research stance:
 - The clean behavior-necessity hypothesis is unsupported.
 - The neuron-only explanation path is insufficient for the main question.
 - The next phase must analyze dataset geometry, attention scores, QK/OV structure, path margins, and gradient geometry.
+
+## Internal Casual Notes: Geometry Results, Superposition, And Better Research Plan
+
+Status: internal notes only. Do not copy this section to the public docs page until the claims are cleaned up and cross-checked.
+
+Date: 2026-04-13.
+
+### What The Project Is Really Studying Now
+
+The research question is no longer just:
+
+```text
+Which heads, MLPs, features, or neurons matter?
+```
+
+The actual question is:
+
+```text
+Given the data relation d(x, y), why does SGD build one internal algorithm/circuit
+rather than another, and how does that algorithm become represented in the model?
+```
+
+For this benchmark:
+
+```text
+d(x, y) = 1 if y is the value from the latest previous W K V event
+          whose key K matches the current R K query.
+```
+
+So the abstract algorithm is:
+
+```text
+read query key
+find latest matching write for that key
+extract its value
+write that value toward the output logits
+```
+
+The current evidence says the model does learn a real version of this, but not as a clean isolated circuit. It learns a dense, mixed retrieval infrastructure.
+
+### Current Hierarchy Of Findings
+
+#### 1. Dataset / Task Level
+
+Artifacts:
+
+- `data/generated/symbolic_kv_stream_learnability/metadata.json`
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/dataset_geometry/dataset_geometry_report.json`
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/dataset_geometry/dataset_geometry_report.md`
+
+Supported:
+
+- The stream benchmark is the right task object for this repo.
+- It uses plain autoregressive next-token prediction.
+- There is no answer mask and no classifier head.
+- Read answers appear throughout the sequence, not only at one terminal answer site.
+- The task relation is explicit enough to define a mathematical target.
+
+The benchmark checks already rule out several easy shortcut explanations:
+
+- exact sequence overlap across splits: `0`
+- latent program overlap across splits: `0`
+- heldout leakage outside heldout split: `0`
+- trivial heuristics are weak:
+  - `first_value_for_key = 0.0`
+  - `last_value_before_query = 0.0`
+  - strongest `most_frequent_value_before_query ~= 0.146`
+
+Interpretation:
+
+The dataset is suitable for circuit-formation research. It does not guarantee a unique circuit, but it gives a clear target relation `d(x, y)` to measure against.
+
+#### 2. Behavior / Training Level
+
+Artifacts:
+
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/checkpoint_metrics.jsonl`
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/checkpoint_metrics_summary.json`
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/birth_window_analysis.json`
+
+Main formation windows:
+
+| window | role |
+| --- | --- |
+| `1500-2000` | first usable behavior / early birth |
+| `4250-4750` | heldout consolidation |
+| `7500-8000` | late upper-layer reorganization |
+
+Sweep-level triggers:
+
+- top answer gain step: `1750`
+- top heldout gain step: `4500`
+- top `Q` gain step: `7750`
+
+Recent prompt-neuron trace baseline at selected checkpoints:
+
+| step | mean margin | accuracy |
+| ---: | ---: | ---: |
+| `1750` | `-1.434105` | `0.326440` |
+| `2500` | `-1.031744` | `0.364845` |
+| `4500` | `5.123530` | `0.685377` |
+| `16000` | `8.388601` | `0.776957` |
+
+Split behavior at `16000`:
+
+| split | margin | accuracy |
+| --- | ---: | ---: |
+| `validation_iid` | `15.557823` | `0.941176` |
+| `heldout_pairs` | `10.634156` | `0.888889` |
+| `structural_ood` | `-2.853920` | `0.470046` |
+| `counterfactual` | `14.876693` | `0.935065` |
+
+Interpretation:
+
+The model has real IID and heldout-pair retrieval ability. Structural OOD remains weak. This means the learned mechanism generalizes across heldout pairs but has not become a fully robust symbolic algorithm.
+
+#### 3. Residual / Stage Level
+
+Artifacts:
+
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/path_logit_decomposition/path_logit_decomposition_report.json`
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/path_logit_decomposition/path_logit_stage_rows.jsonl`
+
+Final stage readout at `16000`:
+
+| stage | readout margin | readout accuracy |
+| --- | ---: | ---: |
+| `embedding` | `-26.757886` | `0.000000` |
+| `layer_0_post_attn` | `-22.793784` | `0.000000` |
+| `layer_0_post_mlp` | `-18.739200` | `0.011817` |
+| `layer_1_post_attn` | `-12.012117` | `0.084195` |
+| `layer_1_post_mlp` | `-12.394695` | `0.094535` |
+| `layer_2_post_attn` | `-2.345797` | `0.449040` |
+| `layer_2_post_mlp` | `8.388601` | `0.776957` |
+| `final_norm` | `8.388601` | `0.776957` |
+
+Interpretation:
+
+The answer is not linearly available early. The representation becomes behaviorally usable only after layer 2 attention and especially after layer 2 MLP. This supports a staged hierarchy:
+
+```text
+lower layers: scaffold / key-value representation
+middle heads: retrieval preparation
+upper attention: value routing
+upper MLP/final readout: answer write/readout
+```
+
+#### 4. Component Level
+
+Artifacts:
+
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/path_logit_decomposition/path_logit_decomposition_report.json`
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/attention_geometry/attention_geometry_trace_report.json`
+
+Strong final causal ablations at `16000`:
+
+| component | ablated accuracy | accuracy drop | margin drop | DLA mean |
+| --- | ---: | ---: | ---: | ---: |
+| `L0MLP` | `0.044313` | `0.732644` | `25.374873` | `-2.037040` |
+| `L2H1` | `0.274742` | `0.502216` | `15.398116` | `3.761759` |
+| `L1H2` | `0.573117` | `0.203840` | `8.282414` | `2.527027` |
+| `L1MLP` | `0.508124` | `0.268833` | `7.168099` | `-2.320465` |
+| `L0H0` | `0.729690` | `0.047267` | `3.539790` | `1.196879` |
+
+Important interpretation:
+
+- `L2H1` has strong positive direct logit attribution and strong causal ablation effect.
+- `L1H2` also has positive DLA and causal effect.
+- `L0MLP` and `L1MLP` are causally essential despite negative mean DLA.
+
+This means MLPs are not simply direct answer writers. They are likely shaping the representation that later attention/readout uses. DLA alone is not enough to explain them.
+
+#### 5. Attention Geometry Level
+
+Artifacts:
+
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/attention_geometry/attention_geometry_trace_report.json`
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/attention_geometry/attention_geometry_trace_rows.jsonl`
+
+At final step `16000`, L2H1 is the clearest mature retrieval head:
+
+| metric | L2H1 value |
+| --- | ---: |
+| support-value attention mean | `0.794394` |
+| support-value QK margin mean | `0.657993` |
+| attended OV value margin mean | `1.610091` |
+| attention entropy mean | `0.364977` |
+| OV output value-subspace alignment | `0.993541` |
+
+First positive joint geometry:
+
+| head | first step | interpretation |
+| --- | ---: | --- |
+| `L0H0` | `1750` | early bootstrap retrieval/scaffold |
+| `L2H1` | `5250` | mature upper retrieval/write head |
+| `L1H2` | `5500` | mature retrieval/preparation head |
+
+Interpretation:
+
+The attention mechanism is not just "some head attends there." L2H1 has the full QK/OV signature:
+
+```text
+QK: can separate support value from distractors
+attention: places mass on the support value
+OV: writes useful value information toward the answer direction
+```
+
+#### 6. Geometry Intervention Level
+
+Artifacts:
+
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/geometry_interventions/key_query_remove_final/geometry_subspace_intervention_report.json`
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/geometry_interventions/l2h1_qk_key_remove_final/geometry_subspace_intervention_report.json`
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/geometry_interventions/l2h1_ov_output_remove_final/geometry_subspace_intervention_report.json`
+
+These are causal subspace interventions, not observational metrics.
+
+The operation was:
+
+```text
+remove: z' = z - (z B) B^T
+```
+
+where `B` is a selected rank-4 geometric basis.
+
+Final results at `16000`:
+
+| intervention | baseline acc | intervened acc | acc drop | baseline margin | intervened margin | margin drop | positive drop frac |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| remove embedding key identity at query key | `0.776957` | `0.576071` | `0.200886` | `8.388601` | `0.019758` | `8.368843` | `0.695716` |
+| remove `L2H1` QK key-side subspace at support value | `0.776957` | `0.549483` | `0.227474` | `8.388601` | `-0.096333` | `8.484934` | `0.846381` |
+| remove `L2H1` OV output subspace at prediction | `0.776957` | `0.695716` | `0.081241` | `8.388601` | `4.494854` | `3.893747` | `0.776957` |
+
+Heldout-specific geometry result:
+
+```text
+L2H1 QK key-side removal on heldout_pairs:
+baseline accuracy     0.888889
+intervened accuracy   0.620915
+accuracy drop         0.267974
+margin drop           8.198912
+positive drop fraction 0.843137
+```
+
+Interpretation:
+
+The L2H1 QK key-side subspace is causally important for generalizing retrieval. This is one of the strongest pieces of evidence so far.
+
+Important caveat:
+
+This subspace is necessary-ish, but not proven sufficient. Removing it damages behavior. We have not yet proven that keeping only it preserves behavior.
+
+#### 7. Shared Feature / Family Level
+
+Artifacts:
+
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/shared_features/layer_2_post_mlp`
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/traced_candidates/layer2_family7_family4/mechanism_report/candidate_mechanism_report.json`
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/traced_candidates/layer2_family7_family4/birth_model/candidate_birth_model_report.json`
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/traced_candidates/layer2_family7_family4/coalition_map_early/candidate_coalition_map_report.json`
+
+Shared feature basis quality:
+
+| stage | features | explained variance | active fraction | reconstruction loss |
+| --- | ---: | ---: | ---: | ---: |
+| `layer_2_post_mlp` | `64` | `0.745779` | `0.541097` | `0.254670` |
+| `final_norm` | `64` | `0.731190` | `0.538351` | `0.269171` |
+
+Important caveat:
+
+These feature IDs are analysis coordinates, not proven natural mechanistic atoms. The basis is too dense for clean semantic claims.
+
+Family7 vs family4:
+
+| candidate | family | feature IDs | useful birth | sum useful delta | sum heldout gap delta | status |
+| --- | ---: | --- | ---: | ---: | ---: | --- |
+| `layer2_family7_top2` | `7` | `27,54` | `2250` | `0.408211` | `0.196319` | `sgd_supported_generalizing_candidate` |
+| `layer2_family4_top2` | `4` | `1,59` | `2500` | `0.234053` | `0.021933` | `sgd_supported_generalizing_candidate` |
+
+Pairwise relation:
+
+- score correlation: `0.766310`
+- useful correlation: `0.606233`
+- score sign conflict fraction: `0.238095`
+- simultaneous useful gain fraction: `0.285714`
+- family7 useful win fraction: `0.555556`
+
+Birth model failure:
+
+The birth model predicted family4 first, but actual useful birth was family7 first.
+
+| candidate | predicted rank | actual rank | actual birth step | birth score |
+| --- | ---: | ---: | ---: | ---: |
+| family4 top2 | `1` | `2` | `2500` | `4.0` |
+| family7 top2 | `2` | `1` | `2250` | `0.0` |
+
+Why this matters:
+
+The model used raw activation support, amplification, feature-score drive, and aggregate gradient alignment. That favored family4. But family7 had the better generalizing/heldout signal. The missing factor is likely heldout/path-specific gradient alignment, not raw family amplification.
+
+#### 8. Coalition / Neuron Level
+
+Artifacts:
+
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/traced_candidates/layer2_family7_family4/coalition_map_early/candidate_coalition_map_report.json`
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/traced_candidates/layer2_family7_family4/neuron_intervention_early_step2500/candidate_neuron_intervention_report.json`
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/prompt_neuron_trace_probe/prompt_neuron_trace_report.json`
+
+Coalition result:
+
+Family7 and family4 are not separate sparse neuron circuits. They share many early layer-0 neurons.
+
+Top shared-positive early neurons:
+
+```text
+L0N376, L0N302, L0N124, L0N96, L0N36, L0N488, L0N411, L0N326
+```
+
+Shared-negative early neurons:
+
+```text
+L0N261, L0N504, L0N332, L0N301, L0N458, L0N131, L0N70, L0N416
+```
+
+Conflict neurons include:
+
+```text
+L2N477, L2N310, L2N340, L2N281, L2N17, L2N185, L0N28, L2N41
+```
+
+Early neuron intervention at step `2500`:
+
+- baseline answer accuracy: `0.364845`
+- baseline heldout accuracy: `0.104575`
+- shared-positive neuron ablations changed family scores, but behavior was mostly compensated
+- some "positive" neurons increased candidate scores when ablated
+
+Prompt-neuron trace at `16000`:
+
+Top absolute-DLA neurons are mostly layer 2:
+
+```text
+L2N180, L2N121, L2N477, L2N372, L2N39, L2N164, L2N156, L2N96, ...
+```
+
+Final neuron ablation examples:
+
+| neuron | DLA mean | abs DLA mean | margin drop | accuracy drop |
+| --- | ---: | ---: | ---: | ---: |
+| `L2N477` | `0.140675` | `0.903545` | `0.353949` | `0.002954` |
+| `L1N366` | `-0.057806` | `0.698906` | `0.192114` | `-0.004431` |
+| `L2N180` | `-0.058170` | `1.063912` | `0.192028` | `0.004431` |
+| `L2N121` | `-0.106536` | `1.057197` | `0.180531` | `0.002954` |
+| `L1N401` | `-0.073953` | `0.656371` | `0.172617` | `-0.005908` |
+
+Interpretation:
+
+Neuron-level effects are real but small compared with component and subspace effects. The sign mismatch between DLA and ablation is not noise; it is evidence that neurons are mixed carriers.
+
+Top-neuron overlap result:
+
+All-prompt overlap is low, but overlap rises for same key/value conditions.
+
+Examples at final step:
+
+- layer 2 DLA top-neuron overlap:
+  - all pairs: `0.02949`
+  - same answer value: `0.07106`
+  - same key-value pair: `0.10183`
+- layer 1 activation top-neuron overlap:
+  - all pairs: `0.08216`
+  - same query key: `0.12414`
+  - same key-value pair: `0.17396`
+
+Interpretation:
+
+The model does not use a single universal top-neuron set. The active neuron coalition is prompt-conditioned.
+
+### What The Superposition Problem Means Here
+
+Simple version:
+
+```text
+The model uses the same neurons and directions to carry several partially overlapping features.
+```
+
+So a neuron or subspace can:
+
+- help one prompt
+- hurt another prompt
+- support family7 and family4 at the same time
+- have negative average DLA but positive causal importance
+- look important in one basis but not in another
+
+This is exactly what the current results show.
+
+Superposition is visible at three levels:
+
+#### 1. Feature Basis Superposition
+
+The shared-feature basis is dense:
+
+- explained variance is decent but not near-complete
+- active fraction is high, about `0.54`
+- feature IDs are not clean semantic atoms
+
+So family7/family4 are useful coordinates but not final mechanistic units.
+
+#### 2. Neuron Superposition
+
+Single neurons have mixed signs:
+
+- some top DLA neurons have negative average DLA but positive ablation drop
+- some ablations improve accuracy on some splits
+- single-neuron ablations are much weaker than component/subspace ablations
+
+So neurons are not reliable primitive units for the final explanation.
+
+#### 3. Geometry-Level Superposition
+
+Even model-intrinsic QK/OV subspaces are mixed.
+
+Per-query signs for final geometry interventions:
+
+| intervention | positive drops | negative drops | interpretation |
+| --- | ---: | ---: | --- |
+| key-query identity removal | `471/677` | `206/677` | key identity usually helps, but not uniformly |
+| L2H1 QK key-side removal | `573/677` | `104/677` | strongest causal geometry, still mixed |
+| L2H1 OV output removal | `526/677` | `151/677` | value-writing direction is also mixed |
+
+Correlations between intervention effects over prompts are weak:
+
+| pair | Pearson correlation | same-sign fraction |
+| --- | ---: | ---: |
+| key-query vs L2H1 QK | `0.2235` | `0.6721` |
+| key-query vs L2H1 OV | `0.1214` | `0.6647` |
+| L2H1 QK vs L2H1 OV | `0.1370` | `0.7149` |
+
+Interpretation:
+
+The circuit is not one clean line of computation. The retrieval infrastructure is real and causal, but it is multiplexed with other prompt-conditioned signals.
+
+### Current Best Mechanistic Story
+
+The current best hierarchy is:
+
+```text
+dataset relation d(x, y)
+  -> key/value identity structure in embeddings
+  -> L0MLP builds or stabilizes residual coordinates
+  -> L0H0 participates in early bootstrap retrieval
+  -> L1H2 becomes a mid-layer retrieval/preparation head
+  -> L2H1 becomes the clearest mature support-value retriever/writer
+  -> L2MLP/final_norm make the answer readable
+  -> neurons implement this through dense prompt-conditioned coalitions
+```
+
+The strongest current claim:
+
+```text
+L2H1 QK key-side geometry is causally important for final retrieval,
+including heldout-pair retrieval.
+```
+
+The strongest current limitation:
+
+```text
+This geometry is not clean or sufficient by itself.
+It is embedded inside a dense MLP/residual infrastructure.
+```
+
+### Why Observation And Intervention Are Still Not Enough
+
+Observation answers:
+
+```text
+what changed?
+```
+
+Causal ablation answers:
+
+```text
+what breaks if we remove this?
+```
+
+Geometry intervention answers:
+
+```text
+does this vector subspace carry necessary information?
+```
+
+But the real research question asks:
+
+```text
+why did SGD create this representation instead of another one?
+```
+
+To answer that, we need a training-dynamics explanation:
+
+```text
+which candidate path receives reinforcing gradient pressure,
+which path generalizes across examples,
+which path has lower interference,
+and which path becomes self-stabilizing during training?
+```
+
+### Better Research Plan From Here
+
+Do not start with more neurons. Do not start with more open-ended reports.
+
+The better plan is:
+
+#### Stage A: Define The Abstract Algorithm Precisely
+
+Write the symbolic causal variables:
+
+```text
+K_query(x)       = key in the current read
+K_support(x)     = key in the latest matching write
+V_support(x)     = value in the latest matching write
+D_key(x)         = distractor keys
+D_value(x)       = distractor values
+y(x)             = correct answer value
+```
+
+The model explanation must implement:
+
+```text
+K_query == K_support  ->  select support position  ->  write V_support  ->  output y
+```
+
+This gives ground truth variables independent of any head, neuron, or SAE feature.
+
+#### Stage B: Prove The Final Algorithm Before Explaining Birth
+
+For the final model, the goal is a causal abstraction:
+
+```text
+abstract variable  ->  model subspace/path  ->  output behavior
+```
+
+The proof standard should be:
+
+- remove the variable/subspace and behavior breaks
+- keep only the variable/subspace and enough behavior remains
+- patch the variable from another example and the output changes predictably
+- the result holds on heldout pairs, not only IID examples
+- the result survives prompt-level analysis, not only aggregate averages
+
+This is stricter than current geometry intervention. Current geometry results show necessity. They do not yet show sufficiency or clean causal abstraction.
+
+#### Stage C: Decompose The Mechanism Into Route And Content
+
+Use the transformer-circuits split:
+
+```text
+QK = routing geometry
+OV = content/write geometry
+MLP = nonlinear residual infrastructure
+```
+
+For this task:
+
+```text
+QK should explain where the model looks.
+OV should explain what value information gets written.
+MLPs should explain how residual coordinates are made usable.
+```
+
+Current evidence points to:
+
+```text
+L2H1 QK: strongest final routing geometry
+L2H1 OV: meaningful but weaker value-writing geometry
+L0MLP/L1MLP: essential support infrastructure
+L2MLP/final_norm: final readout and calibration
+```
+
+#### Stage D: Treat Superposition As A Measured Object
+
+Do not try to "avoid" superposition. Measure it.
+
+Define interference for a subspace or path:
+
+```text
+I(P) = fraction or magnitude of prompts where removing P improves the margin
+```
+
+For current interventions:
+
+```text
+I(key_query_identity) = 206 / 677 = 0.304
+I(L2H1_QK_key)        = 104 / 677 = 0.154
+I(L2H1_OV_output)     = 151 / 677 = 0.223
+```
+
+This tells us:
+
+```text
+L2H1 QK is the cleanest current geometric object,
+but it is still not monosemantic.
+```
+
+Future explanations should include both:
+
+```text
+useful signal strength
+interference cost
+```
+
+#### Stage E: Move From Components To Path Variables
+
+Define path contribution:
+
+```text
+m_t(x, y) = logit_t(y | x) - max_{z != y} logit_t(z | x)
+```
+
+Then decompose:
+
+```text
+m_t(x, y) ~= sum_P C_P(theta_t, x, y) + residual_error
+```
+
+A path `P` might be:
+
+```text
+embedding key direction -> L1H2 -> L2H1 QK/OV -> L2MLP -> unembed
+```
+
+The key is that `C_P` must be a causal/path-level object, not a feature-family score.
+
+#### Stage F: Explain SGD Selection With Gradient Alignment
+
+The mathematical target remains:
+
+```text
+Delta C_P ~= -eta * <grad_theta L, grad_theta C_P>
+```
+
+Circuit `P` wins over `Q` when:
+
+```text
+E_D[< -grad_theta L, grad_theta C_P >] - I(P)
+>
+E_D[< -grad_theta L, grad_theta C_Q >] - I(Q)
+```
+
+where:
+
+- `C_P` is the path contribution to the correct margin
+- `I(P)` is interference/superposition cost
+- `D` must be split into train, heldout, and structural OOD groups
+
+This is the route from mechanistic analysis to a mathematical explanation of circuit formation.
+
+#### Stage G: Trace Birth Only After The Final Mechanism Is Proven
+
+Once the final mechanism is proven, trace it backward:
+
+```text
+when does key identity become usable?
+when does QK routing become positive?
+when does OV write become value-aligned?
+when does L2MLP turn the path into positive margin?
+when does heldout alignment separate from IID amplification?
+```
+
+This prevents the earlier mistake:
+
+```text
+feature families first -> post-hoc birth model -> wrong separating factor
+```
+
+The new order should be:
+
+```text
+final causal algorithm
+  -> path variables
+  -> training trajectories
+  -> gradient alignment
+  -> cross-seed / factor tests
+```
+
+### Simple Plan To Tackle Superposition
+
+The simple version:
+
+1. Stop asking whether one neuron or one feature is "the circuit."
+2. Ask what information must be carried: query key, support match, support value, answer direction.
+3. Find the model subspaces that carry each information type.
+4. Test each subspace with remove, keep, and patch interventions.
+5. Measure how often each subspace helps vs hurts across prompts.
+6. Split mixed subspaces by prompt condition: key, value, key-value pair, split, success/failure.
+7. Only then map the subspace back down to neurons and weights.
+
+In short:
+
+```text
+information variable -> causal subspace -> path contribution -> neuron implementation
+```
+
+not:
+
+```text
+neuron list -> guessed circuit
+```
+
+### What Full Reverse Engineering Would Mean Here
+
+A real reverse-engineering result would need all of these:
+
+#### Behavioral Equivalence
+
+The proposed algorithm predicts the model's output on normal examples and counterfactual examples.
+
+#### Causal Necessity
+
+Removing the proposed route destroys the relevant behavior.
+
+#### Causal Sufficiency
+
+Keeping or patching the proposed route restores a large fraction of behavior.
+
+#### Variable Alignment
+
+The route encodes the right abstract variables:
+
+```text
+query key
+support key/value
+answer value
+distractor separation
+```
+
+#### Training Dynamics
+
+The same route can be tracked from birth to maturity over checkpoints.
+
+#### SGD Explanation
+
+The route's growth is explained by gradient alignment on data examples:
+
+```text
+train examples that support the true relation reinforce the path
+shortcut examples reinforce competing paths
+heldout-aligned paths survive better
+interference controls which mixed direction wins
+```
+
+#### Cross-Seed Stability
+
+The same abstract mechanism appears across seeds, even if exact head or neuron IDs change.
+
+### Updated Claims
+
+Supported:
+
+- The benchmark is suitable for studying circuit formation.
+- Circuit formation is staged.
+- The final model uses a dense multi-component mechanism.
+- `L0MLP`, `L1H2`, and `L2H1` are central components.
+- `L2H1` has the clearest mature QK/OV retrieval geometry.
+- Removing L2H1 QK key-side geometry causally damages final and heldout behavior.
+- Neurons and feature families are mixed, not clean natural units.
+- Superposition/interference exists at feature, neuron, and geometric subspace levels.
+
+Partially supported:
+
+- L0MLP probably builds/stabilizes residual coordinates used by later attention.
+- L1H2 probably prepares retrieval for L2H1.
+- L2MLP/final_norm probably convert routed value information into final answer margin.
+- family7 looks more generalizing than family4, but feature-family basis limitations remain.
+
+Unsupported:
+
+- a complete circuit decomposition
+- a clean monosemantic feature basis
+- a sufficient causal abstraction of the algorithm
+- a mathematical proof of why SGD selected this circuit
+- cross-seed equivalence
+- per-minibatch update-level explanation
+
+### Current Research North Star
+
+The north star is:
+
+```text
+Explain how SGD transforms the dataset relation d(x, y)
+into a causal path through residual geometry,
+and why that path wins over alternatives under gradient pressure and superposition.
+```
+
+The current best target equation:
+
+```text
+P wins over Q if:
+
+E_D[< -grad_theta L(theta_t; x, y), grad_theta C_P(theta_t; x, y) >]
+  - interference(P)
+>
+E_D[< -grad_theta L(theta_t; x, y), grad_theta C_Q(theta_t; x, y) >]
+  - interference(Q)
+```
+
+where:
+
+```text
+C_P(theta_t, x, y)
+```
+
+is the causal contribution of path `P` to the correct answer margin.
+
+This is not solved yet. But the current artifacts now point to the right object:
+
+```text
+not a neuron,
+not a feature family,
+not just a head,
+but a causally validated path through QK/OV/residual/MLP geometry.
+```
+
+### Research References To Keep In Mind
+
+- Transformer Circuits: decompose attention into QK routing and OV writing, not just attention maps. Reference: `https://transformer-circuits.pub/2021/framework/index.html`
+- Induction Head formation: circuits can appear during training and align with measurable progress. Reference: `https://transformer-circuits.pub/2022/in-context-learning-and-induction-heads/index.html`
+- Toy Models of Superposition: features can be represented in overlapping directions when capacity is limited. Reference: `https://transformer-circuits.pub/2022/toy_model/index.html`
+- Towards Monosemanticity: dictionary learning can help separate features, but learned features still need causal validation. Reference: `https://transformer-circuits.pub/2023/monosemantic-features/index.html`
+- Progress Measures for Grokking: a good final story needs an algorithm, progress measures, and causal validation. Reference: `https://arxiv.org/abs/2301.05217`
+- ACDC: circuit discovery requires choosing dataset, metric, patching unit, and causal graph together. Reference: `https://openreview.net/forum?id=89ia77nZ8u`
+- Causal abstraction: an explanation should be an abstract algorithm faithful under interventions, not just a list of active parts. Reference: `https://jmlr.org/papers/v26/23-0058.html`
