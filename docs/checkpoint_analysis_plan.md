@@ -6,6 +6,30 @@ description: Checkpoint-level measurement design for symbolic key-value circuit 
 
 # Checkpoint Analysis Plan
 
+## Current Status
+
+This document began as the checkpoint-level measurement plan. The project has now moved beyond the original coarse checkpoint sweep into route-level and actual-update analysis.
+
+Current state:
+
+```text
+reference run:
+  artifacts/runs/symbolic_kv_reference_formation
+
+fixed probe sets:
+  analysis/probe_set.jsonl
+  analysis/probe_set_train.jsonl
+
+current proof direction:
+  dataset relation
+    -> attention/residual route geometry
+    -> actual optimizer update
+    -> actual recorded batch support
+    -> answer-margin effect
+```
+
+The old checkpoint plan is still useful, but it is no longer the whole research process. The next phase is not another broad checkpoint dashboard. It is closing the proof gaps found by the completed experiments.
+
 ## Purpose
 
 This document defines what to analyze at every saved checkpoint in the reference formation run.
@@ -33,17 +57,28 @@ The unit of analysis is not "all weights". The unit of analysis is the reduced e
 
 ## Current Reference Regime
 
-Current provisional reference regime:
-
-- config: `configs/train/symbolic_kv_generalization.json`
-- selected run: `artifacts/runs/symbolic_kv_heldout_generalization`
-- selected checkpoint: `step 13000`
-
 Current formation run:
 
 - config: `configs/train/symbolic_kv_formation.json`
 - output: `artifacts/runs/symbolic_kv_reference_formation`
 - checkpoint cadence: every `250` steps
+- main public report: `docs/index.md`
+- internal notes: `results.md`
+- research ledger: `artifacts/runs/symbolic_kv_reference_formation/analysis/research_ledger/research_ledger.md`
+
+Important selected windows:
+
+- early feature/coalition formation: around `1750 -> 2500`
+- mid route formation: around `4500 -> 8250`
+- traced optimizer continuation: `5500 -> 5550`
+- late reference behavior: through `16000`
+
+Important completed actual-update artifacts:
+
+- optimizer trace: `analysis/optimizer_update_trace/l2h1_support_value_5500_5550_stepwise/`
+- actual-batch route attribution: `analysis/actual_batch_route_attribution/support_value_routes_5500_5550_stepwise/`
+- stepwise retrieval-separation attribution: `analysis/attention_retrieval_separation_update_attribution/`
+- support-value route competition: `analysis/route_competition/support_value_routes_5500_5550_stepwise/`
 
 ## Fixed Analysis Inputs
 
@@ -287,18 +322,53 @@ Currently implemented:
 - head ablation
 - best-checkpoint selection
 - reference selection across runs
+- fixed probe-set generation and storage
+- dataset-geometry reporting
+- attention-geometry trace
+- path-logit decomposition / DLA
+- geometry subspace interventions
+- controlled causal variable patching
+- feature-family ranking and lineage tools
+- candidate mechanism report
+- candidate birth model
+- coalition map
+- prompt-conditioned neuron trace
+- route-gradient selection and decomposition
+- checkpoint-update attribution
+- attention-score delta decomposition
+- attention-score/update attribution
+- attention retrieval-chain report
+- optimizer-update trace
+- actual-batch route attribution
+- research proof ledger
 
 ## Next Analysis Work To Build
 
-Still missing and should be built next:
+The original missing coarse tools are mostly no longer the blocker. The current missing work is proof closure:
 
-1. fixed probe-set generation and storage
-2. residual-stream capture at task-relevant positions
-3. residual linear probes by layer
-4. MLP-block ablation metrics
-5. checkpoint-metric sweep command
-6. birth-window detector
-7. targeted intervention runner
+1. actual-batch query-key route attribution
+2. route-to-answer-margin closure in the same traced window
+3. second-order residual accounting for first-order attribution errors
+4. actual-batch route competition across a wider candidate set
+5. superposition-aware decomposition that avoids treating neurons as clean atoms
+6. cross-seed repeat of the role-level geometry and update results
+7. future exact training trace with batch stream recorded from the beginning
+
+The important new constraint from the completed actual-batch support-value run is:
+
+```text
+recorded batches support L2H1,
+but broad residual routes receive more support,
+and batch-support ranking does not equal realized route-growth ranking.
+```
+
+So the next analysis must explain:
+
+```text
+batch support -> realized route growth
+```
+
+not merely measure positive support for one route.
 
 ## Practical Research Workflow
 
@@ -309,7 +379,19 @@ Still missing and should be built next:
 - identify birth windows
 - run interventions on selected windows
 
-### Phase B: Seed Replication
+Status: mostly completed for seed 7.
+
+### Phase B: Route And Update Attribution
+
+- define candidate routes from dataset geometry, QK/OV geometry, DLA, and causal patching
+- compare route growth over checkpoints
+- attribute actual checkpoint deltas with fixed source bases
+- trace one-step optimizer continuations
+- connect actual recorded batches to route support
+
+Status: partially completed. The support-value actual-batch route attribution is complete; query-key actual-batch attribution and route-to-answer closure remain.
+
+### Phase C: Seed Replication
 
 - rerun the same formation config for several seeds
 - compare:
@@ -319,7 +401,9 @@ Still missing and should be built next:
   - residual probe trajectories
   - stabilization timing
 
-### Phase C: Factor Screens
+Status: still missing for final claims.
+
+### Phase D: Factor Screens
 
 Vary one factor at a time:
 
@@ -342,7 +426,7 @@ For each factor, compare:
 
 ## Decision Rule For Starting Deep Circuit Work
 
-Start expensive circuit-analysis work only when:
+The project has already started deep circuit work for the reference run. For future runs, start expensive circuit-analysis work only when:
 
 - the reference regime is fixed
 - the probe set is fixed
@@ -351,3 +435,11 @@ Start expensive circuit-analysis work only when:
 
 Do not start with neuron-level inspection across all checkpoints.
 Start with the all-checkpoint coarse sweep, then escalate only on selected windows.
+
+For the current run, the decision rule has changed:
+
+```text
+Do not add more broad observation tools until the proof gaps are closed.
+Prioritize actual-batch attribution, route-to-answer closure, residual-error accounting,
+and cross-seed repeat.
+```

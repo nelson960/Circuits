@@ -6,7 +6,7 @@ The current benchmark is a stream-based symbolic KV retrieval task trained with 
 
 Public paper page:
 
-- [How SGD Builds Dense Retrieval Circuits](https://nelson960.github.io/Circuits/) [Still in progress]
+- [From Loss To Lookup: Tracing Circuit Formation In A Small Transformer](https://nelson960.github.io/Circuits/) [Still in progress]
 
 The project is closely related to prior work on motif emergence:
 

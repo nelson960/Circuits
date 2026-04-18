@@ -1,4 +1,4 @@
-title: How SGD Builds Dense Retrieval Circuits
+title: "From Loss To Lookup: Tracing Circuit Formation In A Small Transformer"
 description: Ongoing mechanistic interpretability research on how SGD forms retrieval circuits in small symbolic key-value transformers.
 url: https://nelson960.github.io
 baseurl: /Circuits

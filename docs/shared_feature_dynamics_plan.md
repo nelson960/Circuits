@@ -6,9 +6,36 @@ description: Shared feature basis and feature-family analysis design for symboli
 
 # Shared Feature Dynamics Plan
 
-## Goal
+## Current Status
 
-Build a CLI-first analysis stack that tracks stable learned features across checkpoints and uses those features as the main dynamical objects for studying circuit formation.
+This document began as the plan for making feature families the main dynamical object.
+
+That layer was built far enough to be scientifically useful, but it also produced an important negative result:
+
+```text
+feature families are useful analysis coordinates,
+but they are not sufficient as final circuit atoms.
+```
+
+The current project position is:
+
+```text
+feature-family analysis found candidate structure,
+but dense neuron sharing and birth-model failure forced a pivot
+toward dataset geometry, QK/OV routes, causal variables,
+actual optimizer updates, and actual-batch route attribution.
+```
+
+So this document should now be read as:
+
+```text
+the feature-family layer of the research stack,
+not the final full mechanism plan.
+```
+
+## Original Goal
+
+Build a CLI-first analysis stack that tracks stable learned features across checkpoints. The original ambition was to use those features as the main dynamical objects for studying circuit formation.
 
 The stack should support:
 
@@ -20,12 +47,31 @@ The stack should support:
 - lineage from features to heads, MLP blocks, and neuron groups
 - graph and plot exports for immediate inspection
 
+Updated goal:
+
+```text
+Use shared features as a candidate-discovery and diagnostic layer,
+then validate or reject those candidates with causal and route-level tests.
+```
+
 This is the next layer beyond:
 
 - checkpoint sweep
 - birth-window summaries
 - residual patching
 - head / MLP / neuron screening
+
+Updated interpretation:
+
+```text
+This layer is still valuable for finding candidate projections.
+It should not be treated as proof that a feature ID is a natural mechanism unit.
+Any feature-family claim must now be tied to:
+  causal patching,
+  route-level attribution,
+  direct logit attribution,
+  and actual update/batch support.
+```
 
 ## Scope
 
@@ -62,6 +108,85 @@ The shared-feature stack should convert the current analysis from:
 to:
 
 - stable feature trajectories over time
+
+## What The Feature Layer Found
+
+The implemented feature-family work identified meaningful upper-layer candidates:
+
+| family | features | result |
+| --- | --- | --- |
+| family7 | 27, 54 | stronger useful/generalizing candidate |
+| family4 | 1, 59 | related sibling candidate with stronger raw pre-birth factor score |
+
+The candidate mechanism report found:
+
+```text
+family7 useful:  0.408211
+family7 heldout: 0.196319
+family7 score drive: 0.109958
+
+family4 useful:  0.234053
+family4 heldout: 0.021933
+family4 score drive: 0.147239
+```
+
+The first transparent birth model failed in an informative way:
+
+```text
+predicted rank:
+  family4 > family7
+
+actual useful birth:
+  family7 before family4
+```
+
+That means feature-score drive, activation support, and simple pre-birth factors were not enough to explain the more generalizing candidate.
+
+The coalition map then showed dense sharing:
+
+```text
+shared positive neurons: 484
+shared negative neurons: 316
+conflict neurons:        224
+```
+
+Simple conclusion:
+
+```text
+family7 and family4 are not cleanly separate circuits.
+They are different projections through a shared dense substrate.
+```
+
+This is the superposition/polysemanticity obstacle in our own run.
+
+## Updated Role In The Research Stack
+
+The feature-family layer should now be used for:
+
+- finding candidate projections
+- identifying formation windows
+- finding dense coalitions
+- generating candidate routes for later tests
+- showing when feature-level birth models fail
+
+It should not be used alone for:
+
+- claiming a full circuit
+- claiming SGD selected one mechanism
+- claiming a neuron group is sufficient
+- claiming a feature ID is a natural variable
+
+The correct dependency is now:
+
+```text
+shared feature family
+  -> candidate route or subspace
+  -> causal intervention / controlled patch
+  -> route competition
+  -> actual update attribution
+  -> actual-batch attribution
+  -> answer-margin closure
+```
 
 ## Core Entities
 
@@ -579,9 +704,13 @@ If active fraction stays very high, the feature basis is not sparse enough to su
 
 Need explicit fit-quality reporting.
 
+This risk happened in practice. The feature basis exposed meaningful structure but did not isolate clean mechanism atoms. Family7 and family4 shared a large neuron coalition.
+
 ### 2. Feature IDs Still Unstable
 
 If checkpoint pooling is too narrow or normalization is bad, features may still fail to represent stable families.
+
+Even when feature IDs are stable enough for analysis, they are still coordinates in a fitted basis. They require causal and route-level validation before becoming mechanism claims.
 
 ### 3. Approximate Patching
 
@@ -595,6 +724,14 @@ Feature lineage will be noisy if done before filtering to causally meaningful fe
 
 Need thresholding and ranking.
 
+### 5. Polysemantic Neurons
+
+Neuron-level lineage can double-count or misread mechanisms because a neuron can support multiple features. The coalition map showed exactly this: hundreds of neurons were shared across candidate families.
+
+### 6. Birth-Model Misranking
+
+The first birth model ranked family4 above family7 even though family7 was the stronger generalizing candidate. Future feature-birth models must include route-level and heldout/causal terms, not only feature-score amplification.
+
 ## Success Criteria
 
 This milestone is successful if we can say, for one stage:
@@ -607,3 +744,18 @@ This milestone is successful if we can say, for one stage:
 - these are the heads / MLP blocks / neuron groups most associated with those features
 
 That would be the first genuinely feature-dynamical layer for the repo and a much stronger basis for answering the SGD-selection question.
+
+Updated success criterion after the completed runs:
+
+```text
+The shared-feature layer is successful if it produces candidate structures
+that survive later causal, route, and update-attribution tests.
+It is not successful merely because it finds visually coherent feature families.
+```
+
+Current status:
+
+```text
+successful for candidate discovery: yes
+successful for final route-selection proof: no
+```

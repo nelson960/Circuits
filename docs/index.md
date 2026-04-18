@@ -1,10 +1,10 @@
 ---
 layout: default
-title: How SGD Builds Dense Retrieval Circuits
+title: "From Loss To Lookup: Tracing Circuit Formation In A Small Transformer"
 description: Ongoing mechanistic interpretability research on how SGD forms retrieval circuits in small symbolic key-value transformers.
 ---
 
-# How SGD Builds Dense Retrieval Circuits
+# From Loss To Lookup: Tracing Circuit Formation In A Small Transformer
 
 Nelson Alex
 
@@ -54,6 +54,36 @@ Inside that infrastructure:
 The strongest new progress is that we can now measure actual optimizer updates, not just static component importance. In a traced continuation from step `5500` to `5550`, the recorded batches and actual parameter deltas can be compared against route growth step by step.
 
 The strongest remaining gap is that this still does not prove a unique route-selection theorem. The data gradients support several routes at once, and broad residual routes often receive more support than isolated heads.
+
+## How Far The Project Has Come
+
+The research has gone through several stages.
+
+| stage | what we asked | what happened |
+| --- | --- | --- |
+| behavior | does the model learn symbolic KV retrieval? | yes, heldout retrieval becomes strong |
+| components | which heads and MLPs matter? | L2H1, L1H2, L0H0, MLPs, and full residual routes all matter |
+| feature families | can feature families explain circuit birth? | family7/family4 were useful, but the birth model failed |
+| coalitions | are families separate circuits? | no, they share a dense neuron base |
+| geometry | can QK/OV subspaces explain retrieval/write roles? | partially, especially for L2H1 support-value retrieval/write |
+| causality | are these subspaces necessary and sufficient? | removal shows necessity; patching shows only partial sufficiency |
+| update attribution | do actual parameter updates move routes? | yes, one-step updates predict local route movement well |
+| actual batches | do recorded batches support route growth? | yes for tested support-value routes, but support ranking does not equal growth ranking |
+
+The current position is:
+
+```text
+We are past raw observation.
+We are not yet at a full mathematical proof.
+
+We can now connect:
+  actual update -> route movement
+  recorded batch gradient -> route support
+
+We still cannot fully explain:
+  why the route with the largest batch support
+  is not always the route with the largest realized growth.
+```
 
 ## What This Project Tries To Prove
 
@@ -891,7 +921,7 @@ But they support broad residual/value routes even more.
 And support ranking is not identical to realized route-growth ranking.
 ```
 
-That is exactly why the "why" question remains hard. Gradient support is necessary, but it is not the whole story. Architecture, current geometry, nonlinear interactions, optimizer state, and interference decide how support becomes realized growth.
+That is a key constraint on the next explanation. Gradient support is necessary, but it is not the whole story. Architecture, current geometry, nonlinear interactions, optimizer state, and interference decide how support becomes realized growth.
 
 ## What We Know Mathematically
 

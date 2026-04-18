@@ -3925,9 +3925,9 @@ actual recorded batch at step t
   -> dot with actual Delta theta_t
 ```
 
-### Actual-Batch Attribution Tool Status
+### Actual-Batch Attribution Result
 
-A new command was built for this missing link:
+The missing actual-batch attribution run is now complete.
 
 ```text
 actual-batch-route-attribution
@@ -3949,31 +3949,83 @@ actual_batch_update_alignment_t =
   < -grad loss_batch_t(theta_t), theta_{t+1} - theta_t >
 ```
 
-The command also checks that the recomputed batch loss matches the optimizer-trace loss before trusting the row.
+The command checks that the recomputed batch loss matches the optimizer-trace loss before trusting the row.
 
 Current status:
 
 ```text
 tool implemented: yes
 focused tests:    passed
-result available: not yet
+result available: yes
+intervals:        50
+routes:           6
+rows:             300
+pairs:            128
+max loss mismatch: 0
 ```
 
-The current output directory contains only:
+Completed report:
 
 ```text
-artifacts/runs/symbolic_kv_reference_formation/analysis/actual_batch_route_attribution/support_value_routes_5500_5550_stepwise/actual_batch_route_attribution_pairs.jsonl
+artifacts/runs/symbolic_kv_reference_formation/analysis/actual_batch_route_attribution/support_value_routes_5500_5550_stepwise/actual_batch_route_attribution_report.md
 ```
 
-No completed report/rows were present at the time of this append.
-
-So we must not yet claim:
+Route summary:
 
 ```text
-actual recorded training batches selected L2H1.
+route                         actual growth   predicted by update   batch route support   local SGD delta   sign match
+full_layer1_support_value      +0.913913       +2.51241              +76.4356              +0.0305742        0.940
+L2H1_ov_input_support_value    +0.776056       +1.36249              +26.8469              +0.0107387        0.980
+full_layer0_support_value      +0.423815       +3.31345              +140.974              +0.0563898        0.980
+L0H0_ov_input_support_value    +0.0475691      +0.828024             +39.4372              +0.0157749        0.960
+embedding_value_identity       +0.0402784      +0.805444             +38.6213              +0.0154485        0.940
+L1H2_ov_input_support_value    +0.00818082     +0.735241             +36.3225              +0.014529         1.000
 ```
 
-That claim requires the completed actual-batch attribution rows.
+Ranked by actual route growth:
+
+```text
+1. full_layer1_support_value
+2. L2H1_ov_input_support_value
+3. full_layer0_support_value
+4. L0H0_ov_input_support_value
+5. embedding_value_identity
+6. L1H2_ov_input_support_value
+```
+
+Ranked by actual-batch route support:
+
+```text
+1. full_layer0_support_value
+2. full_layer1_support_value
+3. L0H0_ov_input_support_value
+4. embedding_value_identity
+5. L1H2_ov_input_support_value
+6. L2H1_ov_input_support_value
+```
+
+Simple meaning:
+
+```text
+The actual recorded batches do support the L2H1 support-value route.
+L2H1 is also the second-largest realized isolated/broad route growth in this candidate set.
+But actual-batch support does not rank L2H1 first.
+The broad full-residual routes receive more batch support.
+```
+
+So this result closes one missing link:
+
+```text
+recorded batch gradient -> support-value route support
+```
+
+But it does not close the whole route-selection proof:
+
+```text
+batch support ranking != realized route-growth ranking
+```
+
+That mismatch is now a key constraint on the next explanation, not a missing run.
 
 ### Updated Position After The 5500 -> 5550 Trace
 
@@ -3996,8 +4048,9 @@ Support-value route transfer:
   but full residual routes grow more than individual-head routes.
 
 Probe-set data support:
-  train-probe support does not explain L2H1 growth in this window,
-  so the actual recorded batch attribution is required.
+  train-probe support did not explain L2H1 growth in this window.
+  The completed actual-batch attribution shows the recorded batches do support L2H1,
+  but broad residual routes receive more support.
 ```
 
 Current best simple explanation:
@@ -4016,30 +4069,21 @@ Current proof chain status:
 done:
   actual optimizer update -> local QK retrieval-separation movement
   actual optimizer update -> support-value route transfer movement
+  actual recorded batch gradient -> support-value route support
   route competition between L2H1, L1H2, L0H0, embeddings, and full residual routes
 
 not done:
-  actual recorded batch gradient -> actual optimizer update -> route growth
   actual route growth -> final answer-margin growth in the same traced window
+  explain why batch support ranking differs from realized route-growth ranking
+  actual-batch query-key route attribution
   cross-seed repeat
   longer traced windows beyond 50 steps
 ```
 
-The next report to trust should be:
-
-```text
-actual_batch_route_attribution_report.md
-```
-
-from:
-
-```text
-artifacts/runs/symbolic_kv_reference_formation/analysis/actual_batch_route_attribution/support_value_routes_5500_5550_stepwise/
-```
-
-Until that report exists, the honest claim is:
+The honest claim is now:
 
 ```text
 We have closed the update-to-route part at one-step resolution.
-We have not yet closed the data-batch-to-update part.
+We have also measured actual recorded batch support for support-value routes.
+We have not yet explained why the route with the largest batch support is not the route with the largest realized growth.
 ```
