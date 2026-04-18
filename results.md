@@ -2500,3 +2500,1546 @@ but a causally validated path through QK/OV/residual/MLP geometry.
 - Progress Measures for Grokking: a good final story needs an algorithm, progress measures, and causal validation. Reference: `https://arxiv.org/abs/2301.05217`
 - ACDC: circuit discovery requires choosing dataset, metric, patching unit, and causal graph together. Reference: `https://openreview.net/forum?id=89ia77nZ8u`
 - Causal abstraction: an explanation should be an abstract algorithm faithful under interventions, not just a list of active parts. Reference: `https://jmlr.org/papers/v26/23-0058.html`
+
+## Heldout Route-Comparison Result
+
+Date: 2026-04-14
+
+This note records the first clean route-comparison pass on the controlled heldout query-key variable. This should be treated as a candidate-route finding, not a final proof of SGD selection.
+
+Artifacts:
+
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/route_gradient_selection/heldout_route_comparison/full_residual_query_key/candidate_route_gradient_selection_report.json`
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/route_gradient_selection/heldout_route_comparison/l2h1_qk_query_query_key/candidate_route_gradient_selection_report.json`
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/route_gradient_selection/heldout_route_comparison/l2h1_qk_key_query_key/candidate_route_gradient_selection_report.json`
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/route_gradient_selection/heldout_route_comparison/l2h1_ov_input_query_key/candidate_route_gradient_selection_report.json`
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/route_gradient_selection/heldout_route_comparison/l2h1_ov_output_query_key/candidate_route_gradient_selection_report.json`
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/route_gradient_selection/heldout_route_comparison/l0h1_qk_query_query_key/candidate_route_gradient_selection_report.json`
+- `artifacts/runs/symbolic_kv_reference_formation/analysis/route_gradient_selection/heldout_route_comparison/l0h3_qk_query_query_key/candidate_route_gradient_selection_report.json`
+
+Run sanity:
+
+```text
+split_filter = heldout_pairs
+checkpoints = 64 / 64 complete
+pair types = query_key, distractor
+constructed pairs = 64 query_key + 64 distractor
+skip reasons = none
+zero route-gradient parameters = 0
+```
+
+There is one provenance caveat. A clean rerun of `full_residual_query_key` also exists under:
+
+```text
+artifacts/runs/symbolic_kv_reference_formation/analysis/route_gradient_selection/user_heldout_route_comparison/full_residual_query_key/
+```
+
+The other route reports are complete and use the correct split, but they live in the older `heldout_route_comparison` directory. If we want strict user-run-only provenance, rerun those six into `user_heldout_route_comparison` before using them in public-facing text.
+
+### What Was Tested
+
+The controlled variable was:
+
+```text
+query key
+```
+
+The pair construction used two pair types:
+
+```text
+query_key:
+  the queried key changes, so the correct answer should change
+
+distractor:
+  an unqueried/distractor value changes, so the correct answer should not change
+```
+
+This matters because a route can look important just because it encodes general prompt structure. The distractor control asks whether the route specifically carries the query-key variable instead of merely carrying "this prompt has a read event" or "this is a similar sequence".
+
+The tested candidate routes were:
+
+```text
+full_residual at layer_1_post_mlp
+L2H1 QK query-side, rank 4
+L2H1 QK key-side, rank 4
+L2H1 OV input-side, rank 4
+L2H1 OV output-side, rank 4
+L0H1 QK query-side, rank 4
+L0H3 QK query-side, rank 4
+```
+
+### Calculation Definitions
+
+For each route `P`, the route-transfer score is:
+
+```text
+transfer_P =
+  patched_margin_P - corrupted_margin
+```
+
+The full residual gives the reference transfer:
+
+```text
+transfer_full =
+  clean_margin - corrupted_margin
+```
+
+The recovery fraction is:
+
+```text
+recovery_P =
+  transfer_P / transfer_full
+```
+
+So if a route has recovery near `1`, patching only that route almost fully moves the model from the corrupted answer behavior back to the clean answer behavior. If recovery is near `0`, the route does not carry much of the transferable variable by itself.
+
+The route-gradient support is:
+
+```text
+support_P(t) =
+  < -grad_theta L(theta_t), grad_theta C_P(theta_t) >
+```
+
+where `C_P` is the candidate route score. The first-order SGD-predicted route-score change is:
+
+```text
+linearized_delta_P(t) =
+  learning_rate_t * support_P(t)
+```
+
+Positive support means the current loss gradient would increase that route score under a first-order SGD approximation. Negative support means the current loss gradient would suppress that route score.
+
+This is still not final proof. Final proof requires comparing the first-order prediction to actual checkpoint-to-checkpoint parameter changes:
+
+```text
+actual_delta_P(t) =
+  C_P(theta_{t+1}) - C_P(theta_t)
+
+predicted_delta_P(t) =
+  grad_theta C_P(theta_t)^T (theta_{t+1} - theta_t)
+
+remainder_P(t) =
+  actual_delta_P(t) - predicted_delta_P(t)
+```
+
+The route-gradient-selection result only gives a candidate selection signal. The next proof tool must use the actual checkpoint delta `theta_{t+1} - theta_t`.
+
+### Final Checkpoint Route Table
+
+All numbers below are from step `16000`, split `heldout_pairs`, pair type `query_key` unless stated otherwise.
+
+| route | query transfer | recovery | distractor transfer | SGD support | linearized delta | read |
+|---|---:|---:|---:|---:|---:|---|
+| full residual | `40.583275` | `100.00%` | `0.864908` | `-142.891520` | `-0.057157` | full residual contains essentially all transferable query-key information |
+| `L2H1 QK query` | `10.542538` | `25.98%` | `-0.317474` | `25.931873` | `0.010373` | strongest tested rank-4 specific carrier |
+| `L0H3 QK query` | `1.699248` | `4.19%` | `-0.021947` | `-151.932807` | `-0.060773` | weak direct carrier at this stage |
+| `L2H1 OV output` | `1.575836` | `3.88%` | `-0.141499` | `-16.931023` | `-0.006772` | weak for the query-key variable |
+| `L0H1 QK query` | `1.416969` | `3.49%` | `0.269435` | `-82.336787` | `-0.032935` | weak direct carrier at this stage |
+| `L2H1 QK key` | `1.387651` | `3.42%` | `-0.025758` | `131.842206` | `0.052737` | strongly gradient-supported, but weak current transfer |
+| `L2H1 OV input` | `0.545343` | `1.34%` | `-0.083717` | `-22.876149` | `-0.009150` | weakest tested route |
+
+The main concrete calculation is:
+
+```text
+full residual:
+  clean margin     = 35.709450
+  corrupted margin = -4.873827
+  patched margin   = 35.709450
+
+  transfer_full = 35.709450 - (-4.873827)
+                = 40.583277
+
+L2H1 QK query:
+  patched margin = 5.668711
+
+  transfer_L2H1_QK_query = 5.668711 - (-4.873827)
+                          = 10.542538
+
+  recovery = 10.542538 / 40.583277
+           = 0.2598
+           = 25.98%
+```
+
+The distractor control for the same route is:
+
+```text
+L2H1 QK query distractor:
+  corrupted margin = 1.396942
+  patched margin   = 1.079468
+
+  distractor transfer = 1.079468 - 1.396942
+                      = -0.317474
+```
+
+That is good for specificity: the route transfers a large amount on query-key-change pairs and does not transfer much on distractor pairs.
+
+The SGD support calculation for the same route is:
+
+```text
+support = < -grad L, grad C_P >
+        = 25.931873
+
+learning rate = 0.0004
+
+linearized delta = 0.0004 * 25.931873
+                 = 0.010373
+```
+
+So at step `16000`, the heldout query-key loss gradient would still increase this route score under the local first-order approximation.
+
+### Simple Reading
+
+The full residual at `layer_1_post_mlp` contains the query-key variable very strongly. Patching the whole residual recovers almost exactly the full clean-vs-corrupt margin difference.
+
+The best tested small route is `L2H1 QK query-side`. It recovers about one quarter of the full residual query-key transfer by itself:
+
+```text
+10.542538 / 40.583277 = 25.98%
+```
+
+This is much larger than the other tested rank-4 routes. It also has a good distractor control:
+
+```text
+query transfer      = 10.542538
+distractor transfer = -0.317474
+```
+
+So this route is not merely encoding arbitrary prompt structure. It is much more aligned with the query-key variable than with distractor changes.
+
+The result also shows the mechanism is still dense. The best rank-4 route only explains about `26%` of the full residual transfer. That means most of the heldout query-key information is distributed outside this one small subspace.
+
+### Important Twist
+
+`L2H1 QK key-side` has the strongest positive SGD support:
+
+```text
+support = 131.842206
+linearized delta = 0.052737
+```
+
+but it has weak current transfer:
+
+```text
+query transfer = 1.387651
+recovery = 3.42%
+```
+
+This separates two different concepts:
+
+```text
+current causal content:
+  does the route already carry the query-key variable?
+
+gradient pressure:
+  would the current heldout loss push this route upward?
+```
+
+`L2H1 QK query-side` currently carries much more transferable query-key information. `L2H1 QK key-side` receives stronger gradient pressure, but currently transfers little. We cannot collapse these into one claim.
+
+### Timeline Reading
+
+The broad residual route forms early and then appears saturated or suppressed later:
+
+| route | step | query transfer | SGD support | linearized delta |
+|---|---:|---:|---:|---:|
+| full residual | `4500` | `-2.168145` | `266.560682` | `0.106624` |
+| full residual | `8000` | `26.891529` | `39.575928` | `0.015830` |
+| full residual | `12000` | `35.679001` | `-201.509556` | `-0.080604` |
+| full residual | `16000` | `40.583275` | `-142.891520` | `-0.057157` |
+
+This says the residual-level variable receives strong positive pressure during formation, becomes large by `8000`, and later receives negative local gradient pressure. That does not mean it disappears. It means the current loss gradient no longer wants to increase this already-large broad route.
+
+`L2H1 QK query-side` keeps becoming more visible:
+
+| route | step | query transfer | SGD support | linearized delta |
+|---|---:|---:|---:|---:|
+| `L2H1 QK query` | `4500` | `0.808970` | `2.142976` | `0.000857` |
+| `L2H1 QK query` | `8000` | `2.388395` | `10.357577` | `0.004143` |
+| `L2H1 QK query` | `12000` | `4.186921` | `-37.730755` | `-0.015092` |
+| `L2H1 QK query` | `16000` | `10.542538` | `25.931873` | `0.010373` |
+
+This says the route is already present by `4500`, grows by `8000`, and is much stronger at `16000`. The sign of local support is not monotonic, which is another reason not to overclaim from a single checkpoint.
+
+### What This Supports
+
+Supported as a candidate finding:
+
+- The heldout query-key variable is causally present in the `layer_1_post_mlp` residual stream.
+- Among the tested rank-4 head-derived routes, `L2H1 QK query-side` is the strongest current carrier of transferable heldout query-key information.
+- `L2H1 QK query-side` has a good distractor control: large query-key transfer and near-zero distractor transfer.
+- The mechanism is distributed: the best tested rank-4 route recovers only about `26%` of the full residual transfer.
+- Current causal content and gradient pressure can diverge: `L2H1 QK key-side` has strong positive support but weak current transfer.
+
+Not supported yet:
+
+- SGD selected `L2H1 QK query-side` over all alternatives.
+- The route comparison is a mathematical proof of circuit birth.
+- The tested rank-4 routes cover the full mechanism.
+- Head routes alone explain the dense MLP/residual infrastructure.
+- The conclusion is seed-stable.
+
+### How We Got Here
+
+The earlier feature-family and coalition tools showed that the model's internal story is dense:
+
+```text
+family7 / family4 are mixed analysis coordinates
+MLP neurons are shared across families
+positive update alignment and causal carrying can disagree
+feature-family birth did not give a clean why-answer
+```
+
+That forced the pivot from "which feature family was born?" to "which abstract variable is causally carried by which route?"
+
+The current route-comparison run is the first controlled version of that pivot. Instead of asking only whether a component matters, it asks:
+
+```text
+If the queried key changes, can this route transfer the corresponding answer behavior?
+If only a distractor changes, does this route stay mostly silent?
+Does the current loss gradient push this route up or down?
+```
+
+This is better than raw component observation, but it is still not enough for the final why-question.
+
+### What Is Still Missing
+
+The next missing proof step is actual checkpoint update attribution.
+
+For each interval:
+
+```text
+theta_t -> theta_{t+1}
+```
+
+we need:
+
+```text
+actual_delta_P =
+  C_P(theta_{t+1}) - C_P(theta_t)
+
+linearized_checkpoint_delta_P =
+  grad_theta C_P(theta_t)^T (theta_{t+1} - theta_t)
+
+remainder_P =
+  actual_delta_P - linearized_checkpoint_delta_P
+```
+
+Then decompose:
+
+```text
+linearized_checkpoint_delta_P
+```
+
+by:
+
+```text
+embedding
+L0 attention Q/K/V/O
+L0 MLP neurons
+L1 attention Q/K/V/O
+L1 MLP neurons
+L2 attention Q/K/V/O
+L2 MLP neurons
+layernorms
+unembedding
+```
+
+That is the mathematical bridge from observation to proof. It will tell us whether the actual training update increased the route, which parameter groups caused the increase, and whether the first-order calculation explains the real checkpoint-to-checkpoint change.
+
+The final route-selection claim should have this form:
+
+```text
+Route P is selected over route Q during interval [t0, t1] if:
+
+sum_t grad C_P(theta_t)^T (theta_{t+1} - theta_t)
+>
+sum_t grad C_Q(theta_t)^T (theta_{t+1} - theta_t)
+
+and this predicted advantage matches:
+
+sum_t [C_P(theta_{t+1}) - C_P(theta_t)]
+>
+sum_t [C_Q(theta_{t+1}) - C_Q(theta_t)]
+
+with small enough residual error.
+```
+
+Only after this update-level calculation should we claim that SGD selected one route over another.
+
+### Immediate Next Research Step
+
+Build or run the next tool only after the route-comparison artifacts are accepted as the candidate-selection layer:
+
+```text
+checkpoint-update-attribution
+```
+
+Inputs:
+
+```text
+candidate routes:
+  full_residual
+  L2H1 QK query-side
+  L2H1 QK key-side
+  strongest upstream controls
+
+checkpoint intervals:
+  all adjacent checkpoints, especially 4500 -> 8000 and 8000 -> 16000
+```
+
+Outputs:
+
+```text
+actual route-score change
+linearized checkpoint-delta prediction
+prediction error / remainder
+parameter-group contribution table
+attention Q/K/V/O contribution table
+MLP neuron contribution table
+route competition table
+```
+
+This is the next step toward the real proof:
+
+```text
+how the data relation d(x, y) becomes residual/attention geometry,
+and how actual SGD updates move the model toward one route more than another.
+```
+
+## Current Experimental Position In Simple Words
+
+Date: 2026-04-14
+
+We are no longer only asking:
+
+```text
+which heads, neurons, or feature families changed?
+```
+
+We are now asking:
+
+```text
+what variable is being carried, where is it carried, and did training actually
+move the model in a way that builds that variable?
+```
+
+The current strongest concrete result is:
+
+```text
+The heldout query-key variable is present in the layer_1_post_mlp residual stream.
+The full residual patch recovers almost all of it.
+The best tested small route is L2H1 QK query-side, which recovers about 26%
+of the full residual query-key transfer.
+```
+
+Simple meaning:
+
+```text
+The model does have a transferable internal variable for "which key is being queried".
+That variable is not stored in one clean head or one clean neuron.
+Part of it is visible in L2H1 QK query-side geometry, but most of it is distributed
+through the residual stream and upstream components.
+```
+
+So the current position is:
+
+```text
+we have found a serious candidate route,
+but we have not yet proven how SGD built it.
+```
+
+### What The Earlier Neuron/Family Work Means Now
+
+The earlier feature-family and coalition results should not be read as:
+
+```text
+family7 is the circuit
+family4 is the losing circuit
+these neurons intentionally prepare the later circuit
+```
+
+The better interpretation is:
+
+```text
+feature families were useful analysis coordinates,
+but they were not clean mechanistic atoms.
+```
+
+The neuron coalition result told us that the model is dense:
+
+```text
+many neurons participate in more than one family
+positive update alignment and causal contribution can disagree
+some neurons look helpful in one projection and harmful in another
+```
+
+Simple explanation:
+
+```text
+The model is not building one neat labeled part at a time.
+It is changing many weights together.
+Some early neurons become useful because their activation pattern reduces loss.
+Later, when an attention route becomes useful, gradient flows backward through that route.
+Then some earlier neurons receive pressure to shape the residual stream in ways that
+make the later route work better.
+```
+
+Important wording:
+
+```text
+Early neurons do not intentionally prepare a later circuit.
+They get reinforced when their activation pattern helps reduce loss.
+Later, once an attention route becomes useful, backprop sends credit through that route,
+and some earlier neurons start receiving gradients that shape the residual geometry
+needed by the later route.
+```
+
+This is the simple version of the "foundation then support" idea. It is plausible from the current results, especially because upstream `L0/L1` components repeatedly show up as important. But it is not fully proven yet.
+
+### What The Heldout Route Result Adds
+
+The route-comparison result improved the evidence because it used controlled pairs:
+
+```text
+query_key pairs:
+  the queried key changes and the answer should change
+
+distractor pairs:
+  an irrelevant value changes and the answer should stay the same
+```
+
+This matters because a route can be generally important without carrying the right variable. The current `L2H1 QK query-side` route passes a stronger test:
+
+```text
+query-key transfer is large
+distractor transfer is near zero
+```
+
+Simple meaning:
+
+```text
+this route is not just reacting to random prompt changes;
+it is specifically sensitive to the queried-key variable.
+```
+
+But the result also shows the limit:
+
+```text
+full residual transfer = 40.58
+L2H1 QK query transfer = 10.54
+```
+
+So:
+
+```text
+L2H1 QK query-side explains a meaningful piece,
+not the whole mechanism.
+```
+
+### How Far We Are
+
+Current level of evidence:
+
+```text
+behavioral evidence: strong
+component evidence: strong
+feature-family evidence: useful but not canonical
+neuron coalition evidence: strong evidence of density/superposition
+causal variable patch evidence: partial but important
+route-comparison evidence: useful candidate-route selection
+mathematical SGD proof: not done yet
+cross-seed generality: not done yet
+```
+
+In plain terms:
+
+```text
+We know the model learned the task.
+We know the solution is staged.
+We know the final mechanism is dense.
+We know L2H1 QK query-side carries a real part of the heldout query-key variable.
+We know upstream MLP/attention components are probably shaping the residual space.
+We do not yet know, with proof, why SGD built this route instead of another.
+```
+
+So the project is past raw observation, but not yet at proof.
+
+The current best summary is:
+
+```text
+We have identified where to look for the proof.
+We have not yet completed the proof.
+```
+
+### What The Next Proof Must Show
+
+The next proof should be simple in purpose even if technical in implementation:
+
+```text
+Did the actual checkpoint update make this route stronger?
+Which weights caused that increase?
+Which data examples created the gradient pressure?
+Did this route grow more than competing routes?
+Did that route growth explain the behavior improvement?
+```
+
+The key object is:
+
+```text
+Delta theta =
+  theta_{t+1} - theta_t
+```
+
+This is the actual parameter change between checkpoints. The next analysis should not only use the idealized gradient direction. It should use the real update that happened during training.
+
+The central calculation is:
+
+```text
+route growth =
+  C_P(theta_{t+1}) - C_P(theta_t)
+
+predicted route growth =
+  grad C_P(theta_t) . Delta theta
+```
+
+If these match, then we can say:
+
+```text
+the actual training update mathematically explains this route's growth
+```
+
+If this works across the formation window and beats competing routes, then we can start saying:
+
+```text
+SGD built this route because the actual updates repeatedly increased it more
+than the alternatives, under pressure from the task data relation.
+```
+
+That is the next real step from "candidate mechanism" toward "mathematical explanation".
+
+## Full Picture After Actual-Update And Data-Update Attribution
+
+Date: 2026-04-17
+
+This is the current best story, written as a research status note, not as a final claim.
+
+The project started by tracking behavior, heads, MLPs, shared features, feature families, neuron coalitions, and candidate birth models. That phase was useful because it showed the mechanism is dense. It also showed that the original feature-family basis is not a clean mechanistic unit by itself. Family and neuron reports helped locate where activity changes, but they did not answer why SGD builds one route rather than another.
+
+The current pivot is:
+
+```text
+data relation -> actual parameter update -> residual/attention geometry -> route growth -> logit margin
+```
+
+The task relation is symbolic key-value lookup:
+
+```text
+given a stream of writes W K V and a read R K,
+predict the value from the latest previous write for that key.
+```
+
+So the model must internalize something like:
+
+```text
+query key -> matching support event -> support value -> answer logit
+```
+
+### Current Strongest Mechanism Candidate
+
+The strongest candidate route is still:
+
+```text
+stage: layer_1_post_mlp
+subspace: L2H1 head_qk_query, rank 4
+position role: query_key
+```
+
+Earlier causal-variable patching showed this route carries a real part of the query-key variable, but not all of it. The full residual carries much more. So `L2H1` is not the whole circuit. It is a useful visible route through a larger dense infrastructure.
+
+The best simple interpretation is:
+
+```text
+L0/L1 components shape the residual stream.
+L2H1 uses that shaped residual stream to route from the query-side representation
+toward the relevant value-bearing token.
+L2H1 then writes strongly into the answer direction.
+L1H2 is another major direct writer/retriever.
+L0MLP is causally essential but not a direct answer writer.
+```
+
+### Actual Checkpoint Update Evidence
+
+The cleanest actual-update window is:
+
+```text
+step_005000 -> step_005250
+```
+
+For validation `query_key` causal pairs, the actual checkpoint movement explains route growth well:
+
+```text
+source route score: 2.894687
+target route score: 3.736807
+actual delta:       +0.842120
+predicted delta:    +0.946138
+relative error:      0.123520
+sign match:          true
+```
+
+For validation `distractor` controls:
+
+```text
+source route score: 0.028467
+target route score: 0.020617
+actual delta:       -0.007850
+predicted delta:    -0.006540
+relative error:      0.166864
+sign match:          true
+```
+
+Simple meaning:
+
+```text
+The real parameter update from 5000 to 5250 grew the query-key route.
+The same update did not grow the distractor-control route.
+```
+
+That is one of the strongest pieces of evidence so far.
+
+But the group decomposition says the update was not mainly inside `L2H1` itself. Top positive contributors to the query-key route growth were:
+
+```text
+L0 MLP              +0.310171
+L1 attention        +0.243085
+L0 attention        +0.215271
+L1H3 qkvo           +0.200743
+L0 out_proj         +0.159591
+L1 MLP              +0.118495
+L0H3 qkvo           +0.102137
+L0H2 qkvo           +0.083088
+L2H1 qkvo           +0.049206
+```
+
+Simple meaning:
+
+```text
+SGD did not just tune the final head.
+It mostly changed upstream layers so the residual stream became easier for L2H1 to use.
+```
+
+### Attention Geometry: Key-Side Hypothesis Failed
+
+We tested whether `L2H1` grows because it attends more strongly from the query key to the matching written key.
+
+That did not hold.
+
+For `5000 -> 5250`, support-key scores became worse:
+
+```text
+clean support_key score delta:     -0.488583
+corrupted support_key score delta: -0.534208
+```
+
+Attention to support-key positions was also tiny:
+
+```text
+support_key attention: about 0.001 to 0.003
+```
+
+So the narrow hypothesis:
+
+```text
+L2H1 solves the task by query-key -> written-key routing
+```
+
+is not supported.
+
+### Attention Geometry: Value-Side Route Looks Much Better
+
+The value-side score decomposition is stronger.
+
+For `5000 -> 5250`, `L2H1` support-value routing improved:
+
+```text
+clean support_value score delta:     +0.391587
+corrupted support_value score delta: +0.273075
+```
+
+Value distractor scores decreased in the same early window:
+
+```text
+clean value_distractor score delta:     -0.119647
+corrupted value_distractor score delta: -0.148914
+```
+
+Support-value attention also increased:
+
+```text
+clean support_value attention delta:     +0.018370
+corrupted support_value attention delta: +0.022667
+```
+
+Simple meaning:
+
+```text
+The route growth is not mainly query -> key.
+It is closer to query representation -> associated value-bearing token.
+```
+
+The attention geometry trace for `L2H1` supports this:
+
+```text
+step    support_value_qk_margin    support_value_attention    attended_ov_value_margin
+5000   -0.057844                   0.717795                   1.335116
+5250    0.009791                   0.740199                   1.576235
+7500    0.382215                   0.787017                   2.449040
+7750    0.424220                   0.791495                   2.436379
+8000    0.419836                   0.788349                   2.474642
+8250    0.571587                   0.787570                   2.490426
+```
+
+By `8250`, `L2H1` is the top head by:
+
+```text
+support_value_attention
+support_value_qk_margin
+attended_ov_value_margin
+low attention entropy
+```
+
+So the current route-level mechanism is:
+
+```text
+L2H1 becomes a value-facing retrieval/write head.
+```
+
+Not:
+
+```text
+L2H1 simply matches query keys to written keys.
+```
+
+### Direct Logit Attribution And Ablation
+
+Direct logit attribution says which components directly write in the correct answer direction.
+
+For final positive direct components:
+
+```text
+L2H1   DLA mean +4.674101
+L1H2   DLA mean +2.978323
+L2MLP  DLA mean +1.541451
+L0H0   DLA mean +0.856416
+```
+
+At `5250`, ablation confirms `L2H1` is load-bearing:
+
+```text
+L2H1 DLA mean:           +4.210372
+L2H1 margin drop:        8.256493
+L2H1 accuracy drop:      0.267356
+baseline margin:         6.944736
+ablated margin:         -1.311757
+```
+
+At `8000`, `L2H1` remains strongly causal:
+
+```text
+L2H1 DLA mean:           +4.695038
+L2H1 margin drop:        11.473013
+L2H1 accuracy drop:      0.360414
+baseline margin:         8.728830
+ablated margin:         -2.744183
+```
+
+`L1H2` is also major:
+
+```text
+5250 L1H2 DLA mean:      +3.918298
+5250 L1H2 margin drop:   8.173424
+
+8000 L1H2 DLA mean:      +3.031231
+8000 L1H2 margin drop:   8.769184
+```
+
+`L0MLP` is the clearest dense-infrastructure result:
+
+```text
+5250 L0MLP DLA mean:     -6.964605
+5250 L0MLP margin drop:  12.394523
+5250 L0MLP accuracy drop 0.740030
+
+8000 L0MLP DLA mean:     -3.247367
+8000 L0MLP margin drop:  19.306082
+8000 L0MLP accuracy drop 0.790251
+```
+
+Simple meaning:
+
+```text
+L0MLP is extremely important, but not because it directly writes the answer.
+It is shaping or maintaining an internal state that later heads need.
+```
+
+This is why neuron-level and feature-family analysis felt dense and confusing:
+
+```text
+some components are necessary without being direct answer writers.
+some direct writers are late.
+some early components prepare geometry rather than output logits.
+```
+
+### Data-Update Attribution
+
+The newest tool asks:
+
+```text
+Do data-group loss gradients point in the same direction as:
+1. the actual checkpoint update Delta theta?
+2. the route gradient for the candidate route?
+```
+
+This is not a replay of the exact historical optimizer batches. It is a source-checkpoint diagnostic.
+
+#### Validation Data
+
+Validation pair-type result:
+
+```text
+pair_type=query_key:
+  actual update loss reduction: +0.053188
+  route support:                -3.332346
+
+pair_type=distractor:
+  actual update loss reduction: +0.037117
+  route support:                -7.157533
+```
+
+Simple meaning:
+
+```text
+The actual update weakly helps validation loss,
+but validation loss gradients do not explain the route growth.
+They point against the route.
+```
+
+This is acceptable because validation is not the training source, but it means:
+
+```text
+validation data pressure is not the reason this route grew.
+```
+
+#### Train Data
+
+Train clean query-key grouping gives the important positive result.
+
+All queried-key groups have positive route support and positive actual-update alignment:
+
+```text
+query key   records   actual update loss reduction   route support
+K07         8         +0.087784                      +4.247879
+K02         19        +0.059131                      +3.160501
+K00         18        +0.044706                      +2.260123
+K04         24        +0.037901                      +1.863644
+K03         10        +0.028440                      +1.005445
+K05         20        +0.028078                      +0.785265
+K06         14        +0.044235                      +0.512089
+K01         15        +0.037800                      +0.164039
+```
+
+Aggregate train clean query-key result:
+
+```text
+actual update loss reduction: +0.043717
+route support:                +1.691921
+local SGD route delta:        +0.000677
+```
+
+Simple meaning:
+
+```text
+At the source checkpoint, train clean loss gradients do support growing this route.
+The support is uneven across keys, strongest for K07, K02, K00, and K04.
+```
+
+This is the first direct evidence connecting train data pressure to the candidate route.
+
+But there is an important caveat:
+
+```text
+actual route delta:                       +0.160702
+actual-update predicted route delta:      +0.393987
+relative error:                            1.45167
+sign match:                                true
+```
+
+So the direction is right, but the magnitude is not reliable in this train query-key run.
+
+This means:
+
+```text
+The train data result supports the direction of the SGD story.
+It does not close the exact quantitative proof.
+```
+
+Also, the train pair-type run should not be used as a pair-type comparison because `--loss-side clean` caused `query_key` and `distractor` groups to reuse the same clean source records. It produced duplicated values:
+
+```text
+pair_type=query_key route support:  +5.126363
+pair_type=distractor route support: +5.126363
+```
+
+This is not meaningful as a query-key versus distractor comparison.
+
+### Current Best Answer To The Why Question
+
+The current best answer is:
+
+```text
+SGD did not build an isolated L2H1 circuit from scratch.
+It moved many upstream parameters, especially L0/L1 attention and L0MLP,
+in a direction that made the layer_1_post_mlp residual stream better aligned
+with the route L2H1 can use.
+```
+
+Then:
+
+```text
+L2H1 routes from the query-side representation toward the associated value-bearing token.
+Its OV/readout path writes strongly into the answer direction.
+L1H2 also writes strongly.
+L0MLP remains necessary because it supports the internal geometry,
+even though its direct logit attribution is negative.
+```
+
+The data-update result adds:
+
+```text
+Train clean query-key gradients support this route.
+Validation gradients do not.
+```
+
+So the current working explanation is:
+
+```text
+The route grows because train loss pressure pushes the model toward a residual geometry
+that makes value-token routing useful. The final visible writer is L2H1, but much of the
+construction happens upstream.
+```
+
+### What Is Supported
+
+Supported by current artifacts:
+
+```text
+1. The model has a real query-key variable in the residual stream.
+2. L2H1 QK query-side carries a meaningful part of that variable.
+3. The real 5000 -> 5250 update grows the L2H1 query-key route on validation pairs.
+4. The same update does not grow the distractor-control route.
+5. L2H1 does not mainly route query -> support key.
+6. L2H1 more strongly routes query-side representations toward support value tokens.
+7. L2H1 is a major direct answer writer by DLA.
+8. Ablating L2H1 strongly damages margin and accuracy.
+9. L1H2 is also a major direct contributor.
+10. L0MLP is causally essential but not a direct positive answer writer.
+11. Train clean query-key gradients support growing the candidate route.
+12. The route support is uneven across query keys.
+```
+
+### What Is Not Yet Proven
+
+Not yet proven:
+
+```text
+1. Exact historical SGD causality from original minibatches.
+2. Exact quantitative first-order prediction on train query-key groups.
+3. That L2H1 is the winning route over all competing routes.
+4. That the same route appears across seeds.
+5. That the whole mechanism has been fully reverse engineered at neuron level.
+6. That feature family7/family4 are natural circuit units.
+7. That validation gradient pressure explains route growth.
+```
+
+### Current Research Position
+
+In simple words:
+
+```text
+We are no longer merely observing that components matter.
+We have a partially linked chain:
+
+train data gradient pressure
+  -> actual checkpoint update
+  -> upstream residual geometry changes
+  -> L2H1 value-facing route growth
+  -> direct answer-logit writing
+  -> causal ablation drop
+```
+
+But the chain is not closed enough to call it a mathematical proof.
+
+The current strongest conclusion is:
+
+```text
+SGD appears to build a dense upstream infrastructure that makes a late value-routing
+attention writer useful. L2H1 is one visible writer in that infrastructure, not the
+whole circuit.
+```
+
+The next proof should compare multiple candidate routes under the same actual-update and data-update framework:
+
+```text
+for candidate routes P, Q, R:
+  measure actual route delta
+  measure grad(route) . Delta theta
+  measure train data route support
+  measure value-side attention score delta
+  measure DLA and ablation drop
+
+Then ask:
+  which route is repeatedly selected by actual updates,
+  and which data groups explain that selection?
+```
+
+That is the next step toward explaining why SGD forms this route rather than another.
+
+## Optimizer-Trace And Stepwise Route-Competition Update
+
+This section appends the newer findings after the earlier `5000 -> 5250` data-update notes.
+
+The newer phase moved from sparse checkpoint attribution to a dense traced optimizer window:
+
+```text
+source checkpoint: step_005500.pt
+traced updates:    5501 -> 5550
+trace length:      50 real optimizer steps
+checkpointing:     every step
+device:            mps
+```
+
+Main artifacts:
+
+```text
+optimizer trace:
+  artifacts/runs/symbolic_kv_reference_formation/analysis/optimizer_update_trace/l2h1_support_value_5500_5550_stepwise/
+
+L2H1 retrieval-separation attribution:
+  artifacts/runs/symbolic_kv_reference_formation/analysis/attention_retrieval_separation_update_attribution/l2h1_support_value_5500_5550_stepwise/
+
+L1H2 retrieval-separation attribution:
+  artifacts/runs/symbolic_kv_reference_formation/analysis/attention_retrieval_separation_update_attribution/l1h2_support_value_5500_5550_stepwise/
+
+L0H0 retrieval-separation attribution:
+  artifacts/runs/symbolic_kv_reference_formation/analysis/attention_retrieval_separation_update_attribution/l0h0_support_value_5500_5550_stepwise/
+
+support-value route competition:
+  artifacts/runs/symbolic_kv_reference_formation/analysis/route_competition/support_value_routes_5500_5550_stepwise/
+```
+
+### Optimizer Trace Integrity
+
+The optimizer trace completed cleanly:
+
+```text
+steps recorded:              50
+batch rows recorded:         50
+dense checkpoints saved:     51
+total query events observed: 41688
+learning rate:               0.0004
+mean loss:                   1.166233
+mean token accuracy:         0.701193
+mean parameter update L2:    0.056640
+mean grad norm:              0.641036
+grad clipping active:        0 / 50 steps
+update dot -grad loss > 0:   50 / 50 steps
+```
+
+Simple meaning:
+
+```text
+The traced updates are normal optimizer steps.
+They are not being dominated by clipping.
+Each recorded update locally points in a loss-reducing direction.
+```
+
+Important caveat:
+
+```text
+This is an instrumented continuation from step 5500.
+It is not an exact replay of the original historical minibatches,
+because the old checkpoints did not save DataLoader sampler state or iterator offset.
+```
+
+So this window can prove:
+
+```text
+for this recorded continuation:
+  actual batch -> actual optimizer update -> route movement
+```
+
+It cannot prove:
+
+```text
+the exact original training minibatches at steps 5501 -> 5550
+```
+
+### Stepwise QK Retrieval-Separation Result
+
+The retrieval-separation scalar is:
+
+```text
+retrieval_separation =
+  score(prediction, correct support value)
+  - score(prediction, value distractors)
+```
+
+This is a QK attention-score geometry measurement, not an OV/write measurement.
+
+Across the 50 real optimizer steps:
+
+```text
+head    actual score growth   predicted growth   sign match   median relative error
+L2H1    +0.086687             +0.160357          50 / 50      0.037589
+L1H2    +0.128266             +0.141779          50 / 50      0.015119
+L0H0    +0.045533             +0.046169          49 / 50      0.008970
+```
+
+The score-level start and end values were:
+
+```text
+head    source score at 5500   final traced score at 5550
+L2H1    7.639491               7.726178
+L1H2    5.881868               6.010134
+L0H0    3.647361               3.692894
+```
+
+Simple meaning:
+
+```text
+L2H1 is already the strongest absolute support-value retriever in this window.
+L1H2 grows faster over these 50 traced steps.
+L0H0 grows weakly.
+```
+
+This corrects a possible overclaim.
+
+We should not say:
+
+```text
+SGD selected L2H1 QK over L1H2 QK during this window.
+```
+
+The raw result says:
+
+```text
+L2H1 is ahead in absolute QK retrieval separation,
+but L1H2 sharpens more during this short continuation.
+```
+
+The first-order approximation itself is strong:
+
+```text
+grad_theta retrieval_separation(theta_t) . Delta theta_t
+```
+
+tracks the sign of actual route movement almost perfectly at one-step resolution.
+
+This is a major improvement over sparse `250` or `500` step attribution windows.
+
+### Query-Side Versus Key-Side Update
+
+For the QK retrieval-separation decomposition:
+
+```text
+L2H1:
+  q_side actual growth: +0.155511
+  q_side predicted:     +0.157958
+  q_side sign match:    50 / 50
+
+  k_side actual growth: -0.076688
+  k_side predicted:     +0.002399
+  k_side sign match:    48 / 50
+
+L1H2:
+  q_side actual growth: +0.126756
+  q_side predicted:     +0.137788
+  q_side sign match:    50 / 50
+
+  k_side actual growth: +0.001139
+  k_side predicted:     +0.003992
+  k_side sign match:    50 / 50
+
+L0H0:
+  q_side actual growth: +0.036452
+  q_side predicted:     +0.036909
+  q_side sign match:    50 / 50
+
+  k_side actual growth: +0.009048
+  k_side predicted:     +0.009260
+  k_side sign match:    50 / 50
+```
+
+Simple meaning:
+
+```text
+For L2H1, the useful QK improvement in this window is mostly query-side.
+The key-side term moves against the total improvement.
+For L1H2 and L0H0, the query-side term also dominates, but their key-side terms do not conflict as strongly.
+```
+
+This supports the earlier intuition that a lot of circuit formation is upstream residual geometry:
+
+```text
+the model is shaping the representation at the prediction/query position
+more than it is cleanly changing only the support-value key vectors.
+```
+
+### Support-Value Route Competition
+
+The route-competition report measured a different object from QK retrieval separation.
+
+It measured support-value route transfer in subspaces like:
+
+```text
+head_ov_input at support_value
+embedding_value_identity at support_value
+full_residual at support_value
+```
+
+This is not the same as:
+
+```text
+QK attention-score separation
+```
+
+So the two results must not be collapsed into one claim.
+
+Cumulative route growth across the 50 traced one-step intervals:
+
+#### Evaluation Domain
+
+```text
+route                         actual route growth   predicted growth   sign match
+full_layer1_support_value      +0.913913            +2.512411          47 / 50
+L2H1_ov_input_support_value    +0.776056            +1.362492          49 / 50
+full_layer0_support_value      +0.423815            +3.313448          49 / 50
+L0H0_ov_input_support_value    +0.047569            +0.828024          48 / 50
+embedding_value_identity       +0.040278            +0.805444          47 / 50
+L1H2_ov_input_support_value    +0.008181            +0.735241          50 / 50
+```
+
+#### Train-Probe Domain
+
+```text
+route                         actual route growth   predicted growth   sign match
+full_layer1_support_value      +1.079115            +2.546266          44 / 50
+full_layer0_support_value      +0.861900            +3.477037          48 / 50
+L2H1_ov_input_support_value    +0.752303            +1.228640          50 / 50
+L1H2_ov_input_support_value    +0.309984            +0.970642          47 / 50
+embedding_value_identity       +0.228226            +0.916018          43 / 50
+L0H0_ov_input_support_value    +0.141234            +0.689243          48 / 50
+```
+
+Simple meaning:
+
+```text
+For support-value route transfer, L2H1 grows much more than L1H2 and L0H0.
+But full residual routes still grow more than individual-head routes.
+```
+
+This supports:
+
+```text
+L2H1 is a strong visible route, but the mechanism is still dense.
+```
+
+It does not support:
+
+```text
+L2H1 alone is the whole circuit.
+```
+
+### Data-Support Result From Route Competition
+
+The route-competition data rows still use probe-set train/eval examples, not the actual traced optimizer batches.
+
+So this is still a diagnostic:
+
+```text
+probe-set loss gradient -> route gradient
+```
+
+not the final actual-batch proof:
+
+```text
+recorded batch gradient -> actual update -> route growth
+```
+
+With that caveat, cumulative route support was:
+
+#### Train-Probe Support
+
+```text
+route                         route support sum   local SGD route delta sum
+full_layer0_support_value      +164.571831        +0.065829
+L0H0_ov_input_support_value     +26.368105        +0.010547
+embedding_value_identity        -23.962938        -0.009585
+L1H2_ov_input_support_value     -32.577114        -0.013031
+full_layer1_support_value       -41.870223        -0.016748
+L2H1_ov_input_support_value    -274.764803        -0.109906
+```
+
+#### Eval-Probe Support
+
+```text
+route                         route support sum   local SGD route delta sum
+L2H1_ov_input_support_value    +359.037039        +0.143615
+full_layer1_support_value      +130.117306        +0.052047
+L0H0_ov_input_support_value     -39.605441        -0.015842
+L1H2_ov_input_support_value     -54.686251        -0.021875
+embedding_value_identity       -267.812734        -0.107125
+full_layer0_support_value      -764.501600        -0.305801
+```
+
+This is surprising and important:
+
+```text
+In this traced continuation, probe-train gradients do not explain L2H1 support-value route growth.
+Eval-probe gradients support L2H1, but train-probe gradients oppose it.
+```
+
+This does not mean the actual recorded training batches opposed L2H1.
+
+It means:
+
+```text
+the old train-probe diagnostic is not enough.
+```
+
+The next necessary measurement is exactly:
+
+```text
+actual recorded batch at step t
+  -> batch loss gradient at theta_t
+  -> dot with route gradient
+  -> dot with actual Delta theta_t
+```
+
+### Actual-Batch Attribution Tool Status
+
+A new command was built for this missing link:
+
+```text
+actual-batch-route-attribution
+```
+
+It is designed to compute:
+
+```text
+actual_route_delta_t =
+  route(theta_{t+1}; source_basis_t) - route(theta_t; source_basis_t)
+
+actual_update_predicted_route_delta_t =
+  grad route(theta_t) . (theta_{t+1} - theta_t)
+
+actual_batch_route_support_t =
+  < -grad loss_batch_t(theta_t), grad route(theta_t) >
+
+actual_batch_update_alignment_t =
+  < -grad loss_batch_t(theta_t), theta_{t+1} - theta_t >
+```
+
+The command also checks that the recomputed batch loss matches the optimizer-trace loss before trusting the row.
+
+Current status:
+
+```text
+tool implemented: yes
+focused tests:    passed
+result available: not yet
+```
+
+The current output directory contains only:
+
+```text
+artifacts/runs/symbolic_kv_reference_formation/analysis/actual_batch_route_attribution/support_value_routes_5500_5550_stepwise/actual_batch_route_attribution_pairs.jsonl
+```
+
+No completed report/rows were present at the time of this append.
+
+So we must not yet claim:
+
+```text
+actual recorded training batches selected L2H1.
+```
+
+That claim requires the completed actual-batch attribution rows.
+
+### Updated Position After The 5500 -> 5550 Trace
+
+The evidence is now stronger in one specific way:
+
+```text
+At one-step resolution, actual parameter updates predict local route movement much better
+than sparse checkpoint intervals did.
+```
+
+But it also became clearer that the mechanism is not a simple single-head story:
+
+```text
+QK retrieval separation:
+  L2H1 is strongest in absolute score,
+  but L1H2 grows faster in this short traced window.
+
+Support-value route transfer:
+  L2H1 grows much more than L1H2/L0H0,
+  but full residual routes grow more than individual-head routes.
+
+Probe-set data support:
+  train-probe support does not explain L2H1 growth in this window,
+  so the actual recorded batch attribution is required.
+```
+
+Current best simple explanation:
+
+```text
+The model is not forming one clean isolated circuit.
+It is shaping a dense residual infrastructure.
+L2H1 is one strong late value-route/readout path inside that infrastructure.
+L1H2 continues sharpening retrieval geometry.
+Full residual pathways carry more growth than isolated head subspaces.
+```
+
+Current proof chain status:
+
+```text
+done:
+  actual optimizer update -> local QK retrieval-separation movement
+  actual optimizer update -> support-value route transfer movement
+  route competition between L2H1, L1H2, L0H0, embeddings, and full residual routes
+
+not done:
+  actual recorded batch gradient -> actual optimizer update -> route growth
+  actual route growth -> final answer-margin growth in the same traced window
+  cross-seed repeat
+  longer traced windows beyond 50 steps
+```
+
+The next report to trust should be:
+
+```text
+actual_batch_route_attribution_report.md
+```
+
+from:
+
+```text
+artifacts/runs/symbolic_kv_reference_formation/analysis/actual_batch_route_attribution/support_value_routes_5500_5550_stepwise/
+```
+
+Until that report exists, the honest claim is:
+
+```text
+We have closed the update-to-route part at one-step resolution.
+We have not yet closed the data-batch-to-update part.
+```

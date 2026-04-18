@@ -76,19 +76,26 @@ def generate_probe_set(
     examples_per_split: int,
     seed: int,
     overwrite: bool = False,
+    split_names: list[str] | None = None,
 ) -> tuple[Path, Path]:
     if output_path.exists() and not overwrite:
         raise FileExistsError(f"Probe-set output already exists: {output_path}")
     metadata_path = output_path.with_suffix(".metadata.json")
     if metadata_path.exists() and not overwrite:
         raise FileExistsError(f"Probe-set metadata already exists: {metadata_path}")
+    selected_splits = list(PROBE_SPLITS) if split_names is None else list(split_names)
+    if not selected_splits:
+        raise ValueError("Probe-set split_names must not be empty.")
+    duplicate_splits = sorted(split for split in set(selected_splits) if selected_splits.count(split) > 1)
+    if duplicate_splits:
+        raise ValueError(f"Probe-set split_names contains duplicates: {duplicate_splits}")
 
     rng = random.Random(seed)
     selected_records: list[dict[str, Any]] = []
     split_counts: dict[str, int] = {}
     split_axis_coverage: dict[str, list[dict[str, int]]] = {}
 
-    for split_name in PROBE_SPLITS:
+    for split_name in selected_splits:
         dataset = SymbolicKVDataset(benchmark_dir, split_name)
         chosen = _select_probe_records(dataset.records, limit=examples_per_split, rng=rng)
         selected_records.extend(chosen)
@@ -108,7 +115,7 @@ def generate_probe_set(
             "split_counts": split_counts,
             "split_axis_coverage": split_axis_coverage,
             "num_records": len(selected_records),
-            "splits": PROBE_SPLITS,
+            "splits": selected_splits,
         },
     )
     return output_path, metadata_path

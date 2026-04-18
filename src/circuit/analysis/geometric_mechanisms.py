@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import copy
 import math
 from collections import Counter, defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +16,8 @@ from circuit.analysis.shared_feature_dynamics import _import_matplotlib
 from circuit.config import TrainSpec
 from circuit.data.symbolic_kv_stream import collate_symbolic_kv, read_symbolic_kv_stream_metadata
 from circuit.io import append_jsonl, iter_jsonl, read_json, write_json, write_jsonl
-from circuit.runtime import build_model, load_checkpoint, load_model_state, move_batch_to_device, require_device
+from circuit.runtime import build_model, compute_lm_loss, load_checkpoint, load_model_state, move_batch_to_device, require_device
+from circuit.train import _compute_learning_rate
 from circuit.vocab import Vocabulary
 
 
@@ -23,6 +26,17 @@ ATTENTION_GEOMETRY_SCHEMA_VERSION = 1
 PATH_LOGIT_DECOMPOSITION_SCHEMA_VERSION = 1
 PROMPT_NEURON_TRACE_SCHEMA_VERSION = 1
 GEOMETRY_SUBSPACE_INTERVENTION_SCHEMA_VERSION = 1
+CAUSAL_VARIABLE_PATCH_SCHEMA_VERSION = 1
+CANDIDATE_ROUTE_GRADIENT_SELECTION_SCHEMA_VERSION = 1
+ROUTE_GRADIENT_DECOMPOSITION_SCHEMA_VERSION = 1
+CHECKPOINT_UPDATE_ATTRIBUTION_SCHEMA_VERSION = 1
+ATTENTION_SCORE_DELTA_DECOMPOSITION_SCHEMA_VERSION = 1
+ATTENTION_SCORE_UPDATE_ATTRIBUTION_SCHEMA_VERSION = 1
+ATTENTION_RETRIEVAL_SEPARATION_UPDATE_ATTRIBUTION_SCHEMA_VERSION = 1
+ATTENTION_RETRIEVAL_CHAIN_REPORT_SCHEMA_VERSION = 1
+ATTENTION_DOWNSTREAM_UPDATE_ATTRIBUTION_SCHEMA_VERSION = 1
+DATA_UPDATE_ATTRIBUTION_SCHEMA_VERSION = 1
+ROUTE_COMPETITION_REPORT_SCHEMA_VERSION = 1
 DATASET_GEOMETRY_SPLIT_ORDER = [
     "train",
     "validation_iid",
@@ -73,6 +87,12 @@ def _fraction(numerator: int, denominator: int, label: str) -> float:
     if denominator <= 0:
         raise ValueError(f"Cannot compute fraction for {label}: denominator must be positive.")
     return float(numerator / denominator)
+
+
+def _safe_ratio(numerator: float, denominator: float) -> float | None:
+    if denominator == 0.0:
+        return None
+    return numerator / denominator
 
 
 def _ordered_split_names(metadata: dict[str, Any]) -> list[str]:
@@ -4435,3 +4455,11627 @@ def run_geometry_subspace_intervention(
         flush=True,
     )
     return report_path, markdown_path, aggregate_rows_path, query_rows_path, plot_paths
+
+
+CAUSAL_VARIABLE_PAIR_TYPES = ["query_key", "support_value", "recency", "distractor"]
+CAUSAL_VARIABLE_PATCH_SUBSPACES = ["full_residual", *GEOMETRY_SUBSPACE_NAMES]
+
+
+def _holdout_pair_set(metadata: dict[str, Any]) -> set[tuple[str, str]]:
+    raw_pairs = metadata.get("holdout_pairs")
+    if raw_pairs is None:
+        raise KeyError("Benchmark metadata is missing holdout_pairs.")
+    if not isinstance(raw_pairs, list):
+        raise TypeError("Benchmark metadata holdout_pairs must be a list.")
+    pairs: set[tuple[str, str]] = set()
+    for raw_pair in raw_pairs:
+        if not isinstance(raw_pair, str) or ":" not in raw_pair:
+            raise ValueError(f"Invalid holdout pair entry: {raw_pair!r}")
+        key, value = raw_pair.split(":", maxsplit=1)
+        if not key or not value:
+            raise ValueError(f"Invalid holdout pair entry: {raw_pair!r}")
+        pairs.add((key, value))
+    return pairs
+
+
+def _answer_pair_type_for_value(*, key: str, value: str, holdout_pairs: set[tuple[str, str]]) -> str:
+    return "heldout" if (key, value) in holdout_pairs else "seen"
+
+
+def _find_write(record: dict[str, Any], write_index: int) -> dict[str, Any]:
+    matches = [write for write in record["writes"] if int(write["write_index"]) == write_index]
+    if len(matches) != 1:
+        raise RuntimeError(f"Expected one write index {write_index} in {record['sample_id']}, got {len(matches)}.")
+    return matches[0]
+
+
+def _find_write_step(record: dict[str, Any], write_index: int) -> dict[str, Any]:
+    matches = [
+        step
+        for step in record["steps"]
+        if step["op"] == "write" and int(step["write_index"]) == write_index
+    ]
+    if len(matches) != 1:
+        raise RuntimeError(f"Expected one write step {write_index} in {record['sample_id']}, got {len(matches)}.")
+    return matches[0]
+
+
+def _find_read_step(record: dict[str, Any], step_index: int) -> dict[str, Any]:
+    matches = [
+        step
+        for step in record["steps"]
+        if step["op"] == "read" and int(step["step_index"]) == step_index
+    ]
+    if len(matches) != 1:
+        raise RuntimeError(f"Expected one read step {step_index} in {record['sample_id']}, got {len(matches)}.")
+    return matches[0]
+
+
+def _latest_writes_before_event(record: dict[str, Any], event: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    query_step_index = int(event["step_index"])
+    latest: dict[str, dict[str, Any]] = {}
+    for step in record["steps"]:
+        step_index = int(step["step_index"])
+        if step_index >= query_step_index:
+            break
+        if step["op"] != "write":
+            continue
+        write_index = int(step["write_index"])
+        latest[str(step["key"])] = {
+            "write_index": write_index,
+            "key": str(step["key"]),
+            "value": str(step["value"]),
+            "positions": dict(step["positions"]),
+        }
+    return latest
+
+
+def _prior_read_uses_write(record: dict[str, Any], event: dict[str, Any], write_index: int) -> bool:
+    query_step_index = int(event["step_index"])
+    for step in record["steps"]:
+        step_index = int(step["step_index"])
+        if step_index >= query_step_index:
+            break
+        if step["op"] == "read" and int(step["support_write_index"]) == write_index:
+            return True
+    return False
+
+
+def _used_write_values(record: dict[str, Any]) -> set[str]:
+    return {str(write["value"]) for write in record["writes"]}
+
+
+def _replacement_value(
+    *,
+    vocab: Vocabulary,
+    key: str,
+    holdout_pairs: set[tuple[str, str]],
+    reference_pair_type: str,
+    excluded_values: set[str],
+) -> str | None:
+    if reference_pair_type not in {"seen", "heldout"}:
+        raise ValueError(f"Unsupported answer pair type for replacement: {reference_pair_type!r}")
+    require_holdout = reference_pair_type == "heldout"
+    candidates = [
+        value
+        for value in vocab.value_tokens
+        if value not in excluded_values and (((key, value) in holdout_pairs) == require_holdout)
+    ]
+    if not candidates:
+        return None
+    return candidates[0]
+
+
+def _make_single_query_record(
+    *,
+    source_record: dict[str, Any],
+    source_query_index: int,
+    sample_id: str,
+    vocab: Vocabulary,
+) -> dict[str, Any]:
+    if source_query_index < 0 or source_query_index >= len(source_record["query_events"]):
+        raise IndexError(
+            f"source_query_index {source_query_index} outside query range for {source_record['sample_id']}."
+        )
+    record = copy.deepcopy(source_record)
+    event = copy.deepcopy(source_record["query_events"][source_query_index])
+    current_read_step = _find_read_step(record, int(event["step_index"]))
+    event["query_index"] = 0
+    current_read_step["query_index"] = 0
+    record["sample_id"] = sample_id
+    record["source_sample_id"] = str(source_record["sample_id"])
+    record["source_query_index"] = source_query_index
+    record["query_events"] = [event]
+    record["query_plan"] = [
+        {
+            "slot_after_write": int(event["slot_after_write"]),
+            "key": str(event["key"]),
+            "support_write_index": int(event["support_write_index"]),
+            "writes_since_support": int(event["writes_since_support"]),
+        }
+    ]
+    record["token_ids"] = vocab.encode([str(token) for token in record["tokens"]])
+    _validate_pair_record(record=record, vocab=vocab)
+    return record
+
+
+def _set_write_value(*, record: dict[str, Any], write_index: int, value: str) -> None:
+    write = _find_write(record, write_index)
+    step = _find_write_step(record, write_index)
+    value_position = int(step["positions"]["value"])
+    write["value"] = value
+    step["value"] = value
+    record["tokens"][value_position] = value
+
+
+def _set_current_query_event(
+    *,
+    record: dict[str, Any],
+    key: str,
+    answer_value: str,
+    support_write_index: int,
+    holdout_pairs: set[tuple[str, str]],
+) -> None:
+    if len(record["query_events"]) != 1:
+        raise RuntimeError(f"Pair record must contain exactly one query event: {record['sample_id']}")
+    event = record["query_events"][0]
+    read_step = _find_read_step(record, int(event["step_index"]))
+    support_step = _find_write_step(record, support_write_index)
+    support_positions = dict(support_step["positions"])
+    query_key_position = int(event["positions"]["key"])
+    answer_position = int(event["positions"]["answer"])
+    if int(read_step["positions"]["key"]) != query_key_position:
+        raise RuntimeError(f"Read step/query event key position mismatch in {record['sample_id']}.")
+    if int(read_step["positions"]["answer"]) != answer_position:
+        raise RuntimeError(f"Read step/query event answer position mismatch in {record['sample_id']}.")
+
+    event["key"] = key
+    event["answer_value"] = answer_value
+    event["support_write_index"] = support_write_index
+    event["support_positions"] = support_positions
+    event["writes_since_support"] = int(event["slot_after_write"]) - support_write_index
+    event["tokens_since_support"] = answer_position - int(support_positions["value"])
+    event["answer_pair_type"] = _answer_pair_type_for_value(
+        key=key,
+        value=answer_value,
+        holdout_pairs=holdout_pairs,
+    )
+    read_step["key"] = key
+    read_step["value"] = answer_value
+    read_step["support_write_index"] = support_write_index
+    record["tokens"][query_key_position] = key
+    record["tokens"][answer_position] = answer_value
+    record["query_plan"] = [
+        {
+            "slot_after_write": int(event["slot_after_write"]),
+            "key": key,
+            "support_write_index": support_write_index,
+            "writes_since_support": int(event["writes_since_support"]),
+        }
+    ]
+
+
+def _validate_pair_record(*, record: dict[str, Any], vocab: Vocabulary) -> None:
+    if len(record["query_events"]) != 1:
+        raise RuntimeError(f"Causal patch pair record must contain exactly one query event: {record['sample_id']}")
+    event = record["query_events"][0]
+    read_step = _find_read_step(record, int(event["step_index"]))
+    if read_step["op"] != "read":
+        raise RuntimeError(f"Current event step is not a read step in {record['sample_id']}.")
+    if str(read_step["key"]) != str(event["key"]):
+        raise RuntimeError(f"Read step key disagrees with event key in {record['sample_id']}.")
+    if str(read_step["value"]) != str(event["answer_value"]):
+        raise RuntimeError(f"Read step answer disagrees with event answer in {record['sample_id']}.")
+    query_key_position = int(event["positions"]["key"])
+    answer_position = int(event["positions"]["answer"])
+    if str(record["tokens"][query_key_position]) != str(event["key"]):
+        raise RuntimeError(f"Query key token disagrees with event in {record['sample_id']}.")
+    if str(record["tokens"][answer_position]) != str(event["answer_value"]):
+        raise RuntimeError(f"Answer token disagrees with event in {record['sample_id']}.")
+    support_write_index = int(event["support_write_index"])
+    support_step = _find_write_step(record, support_write_index)
+    support_positions = dict(event["support_positions"])
+    if int(support_step["positions"]["value"]) != int(support_positions["value"]):
+        raise RuntimeError(f"Support value position mismatch in {record['sample_id']}.")
+    if str(support_step["value"]) != str(event["answer_value"]):
+        raise RuntimeError(f"Support write value disagrees with event answer in {record['sample_id']}.")
+    for step in record["steps"]:
+        positions = step["positions"]
+        if step["op"] == "write":
+            if str(record["tokens"][int(positions["key"])]) != str(step["key"]):
+                raise RuntimeError(f"Write key token mismatch in {record['sample_id']}.")
+            if str(record["tokens"][int(positions["value"])]) != str(step["value"]):
+                raise RuntimeError(f"Write value token mismatch in {record['sample_id']}.")
+        elif step["op"] == "read":
+            if str(record["tokens"][int(positions["key"])]) != str(step["key"]):
+                raise RuntimeError(f"Read key token mismatch in {record['sample_id']}.")
+            if str(record["tokens"][int(positions["answer"])]) != str(step["value"]):
+                raise RuntimeError(f"Read answer token mismatch in {record['sample_id']}.")
+        else:
+            raise RuntimeError(f"Unsupported step op in pair record {record['sample_id']}: {step['op']}")
+    token_ids = vocab.encode([str(token) for token in record["tokens"]])
+    if token_ids != list(record["token_ids"]):
+        raise RuntimeError(f"token_ids are stale in pair record {record['sample_id']}.")
+
+
+def _finalize_pair_record(*, record: dict[str, Any], vocab: Vocabulary) -> None:
+    record["token_ids"] = vocab.encode([str(token) for token in record["tokens"]])
+    _validate_pair_record(record=record, vocab=vocab)
+
+
+def _pair_metadata(pair: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in pair.items()
+        if key not in {"clean_record", "corrupted_record"}
+    }
+
+
+def _build_query_key_pair(
+    *,
+    source_record: dict[str, Any],
+    source_query_index: int,
+    vocab: Vocabulary,
+    holdout_pairs: set[tuple[str, str]],
+) -> tuple[dict[str, Any] | None, str | None]:
+    event = source_record["query_events"][source_query_index]
+    latest = _latest_writes_before_event(source_record, event)
+    query_key = str(event["key"])
+    clean_answer = str(event["answer_value"])
+    candidates = [
+        item
+        for key, item in sorted(latest.items())
+        if key != query_key and str(item["value"]) != clean_answer
+    ]
+    if not candidates:
+        return None, "no_alternative_current_key"
+    alternative = candidates[0]
+    pair_id = f"query_key:{source_record['sample_id']}:{source_query_index}:{alternative['key']}"
+    clean_record = _make_single_query_record(
+        source_record=source_record,
+        source_query_index=source_query_index,
+        sample_id=f"{pair_id}:clean",
+        vocab=vocab,
+    )
+    corrupted_record = _make_single_query_record(
+        source_record=source_record,
+        source_query_index=source_query_index,
+        sample_id=f"{pair_id}:corrupted",
+        vocab=vocab,
+    )
+    _set_current_query_event(
+        record=corrupted_record,
+        key=str(alternative["key"]),
+        answer_value=str(alternative["value"]),
+        support_write_index=int(alternative["write_index"]),
+        holdout_pairs=holdout_pairs,
+    )
+    _finalize_pair_record(record=corrupted_record, vocab=vocab)
+    return {
+        "pair_id": pair_id,
+        "pair_type": "query_key",
+        "split": str(source_record["split"]),
+        "source_sample_id": str(source_record["sample_id"]),
+        "source_query_index": source_query_index,
+        "clean_answer_value": clean_answer,
+        "corrupted_answer_value": str(alternative["value"]),
+        "clean_transfer_token": clean_answer,
+        "corrupted_transfer_token": str(alternative["value"]),
+        "mutation": {
+            "changed_role": "current_read_key",
+            "clean_query_key": query_key,
+            "corrupted_query_key": str(alternative["key"]),
+            "clean_support_write_index": int(event["support_write_index"]),
+            "corrupted_support_write_index": int(alternative["write_index"]),
+        },
+        "clean_record": clean_record,
+        "corrupted_record": corrupted_record,
+    }, None
+
+
+def _build_support_value_pair(
+    *,
+    source_record: dict[str, Any],
+    source_query_index: int,
+    vocab: Vocabulary,
+    holdout_pairs: set[tuple[str, str]],
+) -> tuple[dict[str, Any] | None, str | None]:
+    event = source_record["query_events"][source_query_index]
+    support_write_index = int(event["support_write_index"])
+    if _prior_read_uses_write(source_record, event, support_write_index):
+        return None, "support_write_used_by_prior_read"
+    query_key = str(event["key"])
+    clean_answer = str(event["answer_value"])
+    replacement = _replacement_value(
+        vocab=vocab,
+        key=query_key,
+        holdout_pairs=holdout_pairs,
+        reference_pair_type=str(event["answer_pair_type"]),
+        excluded_values={*_used_write_values(source_record), clean_answer},
+    )
+    if replacement is None:
+        return None, "no_replacement_value_for_support_pair_type"
+    pair_id = f"support_value:{source_record['sample_id']}:{source_query_index}:{replacement}"
+    clean_record = _make_single_query_record(
+        source_record=source_record,
+        source_query_index=source_query_index,
+        sample_id=f"{pair_id}:clean",
+        vocab=vocab,
+    )
+    corrupted_record = _make_single_query_record(
+        source_record=source_record,
+        source_query_index=source_query_index,
+        sample_id=f"{pair_id}:corrupted",
+        vocab=vocab,
+    )
+    _set_write_value(record=corrupted_record, write_index=support_write_index, value=replacement)
+    _set_current_query_event(
+        record=corrupted_record,
+        key=query_key,
+        answer_value=replacement,
+        support_write_index=support_write_index,
+        holdout_pairs=holdout_pairs,
+    )
+    _finalize_pair_record(record=corrupted_record, vocab=vocab)
+    return {
+        "pair_id": pair_id,
+        "pair_type": "support_value",
+        "split": str(source_record["split"]),
+        "source_sample_id": str(source_record["sample_id"]),
+        "source_query_index": source_query_index,
+        "clean_answer_value": clean_answer,
+        "corrupted_answer_value": replacement,
+        "clean_transfer_token": clean_answer,
+        "corrupted_transfer_token": replacement,
+        "mutation": {
+            "changed_role": "support_write_value",
+            "query_key": query_key,
+            "support_write_index": support_write_index,
+            "clean_support_value": clean_answer,
+            "corrupted_support_value": replacement,
+        },
+        "clean_record": clean_record,
+        "corrupted_record": corrupted_record,
+    }, None
+
+
+def _build_recency_pair(
+    *,
+    source_record: dict[str, Any],
+    source_query_index: int,
+    vocab: Vocabulary,
+    holdout_pairs: set[tuple[str, str]],
+) -> tuple[dict[str, Any] | None, str | None]:
+    event = source_record["query_events"][source_query_index]
+    support_write_index = int(event["support_write_index"])
+    query_key = str(event["key"])
+    stale_writes = [
+        write
+        for write in source_record["writes"]
+        if str(write["key"]) == query_key and int(write["write_index"]) < support_write_index
+    ]
+    stale_writes = sorted(stale_writes, key=lambda item: int(item["write_index"]), reverse=True)
+    if not stale_writes:
+        return None, "no_same_key_stale_write"
+    if _prior_read_uses_write(source_record, event, support_write_index):
+        return None, "support_write_used_by_prior_read"
+    clean_answer = str(event["answer_value"])
+    for stale_write in stale_writes:
+        stale_write_index = int(stale_write["write_index"])
+        if _prior_read_uses_write(source_record, event, stale_write_index):
+            continue
+        stale_value = str(stale_write["value"])
+        if stale_value == clean_answer:
+            continue
+        pair_id = f"recency:{source_record['sample_id']}:{source_query_index}:{stale_write_index}"
+        clean_record = _make_single_query_record(
+            source_record=source_record,
+            source_query_index=source_query_index,
+            sample_id=f"{pair_id}:clean",
+            vocab=vocab,
+        )
+        corrupted_record = _make_single_query_record(
+            source_record=source_record,
+            source_query_index=source_query_index,
+            sample_id=f"{pair_id}:corrupted",
+            vocab=vocab,
+        )
+        _set_write_value(record=corrupted_record, write_index=stale_write_index, value=clean_answer)
+        _set_write_value(record=corrupted_record, write_index=support_write_index, value=stale_value)
+        _set_current_query_event(
+            record=corrupted_record,
+            key=query_key,
+            answer_value=stale_value,
+            support_write_index=support_write_index,
+            holdout_pairs=holdout_pairs,
+        )
+        _finalize_pair_record(record=corrupted_record, vocab=vocab)
+        return {
+            "pair_id": pair_id,
+            "pair_type": "recency",
+            "split": str(source_record["split"]),
+            "source_sample_id": str(source_record["sample_id"]),
+            "source_query_index": source_query_index,
+            "clean_answer_value": clean_answer,
+            "corrupted_answer_value": stale_value,
+            "clean_transfer_token": clean_answer,
+            "corrupted_transfer_token": stale_value,
+            "mutation": {
+                "changed_role": "same_key_write_order_values",
+                "query_key": query_key,
+                "stale_write_index": stale_write_index,
+                "support_write_index": support_write_index,
+                "clean_latest_value": clean_answer,
+                "corrupted_latest_value": stale_value,
+            },
+            "clean_record": clean_record,
+            "corrupted_record": corrupted_record,
+        }, None
+    return None, "same_key_stale_writes_used_by_prior_reads"
+
+
+def _build_distractor_pair(
+    *,
+    source_record: dict[str, Any],
+    source_query_index: int,
+    vocab: Vocabulary,
+    holdout_pairs: set[tuple[str, str]],
+) -> tuple[dict[str, Any] | None, str | None]:
+    event = source_record["query_events"][source_query_index]
+    query_key = str(event["key"])
+    clean_answer = str(event["answer_value"])
+    candidate_writes = [
+        write
+        for write in source_record["writes"]
+        if str(write["key"]) != query_key and int(write["write_index"]) < int(event["slot_after_write"]) + 1
+    ]
+    candidate_writes = sorted(candidate_writes, key=lambda item: int(item["write_index"]), reverse=True)
+    if not candidate_writes:
+        return None, "no_distractor_write"
+    for distractor_write in candidate_writes:
+        write_index = int(distractor_write["write_index"])
+        if _prior_read_uses_write(source_record, event, write_index):
+            continue
+        distractor_key = str(distractor_write["key"])
+        clean_distractor_value = str(distractor_write["value"])
+        reference_pair_type = _answer_pair_type_for_value(
+            key=distractor_key,
+            value=clean_distractor_value,
+            holdout_pairs=holdout_pairs,
+        )
+        replacement = _replacement_value(
+            vocab=vocab,
+            key=distractor_key,
+            holdout_pairs=holdout_pairs,
+            reference_pair_type=reference_pair_type,
+            excluded_values={*_used_write_values(source_record), clean_answer, clean_distractor_value},
+        )
+        if replacement is None:
+            continue
+        pair_id = f"distractor:{source_record['sample_id']}:{source_query_index}:{write_index}:{replacement}"
+        clean_record = _make_single_query_record(
+            source_record=source_record,
+            source_query_index=source_query_index,
+            sample_id=f"{pair_id}:clean",
+            vocab=vocab,
+        )
+        corrupted_record = _make_single_query_record(
+            source_record=source_record,
+            source_query_index=source_query_index,
+            sample_id=f"{pair_id}:corrupted",
+            vocab=vocab,
+        )
+        _set_write_value(record=corrupted_record, write_index=write_index, value=replacement)
+        _finalize_pair_record(record=corrupted_record, vocab=vocab)
+        return {
+            "pair_id": pair_id,
+            "pair_type": "distractor",
+            "split": str(source_record["split"]),
+            "source_sample_id": str(source_record["sample_id"]),
+            "source_query_index": source_query_index,
+            "clean_answer_value": clean_answer,
+            "corrupted_answer_value": clean_answer,
+            "clean_transfer_token": clean_distractor_value,
+            "corrupted_transfer_token": replacement,
+            "mutation": {
+                "changed_role": "distractor_write_value",
+                "distractor_key": distractor_key,
+                "distractor_write_index": write_index,
+                "clean_distractor_value": clean_distractor_value,
+                "corrupted_distractor_value": replacement,
+                "query_key": query_key,
+            },
+            "clean_record": clean_record,
+            "corrupted_record": corrupted_record,
+        }, None
+    return None, "no_eligible_distractor_replacement"
+
+
+def _build_causal_patch_pair(
+    *,
+    pair_type: str,
+    source_record: dict[str, Any],
+    source_query_index: int,
+    vocab: Vocabulary,
+    holdout_pairs: set[tuple[str, str]],
+) -> tuple[dict[str, Any] | None, str | None]:
+    if pair_type == "query_key":
+        return _build_query_key_pair(
+            source_record=source_record,
+            source_query_index=source_query_index,
+            vocab=vocab,
+            holdout_pairs=holdout_pairs,
+        )
+    if pair_type == "support_value":
+        return _build_support_value_pair(
+            source_record=source_record,
+            source_query_index=source_query_index,
+            vocab=vocab,
+            holdout_pairs=holdout_pairs,
+        )
+    if pair_type == "recency":
+        return _build_recency_pair(
+            source_record=source_record,
+            source_query_index=source_query_index,
+            vocab=vocab,
+            holdout_pairs=holdout_pairs,
+        )
+    if pair_type == "distractor":
+        return _build_distractor_pair(
+            source_record=source_record,
+            source_query_index=source_query_index,
+            vocab=vocab,
+            holdout_pairs=holdout_pairs,
+        )
+    raise ValueError(f"Unsupported causal variable pair type {pair_type!r}; expected one of {CAUSAL_VARIABLE_PAIR_TYPES}.")
+
+
+def _build_causal_patch_pairs(
+    *,
+    probe_records: list[dict[str, Any]],
+    vocab: Vocabulary,
+    holdout_pairs: set[tuple[str, str]],
+    pair_types: list[str],
+    max_pairs_per_type: int,
+    min_pairs_per_type: int,
+    split_filter: list[str] | None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if not pair_types:
+        raise ValueError("At least one pair type is required.")
+    unsupported = [pair_type for pair_type in pair_types if pair_type not in CAUSAL_VARIABLE_PAIR_TYPES]
+    if unsupported:
+        raise ValueError(f"Unsupported pair types {unsupported}; expected one of {CAUSAL_VARIABLE_PAIR_TYPES}.")
+    if max_pairs_per_type <= 0:
+        raise ValueError("max_pairs_per_type must be positive.")
+    if min_pairs_per_type <= 0:
+        raise ValueError("min_pairs_per_type must be positive.")
+    if min_pairs_per_type > max_pairs_per_type:
+        raise ValueError("min_pairs_per_type cannot exceed max_pairs_per_type.")
+    split_set = set(split_filter) if split_filter is not None else None
+    pairs: list[dict[str, Any]] = []
+    counts: Counter[str] = Counter()
+    skip_reasons: dict[str, Counter[str]] = {pair_type: Counter() for pair_type in pair_types}
+    scanned_queries: Counter[str] = Counter()
+    scanned_records = 0
+
+    for record in probe_records:
+        split = str(record["split"])
+        if split_set is not None and split not in split_set:
+            continue
+        scanned_records += 1
+        for source_query_index in range(len(record["query_events"])):
+            for pair_type in pair_types:
+                if counts[pair_type] >= max_pairs_per_type:
+                    continue
+                scanned_queries[pair_type] += 1
+                pair, skip_reason = _build_causal_patch_pair(
+                    pair_type=pair_type,
+                    source_record=record,
+                    source_query_index=source_query_index,
+                    vocab=vocab,
+                    holdout_pairs=holdout_pairs,
+                )
+                if pair is None:
+                    if skip_reason is None:
+                        raise RuntimeError(f"Pair builder returned no pair and no skip reason for {pair_type}.")
+                    skip_reasons[pair_type][skip_reason] += 1
+                    continue
+                pairs.append(pair)
+                counts[pair_type] += 1
+            if all(counts[pair_type] >= max_pairs_per_type for pair_type in pair_types):
+                break
+        if all(counts[pair_type] >= max_pairs_per_type for pair_type in pair_types):
+            break
+
+    too_few = {
+        pair_type: int(counts[pair_type])
+        for pair_type in pair_types
+        if counts[pair_type] < min_pairs_per_type
+    }
+    if too_few:
+        reason_summary = {
+            pair_type: dict(skip_reasons[pair_type].most_common())
+            for pair_type in pair_types
+        }
+        if split_set is not None and scanned_records == 0:
+            available_splits = sorted({str(record["split"]) for record in probe_records})
+            raise RuntimeError(
+                "Failed to construct causal patch pairs because split_filter matched no probe records: "
+                f"split_filter={sorted(split_set)} available_splits={available_splits}"
+            )
+        raise RuntimeError(
+            "Failed to construct the requested minimum causal patch pairs: "
+            f"counts={too_few} min_pairs_per_type={min_pairs_per_type} skip_reasons={reason_summary}"
+        )
+
+    return pairs, {
+        "requested_pair_types": pair_types,
+        "split_filter": sorted(split_set) if split_set is not None else None,
+        "max_pairs_per_type": max_pairs_per_type,
+        "min_pairs_per_type": min_pairs_per_type,
+        "scanned_records": scanned_records,
+        "constructed_counts": {pair_type: int(counts[pair_type]) for pair_type in pair_types},
+        "scanned_queries": {pair_type: int(scanned_queries[pair_type]) for pair_type in pair_types},
+        "skip_reasons": {
+            pair_type: [
+                {"reason": reason, "count": int(count)}
+                for reason, count in skip_reasons[pair_type].most_common()
+            ]
+            for pair_type in pair_types
+        },
+    }
+
+
+def _resolve_causal_patch_basis(
+    *,
+    model: torch.nn.Module,
+    vocab: Vocabulary,
+    subspace_name: str,
+    rank: int | None,
+    head_layer: int | None,
+    head: int | None,
+    device: torch.device,
+) -> tuple[torch.Tensor | None, dict[str, Any]]:
+    if subspace_name not in CAUSAL_VARIABLE_PATCH_SUBSPACES:
+        raise ValueError(
+            f"Unsupported causal patch subspace {subspace_name!r}; expected one of {CAUSAL_VARIABLE_PATCH_SUBSPACES}."
+        )
+    if subspace_name == "full_residual":
+        if rank is not None:
+            raise ValueError("full_residual patching does not use --rank.")
+        if head_layer is not None or head is not None:
+            raise ValueError("full_residual patching does not use --head-layer or --head.")
+        return None, {
+            "subspace_name": subspace_name,
+            "subspace_type": "full_residual",
+            "selected_rank": None,
+            "basis_svd_device": None,
+        }
+    if rank is None:
+        raise ValueError(f"{subspace_name} requires --rank.")
+    return _resolve_geometry_subspace_basis(
+        model=model,
+        vocab=vocab,
+        subspace_name=subspace_name,
+        rank=rank,
+        head_layer=head_layer,
+        head=head,
+        device=device,
+    )
+
+
+def _replace_projection_from_clean(
+    *,
+    clean_vectors: torch.Tensor,
+    corrupted_vectors: torch.Tensor,
+    basis: torch.Tensor | None,
+) -> torch.Tensor:
+    if clean_vectors.shape != corrupted_vectors.shape:
+        raise ValueError(
+            f"Clean/corrupted selected vector shapes differ: {tuple(clean_vectors.shape)} vs {tuple(corrupted_vectors.shape)}"
+        )
+    if clean_vectors.ndim != 2:
+        raise ValueError(f"Expected selected vectors to be rank-2, got shape {tuple(clean_vectors.shape)}.")
+    if basis is None:
+        return clean_vectors
+    basis = basis.to(device=corrupted_vectors.device, dtype=corrupted_vectors.dtype)
+    clean_projection = clean_vectors.matmul(basis).matmul(basis.T)
+    corrupted_projection = corrupted_vectors.matmul(basis).matmul(basis.T)
+    return corrupted_vectors - corrupted_projection + clean_projection
+
+
+def _transfer_stage_tensor(
+    *,
+    clean_stage: torch.Tensor,
+    corrupted_stage: torch.Tensor,
+    clean_selected: list[tuple[int, list[int]]],
+    corrupted_selected: list[tuple[int, list[int]]],
+    basis: torch.Tensor | None,
+) -> torch.Tensor:
+    if clean_stage.shape != corrupted_stage.shape:
+        raise ValueError(
+            f"Clean/corrupted stage shapes differ: {tuple(clean_stage.shape)} vs {tuple(corrupted_stage.shape)}"
+        )
+    if len(clean_selected) != len(corrupted_selected):
+        raise ValueError("Clean/corrupted selected position lists have different lengths.")
+    patched = corrupted_stage.clone()
+    for pair_index, ((clean_row, clean_positions), (corrupted_row, corrupted_positions)) in enumerate(
+        zip(clean_selected, corrupted_selected, strict=True)
+    ):
+        if len(clean_positions) != len(corrupted_positions):
+            raise RuntimeError(
+                f"Pair {pair_index} has different clean/corrupted position counts: "
+                f"{len(clean_positions)} vs {len(corrupted_positions)}."
+            )
+        if not clean_positions:
+            raise RuntimeError(f"Pair {pair_index} has no selected positions.")
+        clean_position_tensor = torch.tensor(clean_positions, device=clean_stage.device, dtype=torch.long)
+        corrupted_position_tensor = torch.tensor(corrupted_positions, device=corrupted_stage.device, dtype=torch.long)
+        clean_vectors = clean_stage[clean_row, clean_position_tensor, :]
+        corrupted_vectors = corrupted_stage[corrupted_row, corrupted_position_tensor, :]
+        patched_vectors = _replace_projection_from_clean(
+            clean_vectors=clean_vectors,
+            corrupted_vectors=corrupted_vectors,
+            basis=basis,
+        )
+        patched[corrupted_row, corrupted_position_tensor, :] = patched_vectors
+    return patched
+
+
+def _validate_single_query_batch(
+    *,
+    batch: dict[str, Any],
+    metadata: dict[str, torch.Tensor],
+    label: str,
+) -> None:
+    expected = len(batch["records"])
+    if int(metadata["rows"].numel()) != expected:
+        raise RuntimeError(f"{label} batch produced {metadata['rows'].numel()} query rows, expected {expected}.")
+    expected_rows = torch.arange(expected, device=metadata["rows"].device, dtype=metadata["rows"].dtype)
+    if not torch.equal(metadata["rows"], expected_rows):
+        raise RuntimeError(f"{label} batch query rows are not one query per record in order.")
+    if not torch.equal(metadata["query_indices"], torch.zeros_like(metadata["query_indices"])):
+        raise RuntimeError(f"{label} batch query indices are not all zero.")
+
+
+def _value_predictions(
+    *,
+    answer_logits: torch.Tensor,
+    value_token_ids: torch.Tensor,
+    vocab: Vocabulary,
+) -> list[str]:
+    value_logits = answer_logits.index_select(dim=-1, index=value_token_ids)
+    predicted_value_offsets = value_logits.argmax(dim=-1)
+    predicted_token_ids = value_token_ids.index_select(0, predicted_value_offsets)
+    return vocab.decode([int(token_id) for token_id in predicted_token_ids.detach().cpu().tolist()])
+
+
+def _margin_for_targets(
+    *,
+    answer_logits: torch.Tensor,
+    target_token_ids: torch.Tensor,
+    value_token_ids: torch.Tensor,
+) -> torch.Tensor:
+    return _value_margin(answer_logits, target_token_ids, value_token_ids)
+
+
+def _contrast_margin(
+    *,
+    answer_logits: torch.Tensor,
+    positive_token_ids: torch.Tensor,
+    negative_token_ids: torch.Tensor,
+) -> torch.Tensor:
+    if positive_token_ids.shape != negative_token_ids.shape:
+        raise ValueError("positive_token_ids and negative_token_ids must have the same shape.")
+    row_index = torch.arange(answer_logits.size(0), device=answer_logits.device)
+    return answer_logits[row_index, positive_token_ids] - answer_logits[row_index, negative_token_ids]
+
+
+def _token_ids_for_values(*, values: list[str], vocab: Vocabulary, device: torch.device) -> torch.Tensor:
+    token_ids: list[int] = []
+    for value in values:
+        if value not in vocab.token_to_id:
+            raise KeyError(f"Value token {value!r} is missing from the vocabulary.")
+        if value not in vocab.value_tokens:
+            raise ValueError(f"Transfer token {value!r} is not a value token.")
+        token_ids.append(int(vocab.token_to_id[value]))
+    return torch.tensor(token_ids, device=device, dtype=torch.long)
+
+
+def _float_item(tensor: torch.Tensor, index: int) -> float:
+    return float(tensor[index].detach().float().cpu().item())
+
+
+def _compute_causal_patch_checkpoint(
+    *,
+    model: torch.nn.Module,
+    pairs: list[dict[str, Any]],
+    vocab: Vocabulary,
+    checkpoint_step: int,
+    basis: torch.Tensor | None,
+    subspace_summary: dict[str, Any],
+    subspace_name: str,
+    rank: int | None,
+    stage_name: str,
+    position_role: str,
+    batch_size: int,
+    pad_token_id: int,
+    device: torch.device,
+    min_recovery_denominator: float,
+    progress_every_pairs: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    if progress_every_pairs < 0:
+        raise ValueError("progress_every_pairs must be non-negative.")
+    if min_recovery_denominator < 0.0:
+        raise ValueError("min_recovery_denominator must be non-negative.")
+    value_token_ids = torch.tensor(vocab.value_token_ids, device=device, dtype=torch.long)
+    query_rows: list[dict[str, Any]] = []
+    processed_pairs = 0
+
+    for start_index in range(0, len(pairs), batch_size):
+        pair_batch = pairs[start_index : start_index + batch_size]
+        clean_records = [pair["clean_record"] for pair in pair_batch]
+        corrupted_records = [pair["corrupted_record"] for pair in pair_batch]
+        clean_batch = move_batch_to_device(collate_symbolic_kv(clean_records, pad_token_id), device)
+        corrupted_batch = move_batch_to_device(collate_symbolic_kv(corrupted_records, pad_token_id), device)
+
+        with torch.no_grad():
+            clean_outputs = model(
+                clean_batch["input_ids"],
+                attention_mask=clean_batch["attention_mask"],
+                return_residual_streams=True,
+            )
+            corrupted_outputs = model(
+                corrupted_batch["input_ids"],
+                attention_mask=corrupted_batch["attention_mask"],
+                return_residual_streams=True,
+            )
+        if clean_outputs.residual_streams is None or corrupted_outputs.residual_streams is None:
+            raise RuntimeError("Causal variable patching requires residual streams.")
+        if stage_name not in clean_outputs.residual_streams:
+            raise KeyError(f"Stage {stage_name!r} not found in clean residual streams.")
+        if stage_name not in corrupted_outputs.residual_streams:
+            raise KeyError(f"Stage {stage_name!r} not found in corrupted residual streams.")
+
+        clean_answer_logits, clean_answer_targets, clean_metadata = extract_answer_logits(
+            clean_outputs.logits,
+            clean_batch,
+        )
+        corrupted_answer_logits, corrupted_answer_targets, corrupted_metadata = extract_answer_logits(
+            corrupted_outputs.logits,
+            corrupted_batch,
+        )
+        _validate_single_query_batch(batch=clean_batch, metadata=clean_metadata, label="clean")
+        _validate_single_query_batch(batch=corrupted_batch, metadata=corrupted_metadata, label="corrupted")
+
+        clean_selected = [
+            _intervention_positions_for_query(
+                batch=clean_batch,
+                metadata=clean_metadata,
+                flat_index=flat_index,
+                position_role=position_role,
+            )
+            for flat_index in range(len(pair_batch))
+        ]
+        corrupted_selected = [
+            _intervention_positions_for_query(
+                batch=corrupted_batch,
+                metadata=corrupted_metadata,
+                flat_index=flat_index,
+                position_role=position_role,
+            )
+            for flat_index in range(len(pair_batch))
+        ]
+        patched_stage = _transfer_stage_tensor(
+            clean_stage=clean_outputs.residual_streams[stage_name],
+            corrupted_stage=corrupted_outputs.residual_streams[stage_name],
+            clean_selected=clean_selected,
+            corrupted_selected=corrupted_selected,
+            basis=basis,
+        )
+        with torch.no_grad():
+            patched_outputs = model(
+                corrupted_batch["input_ids"],
+                attention_mask=corrupted_batch["attention_mask"],
+                residual_patch={stage_name: patched_stage},
+            )
+        patched_answer_logits, patched_corrupted_targets, patched_metadata = extract_answer_logits(
+            patched_outputs.logits,
+            corrupted_batch,
+        )
+        _validate_query_metadata_match(
+            baseline_metadata=corrupted_metadata,
+            patched_metadata=patched_metadata,
+        )
+        if not torch.equal(corrupted_answer_targets.detach().cpu(), patched_corrupted_targets.detach().cpu()):
+            raise RuntimeError("Patched forward changed corrupted answer targets.")
+
+        clean_transfer_ids = _token_ids_for_values(
+            values=[str(pair["clean_transfer_token"]) for pair in pair_batch],
+            vocab=vocab,
+            device=device,
+        )
+        corrupted_transfer_ids = _token_ids_for_values(
+            values=[str(pair["corrupted_transfer_token"]) for pair in pair_batch],
+            vocab=vocab,
+            device=device,
+        )
+        clean_answer_ids = _token_ids_for_values(
+            values=[str(pair["clean_answer_value"]) for pair in pair_batch],
+            vocab=vocab,
+            device=device,
+        )
+        corrupted_answer_ids = _token_ids_for_values(
+            values=[str(pair["corrupted_answer_value"]) for pair in pair_batch],
+            vocab=vocab,
+            device=device,
+        )
+        if not torch.equal(clean_answer_targets, clean_answer_ids):
+            raise RuntimeError("Clean batch answer targets disagree with pair metadata.")
+        if not torch.equal(corrupted_answer_targets, corrupted_answer_ids):
+            raise RuntimeError("Corrupted batch answer targets disagree with pair metadata.")
+
+        clean_value_margin = _margin_for_targets(
+            answer_logits=clean_answer_logits,
+            target_token_ids=clean_answer_ids,
+            value_token_ids=value_token_ids,
+        )
+        corrupted_value_margin = _margin_for_targets(
+            answer_logits=corrupted_answer_logits,
+            target_token_ids=corrupted_answer_ids,
+            value_token_ids=value_token_ids,
+        )
+        corrupted_clean_answer_margin = _margin_for_targets(
+            answer_logits=corrupted_answer_logits,
+            target_token_ids=clean_answer_ids,
+            value_token_ids=value_token_ids,
+        )
+        patched_clean_answer_margin = _margin_for_targets(
+            answer_logits=patched_answer_logits,
+            target_token_ids=clean_answer_ids,
+            value_token_ids=value_token_ids,
+        )
+        patched_corrupted_answer_margin = _margin_for_targets(
+            answer_logits=patched_answer_logits,
+            target_token_ids=corrupted_answer_ids,
+            value_token_ids=value_token_ids,
+        )
+        transfer_margin_clean = _contrast_margin(
+            answer_logits=clean_answer_logits,
+            positive_token_ids=clean_transfer_ids,
+            negative_token_ids=corrupted_transfer_ids,
+        )
+        transfer_margin_corrupted = _contrast_margin(
+            answer_logits=corrupted_answer_logits,
+            positive_token_ids=clean_transfer_ids,
+            negative_token_ids=corrupted_transfer_ids,
+        )
+        transfer_margin_patched = _contrast_margin(
+            answer_logits=patched_answer_logits,
+            positive_token_ids=clean_transfer_ids,
+            negative_token_ids=corrupted_transfer_ids,
+        )
+
+        clean_predictions = _value_predictions(
+            answer_logits=clean_answer_logits,
+            value_token_ids=value_token_ids,
+            vocab=vocab,
+        )
+        corrupted_predictions = _value_predictions(
+            answer_logits=corrupted_answer_logits,
+            value_token_ids=value_token_ids,
+            vocab=vocab,
+        )
+        patched_predictions = _value_predictions(
+            answer_logits=patched_answer_logits,
+            value_token_ids=value_token_ids,
+            vocab=vocab,
+        )
+
+        for pair_index, pair in enumerate(pair_batch):
+            clean_position_list = [int(position) for position in clean_selected[pair_index][1]]
+            corrupted_position_list = [int(position) for position in corrupted_selected[pair_index][1]]
+            recovery_denominator = _float_item(transfer_margin_clean, pair_index) - _float_item(
+                transfer_margin_corrupted,
+                pair_index,
+            )
+            transfer_delta = _float_item(transfer_margin_patched, pair_index) - _float_item(
+                transfer_margin_corrupted,
+                pair_index,
+            )
+            recovery_defined = abs(recovery_denominator) >= min_recovery_denominator
+            transfer_recovery = transfer_delta / recovery_denominator if recovery_defined else None
+            clean_answer_value = str(pair["clean_answer_value"])
+            corrupted_answer_value = str(pair["corrupted_answer_value"])
+            query_rows.append(
+                {
+                    "step": checkpoint_step,
+                    "pair_id": str(pair["pair_id"]),
+                    "pair_type": str(pair["pair_type"]),
+                    "split": str(pair["split"]),
+                    "source_sample_id": str(pair["source_sample_id"]),
+                    "source_query_index": int(pair["source_query_index"]),
+                    "stage": stage_name,
+                    "subspace_name": subspace_name,
+                    "subspace_type": str(subspace_summary["subspace_type"]),
+                    "head_label": subspace_summary.get("head_label"),
+                    "rank": rank,
+                    "position_role": position_role,
+                    "clean_answer_value": clean_answer_value,
+                    "corrupted_answer_value": corrupted_answer_value,
+                    "clean_transfer_token": str(pair["clean_transfer_token"]),
+                    "corrupted_transfer_token": str(pair["corrupted_transfer_token"]),
+                    "mutation": pair["mutation"],
+                    "clean_value_margin": _float_item(clean_value_margin, pair_index),
+                    "corrupted_value_margin": _float_item(corrupted_value_margin, pair_index),
+                    "corrupted_clean_answer_margin": _float_item(corrupted_clean_answer_margin, pair_index),
+                    "patched_clean_answer_margin": _float_item(patched_clean_answer_margin, pair_index),
+                    "patched_corrupted_answer_margin": _float_item(patched_corrupted_answer_margin, pair_index),
+                    "transfer_margin_clean": _float_item(transfer_margin_clean, pair_index),
+                    "transfer_margin_corrupted": _float_item(transfer_margin_corrupted, pair_index),
+                    "transfer_margin_patched": _float_item(transfer_margin_patched, pair_index),
+                    "transfer_margin_delta": transfer_delta,
+                    "recovery_denominator": recovery_denominator,
+                    "transfer_recovery": transfer_recovery,
+                    "recovery_defined": recovery_defined,
+                    "clean_prediction": clean_predictions[pair_index],
+                    "corrupted_prediction": corrupted_predictions[pair_index],
+                    "patched_prediction": patched_predictions[pair_index],
+                    "clean_predicts_clean_answer": clean_predictions[pair_index] == clean_answer_value,
+                    "corrupted_predicts_corrupted_answer": corrupted_predictions[pair_index] == corrupted_answer_value,
+                    "patched_predicts_clean_answer": patched_predictions[pair_index] == clean_answer_value,
+                    "patched_predicts_corrupted_answer": patched_predictions[pair_index] == corrupted_answer_value,
+                    "clean_selected_positions": clean_position_list,
+                    "corrupted_selected_positions": corrupted_position_list,
+                    "selected_position_count": len(corrupted_position_list),
+                }
+            )
+        processed_pairs += len(pair_batch)
+        if progress_every_pairs and processed_pairs % progress_every_pairs == 0:
+            print(
+                "[causal-variable-patch] "
+                f"step={checkpoint_step} processed_pairs={processed_pairs}/{len(pairs)}",
+                flush=True,
+            )
+
+    aggregate_rows = _aggregate_causal_patch_rows(
+        query_rows=query_rows,
+        step=checkpoint_step,
+        subspace_summary=subspace_summary,
+        subspace_name=subspace_name,
+        rank=rank,
+        stage_name=stage_name,
+        position_role=position_role,
+    )
+    return aggregate_rows, query_rows
+
+
+def _new_causal_patch_accumulator() -> dict[str, float]:
+    return {
+        "clean_value_margin_sum": 0.0,
+        "corrupted_value_margin_sum": 0.0,
+        "corrupted_clean_answer_margin_sum": 0.0,
+        "patched_clean_answer_margin_sum": 0.0,
+        "patched_corrupted_answer_margin_sum": 0.0,
+        "transfer_margin_clean_sum": 0.0,
+        "transfer_margin_corrupted_sum": 0.0,
+        "transfer_margin_patched_sum": 0.0,
+        "transfer_margin_delta_sum": 0.0,
+        "transfer_margin_delta_abs_sum": 0.0,
+        "recovery_sum": 0.0,
+        "recovery_abs_sum": 0.0,
+        "recovery_positive_count": 0.0,
+        "recovery_negative_count": 0.0,
+        "recovery_defined_count": 0.0,
+        "clean_predicts_clean_answer_count": 0.0,
+        "corrupted_predicts_corrupted_answer_count": 0.0,
+        "patched_predicts_clean_answer_count": 0.0,
+        "patched_predicts_corrupted_answer_count": 0.0,
+        "total": 0.0,
+    }
+
+
+def _accumulate_causal_patch_row(accumulator: dict[str, float], row: dict[str, Any]) -> None:
+    accumulator["clean_value_margin_sum"] += float(row["clean_value_margin"])
+    accumulator["corrupted_value_margin_sum"] += float(row["corrupted_value_margin"])
+    accumulator["corrupted_clean_answer_margin_sum"] += float(row["corrupted_clean_answer_margin"])
+    accumulator["patched_clean_answer_margin_sum"] += float(row["patched_clean_answer_margin"])
+    accumulator["patched_corrupted_answer_margin_sum"] += float(row["patched_corrupted_answer_margin"])
+    accumulator["transfer_margin_clean_sum"] += float(row["transfer_margin_clean"])
+    accumulator["transfer_margin_corrupted_sum"] += float(row["transfer_margin_corrupted"])
+    accumulator["transfer_margin_patched_sum"] += float(row["transfer_margin_patched"])
+    accumulator["transfer_margin_delta_sum"] += float(row["transfer_margin_delta"])
+    accumulator["transfer_margin_delta_abs_sum"] += abs(float(row["transfer_margin_delta"]))
+    if bool(row["recovery_defined"]):
+        recovery = float(row["transfer_recovery"])
+        accumulator["recovery_sum"] += recovery
+        accumulator["recovery_abs_sum"] += abs(recovery)
+        if recovery > 0.0:
+            accumulator["recovery_positive_count"] += 1.0
+        if recovery < 0.0:
+            accumulator["recovery_negative_count"] += 1.0
+        accumulator["recovery_defined_count"] += 1.0
+    if bool(row["clean_predicts_clean_answer"]):
+        accumulator["clean_predicts_clean_answer_count"] += 1.0
+    if bool(row["corrupted_predicts_corrupted_answer"]):
+        accumulator["corrupted_predicts_corrupted_answer_count"] += 1.0
+    if bool(row["patched_predicts_clean_answer"]):
+        accumulator["patched_predicts_clean_answer_count"] += 1.0
+    if bool(row["patched_predicts_corrupted_answer"]):
+        accumulator["patched_predicts_corrupted_answer_count"] += 1.0
+    accumulator["total"] += 1.0
+
+
+def _causal_patch_summary(accumulator: dict[str, float]) -> dict[str, float | int | None]:
+    total = int(accumulator["total"])
+    if total <= 0:
+        raise RuntimeError("Cannot summarize empty causal patch accumulator.")
+    recovery_defined_count = int(accumulator["recovery_defined_count"])
+    recovery_mean = None
+    recovery_abs_mean = None
+    recovery_positive_fraction = None
+    recovery_negative_fraction = None
+    if recovery_defined_count > 0:
+        recovery_mean = float(accumulator["recovery_sum"]) / recovery_defined_count
+        recovery_abs_mean = float(accumulator["recovery_abs_sum"]) / recovery_defined_count
+        recovery_positive_fraction = float(accumulator["recovery_positive_count"]) / recovery_defined_count
+        recovery_negative_fraction = float(accumulator["recovery_negative_count"]) / recovery_defined_count
+    return {
+        "num_pairs": total,
+        "clean_value_margin_mean": float(accumulator["clean_value_margin_sum"]) / total,
+        "corrupted_value_margin_mean": float(accumulator["corrupted_value_margin_sum"]) / total,
+        "corrupted_clean_answer_margin_mean": float(accumulator["corrupted_clean_answer_margin_sum"]) / total,
+        "patched_clean_answer_margin_mean": float(accumulator["patched_clean_answer_margin_sum"]) / total,
+        "patched_corrupted_answer_margin_mean": float(accumulator["patched_corrupted_answer_margin_sum"]) / total,
+        "transfer_margin_clean_mean": float(accumulator["transfer_margin_clean_sum"]) / total,
+        "transfer_margin_corrupted_mean": float(accumulator["transfer_margin_corrupted_sum"]) / total,
+        "transfer_margin_patched_mean": float(accumulator["transfer_margin_patched_sum"]) / total,
+        "transfer_margin_delta_mean": float(accumulator["transfer_margin_delta_sum"]) / total,
+        "transfer_margin_delta_abs_mean": float(accumulator["transfer_margin_delta_abs_sum"]) / total,
+        "transfer_recovery_mean": recovery_mean,
+        "transfer_recovery_abs_mean": recovery_abs_mean,
+        "transfer_recovery_positive_fraction": recovery_positive_fraction,
+        "transfer_recovery_negative_fraction": recovery_negative_fraction,
+        "recovery_defined_fraction": recovery_defined_count / total,
+        "clean_predicts_clean_answer_fraction": float(accumulator["clean_predicts_clean_answer_count"]) / total,
+        "corrupted_predicts_corrupted_answer_fraction": (
+            float(accumulator["corrupted_predicts_corrupted_answer_count"]) / total
+        ),
+        "patched_predicts_clean_answer_fraction": float(accumulator["patched_predicts_clean_answer_count"]) / total,
+        "patched_predicts_corrupted_answer_fraction": (
+            float(accumulator["patched_predicts_corrupted_answer_count"]) / total
+        ),
+    }
+
+
+def _aggregate_causal_patch_rows(
+    *,
+    query_rows: list[dict[str, Any]],
+    step: int,
+    subspace_summary: dict[str, Any],
+    subspace_name: str,
+    rank: int | None,
+    stage_name: str,
+    position_role: str,
+) -> list[dict[str, Any]]:
+    accumulators: dict[tuple[str, str], dict[str, float]] = {}
+    for row in query_rows:
+        keys = [
+            (str(row["split"]), str(row["pair_type"])),
+            ("__all__", str(row["pair_type"])),
+            (str(row["split"]), "__all__"),
+            ("__all__", "__all__"),
+        ]
+        for key in keys:
+            if key not in accumulators:
+                accumulators[key] = _new_causal_patch_accumulator()
+            _accumulate_causal_patch_row(accumulators[key], row)
+    rows: list[dict[str, Any]] = []
+    for (split_name, pair_type), accumulator in sorted(accumulators.items()):
+        rows.append(
+            {
+                "step": step,
+                "split": split_name,
+                "pair_type": pair_type,
+                "subspace_name": subspace_name,
+                "subspace_type": str(subspace_summary["subspace_type"]),
+                "head_label": subspace_summary.get("head_label"),
+                "rank": rank,
+                "stage": stage_name,
+                "position_role": position_role,
+                **_causal_patch_summary(accumulator),
+            }
+        )
+    return rows
+
+
+def _summarize_causal_patch_report(
+    *,
+    aggregate_rows: list[dict[str, Any]],
+    query_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if not aggregate_rows:
+        raise ValueError("Cannot summarize causal variable patch without aggregate rows.")
+    final_step = max(int(row["step"]) for row in aggregate_rows)
+    final_aggregate = [row for row in aggregate_rows if int(row["step"]) == final_step]
+    final_query_rows = [row for row in query_rows if int(row["step"]) == final_step]
+    final_all = [
+        row
+        for row in final_aggregate
+        if str(row["split"]) == "__all__" and str(row["pair_type"]) == "__all__"
+    ]
+    if len(final_all) != 1:
+        raise RuntimeError(f"Expected one final all/all aggregate row, got {len(final_all)}.")
+    top_recoveries = [
+        row
+        for row in sorted(
+            final_query_rows,
+            key=lambda item: float(item["transfer_recovery"]) if item["transfer_recovery"] is not None else -math.inf,
+            reverse=True,
+        )
+        if row["transfer_recovery"] is not None
+    ][:16]
+    bottom_recoveries = [
+        row
+        for row in sorted(
+            final_query_rows,
+            key=lambda item: float(item["transfer_recovery"]) if item["transfer_recovery"] is not None else math.inf,
+        )
+        if row["transfer_recovery"] is not None
+    ][:16]
+    return {
+        "num_checkpoints": len({int(row["step"]) for row in aggregate_rows}),
+        "steps": sorted({int(row["step"]) for row in aggregate_rows}),
+        "final_step": final_step,
+        "final_all": final_all[0],
+        "final_by_pair_type": sorted(
+            [
+                row
+                for row in final_aggregate
+                if str(row["split"]) == "__all__" and str(row["pair_type"]) != "__all__"
+            ],
+            key=lambda row: str(row["pair_type"]),
+        ),
+        "final_by_split_and_pair_type": sorted(
+            final_aggregate,
+            key=lambda row: (str(row["split"]), str(row["pair_type"])),
+        ),
+        "top_final_patch_recoveries": top_recoveries,
+        "bottom_final_patch_recoveries": bottom_recoveries,
+    }
+
+
+def _plot_causal_patch_recovery_by_pair_type(
+    *,
+    aggregate_rows: list[dict[str, Any]],
+    output_path: Path,
+) -> Path | None:
+    final_step = max(int(row["step"]) for row in aggregate_rows)
+    rows = [
+        row
+        for row in aggregate_rows
+        if int(row["step"]) == final_step
+        and str(row["split"]) == "__all__"
+        and str(row["pair_type"]) != "__all__"
+        and row["transfer_recovery_mean"] is not None
+    ]
+    if not rows:
+        return None
+    _, plt = _import_matplotlib()
+    rows = sorted(rows, key=lambda row: str(row["pair_type"]))
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.bar(
+        [str(row["pair_type"]) for row in rows],
+        [float(row["transfer_recovery_mean"]) for row in rows],
+        color="#376f8f",
+    )
+    ax.axhline(0.0, color="#777777", linewidth=1.0, linestyle="--")
+    ax.axhline(1.0, color="#777777", linewidth=1.0, linestyle=":")
+    ax.set_title(f"Patch recovery by pair type at step {final_step}")
+    ax.set_xlabel("pair type")
+    ax.set_ylabel("mean transfer recovery")
+    ax.grid(axis="y", alpha=0.25)
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, format="svg")
+    plt.close(fig)
+    return output_path
+
+
+def _plot_causal_patch_recovery_histogram(
+    *,
+    query_rows: list[dict[str, Any]],
+    output_path: Path,
+) -> Path | None:
+    final_step = max(int(row["step"]) for row in query_rows)
+    rows = [
+        row
+        for row in query_rows
+        if int(row["step"]) == final_step and row["transfer_recovery"] is not None
+    ]
+    if not rows:
+        return None
+    _, plt = _import_matplotlib()
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.hist([float(row["transfer_recovery"]) for row in rows], bins=40, color="#6f8f37")
+    ax.axvline(0.0, color="#777777", linewidth=1.0, linestyle="--")
+    ax.axvline(1.0, color="#777777", linewidth=1.0, linestyle=":")
+    ax.set_title(f"Patch recovery distribution at step {final_step}")
+    ax.set_xlabel("transfer recovery")
+    ax.set_ylabel("pair count")
+    ax.grid(axis="y", alpha=0.25)
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, format="svg")
+    plt.close(fig)
+    return output_path
+
+
+def _plot_causal_patch_margin_scatter(
+    *,
+    query_rows: list[dict[str, Any]],
+    output_path: Path,
+) -> Path | None:
+    final_step = max(int(row["step"]) for row in query_rows)
+    rows = [row for row in query_rows if int(row["step"]) == final_step]
+    if not rows:
+        return None
+    _, plt = _import_matplotlib()
+    pair_types = sorted({str(row["pair_type"]) for row in rows})
+    colors = {
+        pair_type: color
+        for pair_type, color in zip(pair_types, ["#376f8f", "#8f6237", "#6f8f37", "#8f374a"], strict=False)
+    }
+    fig, ax = plt.subplots(figsize=(7, 7))
+    for pair_type in pair_types:
+        typed_rows = [row for row in rows if str(row["pair_type"]) == pair_type]
+        ax.scatter(
+            [float(row["transfer_margin_corrupted"]) for row in typed_rows],
+            [float(row["transfer_margin_patched"]) for row in typed_rows],
+            s=18,
+            alpha=0.7,
+            label=pair_type,
+            color=colors[pair_type],
+        )
+    all_values = [
+        float(row["transfer_margin_corrupted"])
+        for row in rows
+    ] + [
+        float(row["transfer_margin_patched"])
+        for row in rows
+    ]
+    lower = min(all_values)
+    upper = max(all_values)
+    ax.plot([lower, upper], [lower, upper], color="#777777", linewidth=1.0, linestyle="--")
+    ax.set_title(f"Corrupted vs patched transfer margin at step {final_step}")
+    ax.set_xlabel("corrupted transfer margin")
+    ax.set_ylabel("patched transfer margin")
+    ax.grid(alpha=0.25)
+    ax.legend(loc="best")
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, format="svg")
+    plt.close(fig)
+    return output_path
+
+
+def _write_causal_patch_markdown(
+    *,
+    path: Path,
+    report: dict[str, Any],
+    plot_paths: dict[str, Path],
+) -> None:
+    summary = report["summary"]
+    final_all = summary["final_all"]
+    lines = [
+        "# Causal Variable Patch",
+        "",
+        "## Calculation",
+        "",
+        "For a clean/corrupted controlled pair, the tool patches the selected residual content from clean into corrupted.",
+        "",
+        "For full residual patching:",
+        "",
+        "```text",
+        "z_patched = z_clean",
+        "```",
+        "",
+        "For a selected subspace with orthonormal basis `B`:",
+        "",
+        "```text",
+        "z_patched = z_corrupted - (z_corrupted B) B^T + (z_clean B) B^T",
+        "```",
+        "",
+        "Transfer recovery is measured with the clean-vs-corrupted transfer-token contrast:",
+        "",
+        "```text",
+        "recovery = (margin_patched - margin_corrupted) / (margin_clean - margin_corrupted)",
+        "margin = logit(clean_transfer_token) - logit(corrupted_transfer_token)",
+        "```",
+        "",
+        "For query_key/support_value/recency pairs, the transfer tokens are the competing answer values. For distractor pairs, the correct answer is fixed and the transfer tokens are the changed distractor values.",
+        "",
+        "## Patch",
+        "",
+        f"- subspace: `{report['subspace']['subspace_name']}`",
+        f"- rank: `{report['rank']}`",
+        f"- stage: `{report['stage']}`",
+        f"- position role: `{report['position_role']}`",
+        f"- device: `{report['device']}`",
+        "",
+        "## Pair Construction",
+        "",
+    ]
+    pair_construction = report["pair_construction"]
+    for pair_type, count in pair_construction["constructed_counts"].items():
+        lines.append(f"- {pair_type}: `{count}` pairs")
+    lines.extend(
+        [
+            "",
+            "## Final Aggregate By Pair Type",
+            "",
+            "| pair type | pairs | clean margin | corrupted margin | patched margin | recovery | patched clean-answer frac | recovery defined frac |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for row in summary["final_by_pair_type"]:
+        recovery = row["transfer_recovery_mean"]
+        recovery_text = "" if recovery is None else f"{float(recovery):.6f}"
+        lines.append(
+            "| {pair_type} | {pairs} | {clean:.6f} | {corrupt:.6f} | {patched:.6f} | {recovery} | {pclean:.3f} | {defined:.3f} |".format(
+                pair_type=row["pair_type"],
+                pairs=int(row["num_pairs"]),
+                clean=float(row["transfer_margin_clean_mean"]),
+                corrupt=float(row["transfer_margin_corrupted_mean"]),
+                patched=float(row["transfer_margin_patched_mean"]),
+                recovery=recovery_text,
+                pclean=float(row["patched_predicts_clean_answer_fraction"]),
+                defined=float(row["recovery_defined_fraction"]),
+            )
+        )
+    final_recovery = final_all["transfer_recovery_mean"]
+    final_recovery_text = "undefined" if final_recovery is None else f"{float(final_recovery):.6f}"
+    lines.extend(
+        [
+            "",
+            "## Final All-Pair Result",
+            "",
+            f"- transfer recovery: `{final_recovery_text}`",
+            f"- transfer-margin delta: `{float(final_all['transfer_margin_delta_mean']):.6f}`",
+            f"- patched predicts clean answer fraction: `{float(final_all['patched_predicts_clean_answer_fraction']):.3f}`",
+            f"- recovery defined fraction: `{float(final_all['recovery_defined_fraction']):.3f}`",
+            "",
+            "## Raw Outputs",
+            "",
+            f"- aggregate rows: `{report['aggregate_rows_path']}`",
+            f"- query rows: `{report['query_rows_path']}`",
+            f"- pair rows: `{report['pair_rows_path']}`",
+            "",
+            "## Plots",
+            "",
+        ]
+    )
+    for label, plot_path in plot_paths.items():
+        lines.append(f"- {label}: `{plot_path}`")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def run_causal_variable_patch(
+    *,
+    config_path: Path,
+    probe_set_path: Path,
+    checkpoint_dir: Path,
+    output_dir: Path,
+    stage_name: str,
+    subspace_name: str,
+    position_role: str,
+    pair_types: list[str],
+    rank: int | None = None,
+    device_name: str = "mps",
+    checkpoint_paths: list[Path] | None = None,
+    head_layer: int | None = None,
+    head: int | None = None,
+    max_pairs_per_type: int = 128,
+    min_pairs_per_type: int = 1,
+    split_filter: list[str] | None = None,
+    min_recovery_denominator: float = 1.0e-6,
+    progress_every_pairs: int = 64,
+) -> tuple[Path, Path, Path, Path, Path, dict[str, Path]]:
+    spec = TrainSpec.from_path(config_path)
+    probe_records, probe_metadata = load_probe_set(probe_set_path)
+    if str(probe_metadata["benchmark_dir"]) != str(spec.benchmark_dir):
+        raise ValueError(
+            f"Probe set benchmark mismatch: probe={probe_metadata['benchmark_dir']} config={spec.benchmark_dir}"
+        )
+    metadata = read_symbolic_kv_stream_metadata(spec.benchmark_dir)
+    vocab = Vocabulary.from_metadata(metadata["vocabulary"])
+    holdout_pairs = _holdout_pair_set(metadata)
+    device = require_device(device_name)
+    checkpoints = _resolve_checkpoint_paths(checkpoint_dir=checkpoint_dir, checkpoint_paths=checkpoint_paths)
+    model = build_model(spec.model, len(vocab.tokens), device)
+    _validate_geometry_stage(model=model, stage_name=stage_name)
+    if position_role not in GEOMETRY_POSITION_ROLES:
+        raise ValueError(f"Unsupported position role {position_role!r}; expected one of {GEOMETRY_POSITION_ROLES}.")
+    if not pair_types:
+        raise ValueError("pair_types must not be empty.")
+    pair_types = sorted(set(pair_types), key=pair_types.index)
+    pairs, pair_construction = _build_causal_patch_pairs(
+        probe_records=probe_records,
+        vocab=vocab,
+        holdout_pairs=holdout_pairs,
+        pair_types=pair_types,
+        max_pairs_per_type=max_pairs_per_type,
+        min_pairs_per_type=min_pairs_per_type,
+        split_filter=split_filter,
+    )
+    if not pairs:
+        raise RuntimeError("Causal variable patch constructed no pairs.")
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    aggregate_rows_path = output_dir / "causal_variable_patch_rows.jsonl"
+    query_rows_path = output_dir / "causal_variable_patch_query_rows.jsonl"
+    pair_rows_path = output_dir / "causal_variable_patch_pairs.jsonl"
+    progress_path = output_dir / "causal_variable_patch_progress.json"
+    for partial_path in (aggregate_rows_path, query_rows_path, pair_rows_path, progress_path):
+        if partial_path.exists():
+            partial_path.unlink()
+    write_jsonl(pair_rows_path, [_pair_metadata(pair) for pair in pairs])
+
+    print(
+        "[causal-variable-patch] "
+        f"checkpoints={len(checkpoints)} pairs={len(pairs)} pair_types={pair_types} "
+        f"device={device_name} subspace={subspace_name} rank={rank} stage={stage_name} role={position_role}",
+        flush=True,
+    )
+
+    all_aggregate_rows: list[dict[str, Any]] = []
+    all_query_rows: list[dict[str, Any]] = []
+    final_subspace_summary: dict[str, Any] | None = None
+    for checkpoint_index, checkpoint_path in enumerate(checkpoints, start=1):
+        checkpoint = load_checkpoint(checkpoint_path, device)
+        load_model_state(model, checkpoint["model_state"])
+        model.eval()
+        step = int(checkpoint["step"])
+        path_step = _checkpoint_step_from_path(checkpoint_path)
+        if step != path_step:
+            raise RuntimeError(f"Checkpoint step mismatch for {checkpoint_path}: payload={step} path={path_step}")
+        basis, subspace_summary = _resolve_causal_patch_basis(
+            model=model,
+            vocab=vocab,
+            subspace_name=subspace_name,
+            rank=rank,
+            head_layer=head_layer,
+            head=head,
+            device=device,
+        )
+        final_subspace_summary = subspace_summary
+        print(
+            f"[causal-variable-patch] starting {checkpoint_index}/{len(checkpoints)} {checkpoint_path.name}",
+            flush=True,
+        )
+        aggregate_rows, query_rows = _compute_causal_patch_checkpoint(
+            model=model,
+            pairs=pairs,
+            vocab=vocab,
+            checkpoint_step=step,
+            basis=basis,
+            subspace_summary=subspace_summary,
+            subspace_name=subspace_name,
+            rank=rank,
+            stage_name=stage_name,
+            position_role=position_role,
+            batch_size=spec.evaluation.batch_size,
+            pad_token_id=vocab.pad_token_id,
+            device=device,
+            min_recovery_denominator=min_recovery_denominator,
+            progress_every_pairs=progress_every_pairs,
+        )
+        for row in aggregate_rows:
+            append_jsonl(aggregate_rows_path, row)
+        for row in query_rows:
+            append_jsonl(query_rows_path, row)
+        all_aggregate_rows.extend(aggregate_rows)
+        all_query_rows.extend(query_rows)
+        write_json(
+            progress_path,
+            {
+                "status": "running",
+                "completed_checkpoints": checkpoint_index,
+                "total_checkpoints": len(checkpoints),
+                "last_completed_step": step,
+                "aggregate_rows_path": str(aggregate_rows_path),
+                "query_rows_path": str(query_rows_path),
+                "pair_rows_path": str(pair_rows_path),
+            },
+        )
+        all_row = next(
+            row
+            for row in aggregate_rows
+            if str(row["split"]) == "__all__" and str(row["pair_type"]) == "__all__"
+        )
+        recovery = all_row["transfer_recovery_mean"]
+        recovery_text = "undefined" if recovery is None else f"{float(recovery):.6f}"
+        print(
+            "[causal-variable-patch] finished "
+            f"step={step} transfer_delta={float(all_row['transfer_margin_delta_mean']):.6f} "
+            f"recovery={recovery_text} patched_clean_answer_fraction="
+            f"{float(all_row['patched_predicts_clean_answer_fraction']):.3f}",
+            flush=True,
+        )
+
+    if final_subspace_summary is None:
+        raise RuntimeError("No checkpoints were processed for causal variable patch.")
+    summary = _summarize_causal_patch_report(
+        aggregate_rows=all_aggregate_rows,
+        query_rows=all_query_rows,
+    )
+    report_path = output_dir / "causal_variable_patch_report.json"
+    markdown_path = output_dir / "causal_variable_patch_report.md"
+    plot_paths: dict[str, Path] = {}
+    recovery_plot = _plot_causal_patch_recovery_by_pair_type(
+        aggregate_rows=all_aggregate_rows,
+        output_path=output_dir / "causal_variable_patch_recovery_by_pair_type.svg",
+    )
+    if recovery_plot is not None:
+        plot_paths["recovery_by_pair_type"] = recovery_plot
+    histogram_plot = _plot_causal_patch_recovery_histogram(
+        query_rows=all_query_rows,
+        output_path=output_dir / "causal_variable_patch_recovery_histogram.svg",
+    )
+    if histogram_plot is not None:
+        plot_paths["recovery_histogram"] = histogram_plot
+    scatter_plot = _plot_causal_patch_margin_scatter(
+        query_rows=all_query_rows,
+        output_path=output_dir / "causal_variable_patch_margin_scatter.svg",
+    )
+    if scatter_plot is not None:
+        plot_paths["margin_scatter"] = scatter_plot
+
+    report = {
+        "schema_version": CAUSAL_VARIABLE_PATCH_SCHEMA_VERSION,
+        "config_path": str(config_path),
+        "probe_set_path": str(probe_set_path),
+        "checkpoint_dir": str(checkpoint_dir),
+        "device": device_name,
+        "stage": stage_name,
+        "subspace": final_subspace_summary,
+        "subspace_name": subspace_name,
+        "rank": rank,
+        "position_role": position_role,
+        "pair_types": pair_types,
+        "max_pairs_per_type": max_pairs_per_type,
+        "min_pairs_per_type": min_pairs_per_type,
+        "split_filter": split_filter,
+        "min_recovery_denominator": min_recovery_denominator,
+        "progress_every_pairs": progress_every_pairs,
+        "calculation": {
+            "full_residual_patch": "z_patched = z_clean at selected stage/positions",
+            "subspace_patch": "z_patched = z_corrupted - (z_corrupted B) B^T + (z_clean B) B^T",
+            "transfer_margin": "logit(clean_transfer_token) - logit(corrupted_transfer_token)",
+            "transfer_recovery": "(transfer_margin_patched - transfer_margin_corrupted) / (transfer_margin_clean - transfer_margin_corrupted)",
+            "distractor_control": "correct answer is fixed; transfer tokens are changed distractor values",
+        },
+        "pair_construction": pair_construction,
+        "aggregate_rows_path": str(aggregate_rows_path),
+        "query_rows_path": str(query_rows_path),
+        "pair_rows_path": str(pair_rows_path),
+        "summary": summary,
+    }
+    write_json(report_path, report)
+    _write_causal_patch_markdown(path=markdown_path, report=report, plot_paths=plot_paths)
+    write_json(
+        progress_path,
+        {
+            "status": "complete",
+            "completed_checkpoints": len(checkpoints),
+            "total_checkpoints": len(checkpoints),
+            "last_completed_step": int(summary["final_step"]),
+            "report_path": str(report_path),
+            "markdown_path": str(markdown_path),
+            "aggregate_rows_path": str(aggregate_rows_path),
+            "query_rows_path": str(query_rows_path),
+            "pair_rows_path": str(pair_rows_path),
+        },
+    )
+    print(
+        f"[causal-variable-patch] complete report={report_path} rows={aggregate_rows_path}",
+        flush=True,
+    )
+    return report_path, markdown_path, aggregate_rows_path, query_rows_path, pair_rows_path, plot_paths
+
+
+ROUTE_GRADIENT_LOSS_SIDES = ["clean", "corrupted", "both"]
+
+
+def _parameter_gradients(
+    *,
+    model: torch.nn.Module,
+    require_all: bool,
+) -> tuple[dict[str, torch.Tensor], list[str]]:
+    gradients: dict[str, torch.Tensor] = {}
+    zero_gradient_parameter_names: list[str] = []
+    for name, parameter in model.named_parameters(remove_duplicate=False):
+        if parameter.grad is None:
+            if require_all:
+                raise RuntimeError(f"Parameter has no gradient after backward: {name}")
+            gradients[name] = torch.zeros_like(parameter.detach(), device=torch.device("cpu"), dtype=torch.float32)
+            zero_gradient_parameter_names.append(name)
+            continue
+        gradients[name] = parameter.grad.detach().cpu().float()
+    return gradients, zero_gradient_parameter_names
+
+
+def _gradient_dot_summary(
+    *,
+    left_gradients: dict[str, torch.Tensor],
+    right_gradients: dict[str, torch.Tensor],
+    label: str,
+) -> dict[str, float | int | None]:
+    left_keys = set(left_gradients)
+    right_keys = set(right_gradients)
+    if left_keys != right_keys:
+        missing_right = sorted(left_keys - right_keys)
+        extra_right = sorted(right_keys - left_keys)
+        raise ValueError(
+            f"Gradient keys differ for {label}: missing_right={missing_right} extra_right={extra_right}"
+        )
+    dot = 0.0
+    left_sq = 0.0
+    right_sq = 0.0
+    num_parameters = 0
+    for key in sorted(left_keys):
+        left = left_gradients[key].float().reshape(-1)
+        right = right_gradients[key].float().reshape(-1)
+        if left.shape != right.shape:
+            raise ValueError(f"Gradient shape mismatch for {label} key {key}: {tuple(left.shape)} vs {tuple(right.shape)}")
+        dot += float(torch.dot(left, right).item())
+        left_sq += float(torch.dot(left, left).item())
+        right_sq += float(torch.dot(right, right).item())
+        num_parameters += int(left.numel())
+    left_norm = left_sq ** 0.5
+    right_norm = right_sq ** 0.5
+    return {
+        "num_parameters": num_parameters,
+        "dot": dot,
+        "left_l2_norm": left_norm,
+        "right_l2_norm": right_norm,
+        "cosine": _safe_ratio(dot, left_norm * right_norm),
+    }
+
+
+ROUTE_GRADIENT_DECOMPOSITION_MODES = [
+    "parameter_tensors",
+    "module_blocks",
+    "attention_projections",
+    "attention_heads",
+    "mlp_neurons",
+]
+
+
+@dataclass(frozen=True)
+class _GradientSelection:
+    parameter_name: str
+    selector: tuple[Any, ...] | None
+    selector_label: str
+
+
+@dataclass(frozen=True)
+class _RouteGradientDecompositionGroup:
+    group_id: str
+    group_kind: str
+    component_type: str
+    partition_name: str
+    layer: int | None
+    head: int | None
+    projection: str | None
+    neuron: int | None
+    selections: tuple[_GradientSelection, ...]
+    notes: tuple[str, ...] = ()
+
+
+def _resolve_route_gradient_decomposition_modes(modes: list[str] | None) -> list[str]:
+    if modes is None:
+        return list(ROUTE_GRADIENT_DECOMPOSITION_MODES)
+    if not modes:
+        raise ValueError("decomposition_modes must not be empty when provided.")
+    resolved: list[str] = []
+    for mode in modes:
+        if mode not in ROUTE_GRADIENT_DECOMPOSITION_MODES:
+            raise ValueError(
+                f"Unsupported route gradient decomposition mode {mode!r}; "
+                f"expected one of {ROUTE_GRADIENT_DECOMPOSITION_MODES}."
+            )
+        if mode not in resolved:
+            resolved.append(mode)
+    return resolved
+
+
+def _selector_numel(parameter: torch.nn.Parameter, selector: tuple[Any, ...] | None) -> int:
+    selected = parameter.detach() if selector is None else parameter.detach()[selector]
+    numel = int(selected.numel())
+    if numel <= 0:
+        raise RuntimeError("Gradient decomposition selector produced an empty parameter slice.")
+    return numel
+
+
+def _selection_summary(
+    *,
+    model_parameters: dict[str, torch.nn.Parameter],
+    selection: _GradientSelection,
+) -> dict[str, Any]:
+    if selection.parameter_name not in model_parameters:
+        raise KeyError(f"Gradient decomposition parameter not found: {selection.parameter_name}")
+    parameter = model_parameters[selection.parameter_name]
+    return {
+        "parameter_name": selection.parameter_name,
+        "parameter_shape": [int(dim) for dim in parameter.shape],
+        "selector": selection.selector_label,
+        "num_parameters": _selector_numel(parameter, selection.selector),
+    }
+
+
+def _group_num_parameters(
+    *,
+    model_parameters: dict[str, torch.nn.Parameter],
+    group: _RouteGradientDecompositionGroup,
+) -> int:
+    if not group.selections:
+        raise RuntimeError(f"Gradient decomposition group has no selections: {group.group_id}")
+    return sum(
+        _selector_numel(model_parameters[selection.parameter_name], selection.selector)
+        for selection in group.selections
+    )
+
+
+def _group_metadata(
+    *,
+    model_parameters: dict[str, torch.nn.Parameter],
+    group: _RouteGradientDecompositionGroup,
+) -> dict[str, Any]:
+    return {
+        "group_id": group.group_id,
+        "group_kind": group.group_kind,
+        "component_type": group.component_type,
+        "partition_name": group.partition_name,
+        "layer": group.layer,
+        "head": group.head,
+        "projection": group.projection,
+        "neuron": group.neuron,
+        "num_selected_parameters": _group_num_parameters(model_parameters=model_parameters, group=group),
+        "selection_count": len(group.selections),
+        "selections": [
+            _selection_summary(model_parameters=model_parameters, selection=selection)
+            for selection in group.selections
+        ],
+        "notes": list(group.notes),
+    }
+
+
+def _whole_parameter_selection(parameter_name: str) -> _GradientSelection:
+    return _GradientSelection(
+        parameter_name=parameter_name,
+        selector=None,
+        selector_label=":",
+    )
+
+
+def _row_block_selection(parameter_name: str, start: int, end: int) -> _GradientSelection:
+    return _GradientSelection(
+        parameter_name=parameter_name,
+        selector=(slice(start, end), slice(None)),
+        selector_label=f"[{start}:{end}, :]",
+    )
+
+
+def _vector_block_selection(parameter_name: str, start: int, end: int) -> _GradientSelection:
+    return _GradientSelection(
+        parameter_name=parameter_name,
+        selector=(slice(start, end),),
+        selector_label=f"[{start}:{end}]",
+    )
+
+
+def _column_block_selection(parameter_name: str, start: int, end: int) -> _GradientSelection:
+    return _GradientSelection(
+        parameter_name=parameter_name,
+        selector=(slice(None), slice(start, end)),
+        selector_label=f"[:, {start}:{end}]",
+    )
+
+
+def _single_row_selection(parameter_name: str, index: int) -> _GradientSelection:
+    return _GradientSelection(
+        parameter_name=parameter_name,
+        selector=(index, slice(None)),
+        selector_label=f"[{index}, :]",
+    )
+
+
+def _single_vector_selection(parameter_name: str, index: int) -> _GradientSelection:
+    return _GradientSelection(
+        parameter_name=parameter_name,
+        selector=(index,),
+        selector_label=f"[{index}]",
+    )
+
+
+def _single_column_selection(parameter_name: str, index: int) -> _GradientSelection:
+    return _GradientSelection(
+        parameter_name=parameter_name,
+        selector=(slice(None), index),
+        selector_label=f"[:, {index}]",
+    )
+
+
+def _require_model_parameter(
+    *,
+    model_parameters: dict[str, torch.nn.Parameter],
+    parameter_name: str,
+) -> None:
+    if parameter_name not in model_parameters:
+        raise KeyError(f"Expected model parameter is missing: {parameter_name}")
+
+
+def _require_model_parameters(
+    *,
+    model_parameters: dict[str, torch.nn.Parameter],
+    parameter_names: list[str],
+) -> None:
+    for parameter_name in parameter_names:
+        _require_model_parameter(model_parameters=model_parameters, parameter_name=parameter_name)
+
+
+def _shared_parameter_name_sets(model: torch.nn.Module) -> list[list[str]]:
+    names_by_identity: dict[int, list[str]] = defaultdict(list)
+    for name, parameter in model.named_parameters(remove_duplicate=False):
+        names_by_identity[id(parameter)].append(name)
+    return [names for names in names_by_identity.values() if len(names) > 1]
+
+
+def _build_route_gradient_decomposition_groups(
+    *,
+    model: torch.nn.Module,
+    decomposition_modes: list[str],
+) -> tuple[list[_RouteGradientDecompositionGroup], dict[str, Any]]:
+    model_parameters = dict(model.named_parameters(remove_duplicate=False))
+    if not model_parameters:
+        raise RuntimeError("Model exposes no named parameters for route-gradient decomposition.")
+
+    groups: list[_RouteGradientDecompositionGroup] = []
+    group_ids: set[str] = set()
+
+    def add_group(group: _RouteGradientDecompositionGroup) -> None:
+        if group.group_id in group_ids:
+            raise RuntimeError(f"Duplicate route-gradient decomposition group id: {group.group_id}")
+        _group_num_parameters(model_parameters=model_parameters, group=group)
+        group_ids.add(group.group_id)
+        groups.append(group)
+
+    add_group(
+        _RouteGradientDecompositionGroup(
+            group_id="global:all_named_parameters",
+            group_kind="global_all",
+            component_type="global",
+            partition_name="global_all",
+            layer=None,
+            head=None,
+            projection=None,
+            neuron=None,
+            selections=tuple(_whole_parameter_selection(name) for name in model_parameters),
+            notes=("Uses model.named_parameters(remove_duplicate=False), matching candidate-route-gradient-selection.",),
+        )
+    )
+
+    if "parameter_tensors" in decomposition_modes:
+        for name in sorted(model_parameters):
+            add_group(
+                _RouteGradientDecompositionGroup(
+                    group_id=f"parameter:{name}",
+                    group_kind="parameter_tensor",
+                    component_type="parameter",
+                    partition_name="parameter_tensors",
+                    layer=None,
+                    head=None,
+                    projection=None,
+                    neuron=None,
+                    selections=(_whole_parameter_selection(name),),
+                )
+            )
+
+    if "module_blocks" in decomposition_modes:
+        for group_id, component_type, names in [
+            ("module:token_embedding", "embedding", ["token_embedding.weight"]),
+            ("module:position_embedding", "embedding", ["position_embedding.weight"]),
+            ("module:final_norm", "layernorm", ["final_norm.weight", "final_norm.bias"]),
+            ("module:lm_head", "unembedding", ["lm_head.weight"]),
+        ]:
+            _require_model_parameters(model_parameters=model_parameters, parameter_names=names)
+            add_group(
+                _RouteGradientDecompositionGroup(
+                    group_id=group_id,
+                    group_kind="module_block",
+                    component_type=component_type,
+                    partition_name="module_blocks",
+                    layer=None,
+                    head=None,
+                    projection=None,
+                    neuron=None,
+                    selections=tuple(_whole_parameter_selection(name) for name in names),
+                )
+            )
+        for layer_index, _ in enumerate(model.blocks):
+            ln_1_names = [f"blocks.{layer_index}.ln_1.weight", f"blocks.{layer_index}.ln_1.bias"]
+            attention_names = [
+                f"blocks.{layer_index}.attn.q_proj.weight",
+                f"blocks.{layer_index}.attn.q_proj.bias",
+                f"blocks.{layer_index}.attn.k_proj.weight",
+                f"blocks.{layer_index}.attn.k_proj.bias",
+                f"blocks.{layer_index}.attn.v_proj.weight",
+                f"blocks.{layer_index}.attn.v_proj.bias",
+                f"blocks.{layer_index}.attn.out_proj.weight",
+                f"blocks.{layer_index}.attn.out_proj.bias",
+            ]
+            ln_2_names = [f"blocks.{layer_index}.ln_2.weight", f"blocks.{layer_index}.ln_2.bias"]
+            mlp_names = [
+                f"blocks.{layer_index}.ff.fc_in.weight",
+                f"blocks.{layer_index}.ff.fc_in.bias",
+                f"blocks.{layer_index}.ff.fc_out.weight",
+                f"blocks.{layer_index}.ff.fc_out.bias",
+            ]
+            for group_id, component_type, names in [
+                (f"module:L{layer_index}.ln_1", "layernorm", ln_1_names),
+                (f"module:L{layer_index}.attention", "attention", attention_names),
+                (f"module:L{layer_index}.ln_2", "layernorm", ln_2_names),
+                (f"module:L{layer_index}.mlp", "mlp", mlp_names),
+            ]:
+                _require_model_parameters(model_parameters=model_parameters, parameter_names=names)
+                add_group(
+                    _RouteGradientDecompositionGroup(
+                        group_id=group_id,
+                        group_kind="module_block",
+                        component_type=component_type,
+                        partition_name="module_blocks",
+                        layer=layer_index,
+                        head=None,
+                        projection=None,
+                        neuron=None,
+                        selections=tuple(_whole_parameter_selection(name) for name in names),
+                    )
+                )
+
+    if "attention_projections" in decomposition_modes:
+        for layer_index, _ in enumerate(model.blocks):
+            for projection_name in ("q_proj", "k_proj", "v_proj", "out_proj"):
+                names = [
+                    f"blocks.{layer_index}.attn.{projection_name}.weight",
+                    f"blocks.{layer_index}.attn.{projection_name}.bias",
+                ]
+                _require_model_parameters(model_parameters=model_parameters, parameter_names=names)
+                add_group(
+                    _RouteGradientDecompositionGroup(
+                        group_id=f"attention_projection:L{layer_index}.{projection_name}",
+                        group_kind="attention_projection",
+                        component_type="attention",
+                        partition_name="attention_projections",
+                        layer=layer_index,
+                        head=None,
+                        projection=projection_name,
+                        neuron=None,
+                        selections=tuple(_whole_parameter_selection(name) for name in names),
+                    )
+                )
+
+    if "attention_heads" in decomposition_modes:
+        for layer_index, block in enumerate(model.blocks):
+            n_heads = int(block.attn.n_heads)
+            head_dim = int(block.attn.head_dim)
+            for head_index in range(n_heads):
+                start = head_index * head_dim
+                end = (head_index + 1) * head_dim
+                q_weight = f"blocks.{layer_index}.attn.q_proj.weight"
+                q_bias = f"blocks.{layer_index}.attn.q_proj.bias"
+                k_weight = f"blocks.{layer_index}.attn.k_proj.weight"
+                k_bias = f"blocks.{layer_index}.attn.k_proj.bias"
+                v_weight = f"blocks.{layer_index}.attn.v_proj.weight"
+                v_bias = f"blocks.{layer_index}.attn.v_proj.bias"
+                out_weight = f"blocks.{layer_index}.attn.out_proj.weight"
+                _require_model_parameters(
+                    model_parameters=model_parameters,
+                    parameter_names=[q_weight, q_bias, k_weight, k_bias, v_weight, v_bias, out_weight],
+                )
+                projection_groups = [
+                    (
+                        "q_proj",
+                        (
+                            _row_block_selection(q_weight, start, end),
+                            _vector_block_selection(q_bias, start, end),
+                        ),
+                        (),
+                    ),
+                    (
+                        "k_proj",
+                        (
+                            _row_block_selection(k_weight, start, end),
+                            _vector_block_selection(k_bias, start, end),
+                        ),
+                        (),
+                    ),
+                    (
+                        "v_proj",
+                        (
+                            _row_block_selection(v_weight, start, end),
+                            _vector_block_selection(v_bias, start, end),
+                        ),
+                        (),
+                    ),
+                    (
+                        "out_proj",
+                        (_column_block_selection(out_weight, start, end),),
+                        ("out_proj.bias is not assigned to a head because it is shared after head concatenation.",),
+                    ),
+                ]
+                qkvo_selections: list[_GradientSelection] = []
+                qkvo_notes: list[str] = []
+                for projection_name, selections, notes in projection_groups:
+                    qkvo_selections.extend(selections)
+                    qkvo_notes.extend(notes)
+                    add_group(
+                        _RouteGradientDecompositionGroup(
+                            group_id=f"attention_head_projection:L{layer_index}H{head_index}.{projection_name}",
+                            group_kind="attention_head_projection",
+                            component_type="attention",
+                            partition_name="attention_head_projections",
+                            layer=layer_index,
+                            head=head_index,
+                            projection=projection_name,
+                            neuron=None,
+                            selections=selections,
+                            notes=notes,
+                        )
+                    )
+                add_group(
+                    _RouteGradientDecompositionGroup(
+                        group_id=f"attention_head:L{layer_index}H{head_index}.qkvo",
+                        group_kind="attention_head",
+                        component_type="attention",
+                        partition_name="attention_heads",
+                        layer=layer_index,
+                        head=head_index,
+                        projection="qkvo",
+                        neuron=None,
+                        selections=tuple(qkvo_selections),
+                        notes=tuple(sorted(set(qkvo_notes))),
+                    )
+                )
+
+    if "mlp_neurons" in decomposition_modes:
+        for layer_index, block in enumerate(model.blocks):
+            d_ff = int(block.ff.d_ff)
+            fc_in_weight = f"blocks.{layer_index}.ff.fc_in.weight"
+            fc_in_bias = f"blocks.{layer_index}.ff.fc_in.bias"
+            fc_out_weight = f"blocks.{layer_index}.ff.fc_out.weight"
+            _require_model_parameters(
+                model_parameters=model_parameters,
+                parameter_names=[fc_in_weight, fc_in_bias, fc_out_weight],
+            )
+            for neuron_index in range(d_ff):
+                add_group(
+                    _RouteGradientDecompositionGroup(
+                        group_id=f"mlp_neuron:L{layer_index}N{neuron_index}",
+                        group_kind="mlp_neuron",
+                        component_type="mlp",
+                        partition_name="mlp_neurons",
+                        layer=layer_index,
+                        head=None,
+                        projection=None,
+                        neuron=neuron_index,
+                        selections=(
+                            _single_row_selection(fc_in_weight, neuron_index),
+                            _single_vector_selection(fc_in_bias, neuron_index),
+                            _single_column_selection(fc_out_weight, neuron_index),
+                        ),
+                        notes=("fc_out.bias is a block-level bias and is not assigned to individual neurons.",),
+                    )
+                )
+
+    if len(groups) != len(group_ids):
+        raise RuntimeError("Route-gradient decomposition group ids are not unique.")
+    group_counts = Counter(group.group_kind for group in groups)
+    return groups, {
+        "decomposition_modes": decomposition_modes,
+        "num_groups": len(groups),
+        "group_counts_by_kind": {key: int(value) for key, value in sorted(group_counts.items())},
+        "shared_parameter_name_sets": _shared_parameter_name_sets(model),
+        "global_group_semantics": "The global group uses named parameters with remove_duplicate=False to match candidate-route-gradient-selection.",
+        "overlap_warning": (
+            "Rows are not one mutually exclusive partition across all group kinds. "
+            "Compare supports within a group_kind or partition_name."
+        ),
+    }
+
+
+def _gradient_dot_summary_for_group(
+    *,
+    left_gradients: dict[str, torch.Tensor],
+    right_gradients: dict[str, torch.Tensor],
+    group: _RouteGradientDecompositionGroup,
+    label: str,
+) -> dict[str, float | int | None]:
+    dot = 0.0
+    left_sq = 0.0
+    right_sq = 0.0
+    num_parameters = 0
+    for selection in group.selections:
+        parameter_name = selection.parameter_name
+        if parameter_name not in left_gradients:
+            raise KeyError(f"Left gradient missing parameter for {label}: {parameter_name}")
+        if parameter_name not in right_gradients:
+            raise KeyError(f"Right gradient missing parameter for {label}: {parameter_name}")
+        left_tensor = left_gradients[parameter_name]
+        right_tensor = right_gradients[parameter_name]
+        if left_tensor.shape != right_tensor.shape:
+            raise ValueError(
+                f"Gradient shape mismatch for {label} key {parameter_name}: "
+                f"{tuple(left_tensor.shape)} vs {tuple(right_tensor.shape)}"
+            )
+        left_selected = left_tensor if selection.selector is None else left_tensor[selection.selector]
+        right_selected = right_tensor if selection.selector is None else right_tensor[selection.selector]
+        if left_selected.shape != right_selected.shape:
+            raise ValueError(
+                f"Selected gradient shape mismatch for {label} key {parameter_name} "
+                f"selector {selection.selector_label}: {tuple(left_selected.shape)} vs {tuple(right_selected.shape)}"
+            )
+        left_flat = left_selected.float().reshape(-1)
+        right_flat = right_selected.float().reshape(-1)
+        if left_flat.numel() <= 0:
+            raise RuntimeError(
+                f"Selected gradient slice is empty for {label} key {parameter_name} selector {selection.selector_label}"
+            )
+        dot += float(torch.dot(left_flat, right_flat).item())
+        left_sq += float(torch.dot(left_flat, left_flat).item())
+        right_sq += float(torch.dot(right_flat, right_flat).item())
+        num_parameters += int(left_flat.numel())
+    left_norm = left_sq ** 0.5
+    right_norm = right_sq ** 0.5
+    return {
+        "num_parameters": num_parameters,
+        "dot": dot,
+        "left_l2_norm": left_norm,
+        "right_l2_norm": right_norm,
+        "cosine": _safe_ratio(dot, left_norm * right_norm),
+    }
+
+
+def _loss_records_for_pairs(*, pairs: list[dict[str, Any]], loss_side: str) -> list[dict[str, Any]]:
+    if loss_side not in ROUTE_GRADIENT_LOSS_SIDES:
+        raise ValueError(f"Unsupported loss_side {loss_side!r}; expected one of {ROUTE_GRADIENT_LOSS_SIDES}.")
+    if not pairs:
+        raise ValueError("Cannot build loss records from an empty pair list.")
+    if loss_side == "clean":
+        return [pair["clean_record"] for pair in pairs]
+    if loss_side == "corrupted":
+        return [pair["corrupted_record"] for pair in pairs]
+    if loss_side == "both":
+        records: list[dict[str, Any]] = []
+        for pair in pairs:
+            records.append(pair["clean_record"])
+            records.append(pair["corrupted_record"])
+        return records
+    raise ValueError(f"Unhandled loss_side: {loss_side}")
+
+
+def _compute_loss_gradient_for_records(
+    *,
+    model: torch.nn.Module,
+    records: list[dict[str, Any]],
+    batch_size: int,
+    pad_token_id: int,
+    device: torch.device,
+) -> dict[str, Any]:
+    if not records:
+        raise ValueError("records must not be empty for loss-gradient computation.")
+    model.eval()
+    model.zero_grad(set_to_none=True)
+    total_loss = 0.0
+    total_tokens = 0
+    num_batches = 0
+    for start_index in range(0, len(records), batch_size):
+        batch_records = records[start_index : start_index + batch_size]
+        batch = move_batch_to_device(collate_symbolic_kv(batch_records, pad_token_id), device)
+        outputs = model(batch["input_ids"], attention_mask=batch["attention_mask"])
+        loss, _ = compute_lm_loss(
+            logits=outputs.logits,
+            input_ids=batch["input_ids"],
+            attention_mask=batch["attention_mask"],
+            pad_token_id=pad_token_id,
+        )
+        token_count = int(batch["attention_mask"][:, 1:].sum().item())
+        if token_count <= 0:
+            raise ValueError("Loss-gradient batch has no non-padding next-token targets.")
+        (loss * token_count).backward()
+        total_loss += float(loss.detach().cpu().item()) * token_count
+        total_tokens += token_count
+        num_batches += 1
+    if total_tokens <= 0:
+        raise ValueError("Loss-gradient records have no non-padding next-token targets.")
+    for parameter in model.parameters():
+        if parameter.grad is not None:
+            parameter.grad.div_(float(total_tokens))
+    gradients, zero_gradient_parameter_names = _parameter_gradients(model=model, require_all=True)
+    if zero_gradient_parameter_names:
+        raise RuntimeError(f"Loss gradient unexpectedly had zero-gradient parameters: {zero_gradient_parameter_names}")
+    model.zero_grad(set_to_none=True)
+    return {
+        "loss": total_loss / total_tokens,
+        "num_tokens": total_tokens,
+        "num_records": len(records),
+        "num_batches": num_batches,
+        "gradients": gradients,
+    }
+
+
+def _route_group_metrics_from_logits(
+    *,
+    clean_answer_logits: torch.Tensor,
+    corrupted_answer_logits: torch.Tensor,
+    patched_answer_logits: torch.Tensor,
+    pairs: list[dict[str, Any]],
+    vocab: Vocabulary,
+    device: torch.device,
+) -> dict[str, torch.Tensor]:
+    clean_transfer_ids = _token_ids_for_values(
+        values=[str(pair["clean_transfer_token"]) for pair in pairs],
+        vocab=vocab,
+        device=device,
+    )
+    corrupted_transfer_ids = _token_ids_for_values(
+        values=[str(pair["corrupted_transfer_token"]) for pair in pairs],
+        vocab=vocab,
+        device=device,
+    )
+    transfer_margin_clean = _contrast_margin(
+        answer_logits=clean_answer_logits,
+        positive_token_ids=clean_transfer_ids,
+        negative_token_ids=corrupted_transfer_ids,
+    )
+    transfer_margin_corrupted = _contrast_margin(
+        answer_logits=corrupted_answer_logits,
+        positive_token_ids=clean_transfer_ids,
+        negative_token_ids=corrupted_transfer_ids,
+    )
+    transfer_margin_patched = _contrast_margin(
+        answer_logits=patched_answer_logits,
+        positive_token_ids=clean_transfer_ids,
+        negative_token_ids=corrupted_transfer_ids,
+    )
+    route_delta = transfer_margin_patched - transfer_margin_corrupted
+    return {
+        "transfer_margin_clean": transfer_margin_clean,
+        "transfer_margin_corrupted": transfer_margin_corrupted,
+        "transfer_margin_patched": transfer_margin_patched,
+        "route_delta": route_delta,
+    }
+
+
+def _compute_route_score_gradient_for_pairs(
+    *,
+    model: torch.nn.Module,
+    pairs: list[dict[str, Any]],
+    vocab: Vocabulary,
+    basis: torch.Tensor | None,
+    stage_name: str,
+    position_role: str,
+    batch_size: int,
+    pad_token_id: int,
+    device: torch.device,
+) -> dict[str, Any]:
+    if not pairs:
+        raise ValueError("pairs must not be empty for route-score gradient computation.")
+    model.eval()
+    model.zero_grad(set_to_none=True)
+    total_route_score: torch.Tensor | None = None
+    transfer_margin_clean_values: list[float] = []
+    transfer_margin_corrupted_values: list[float] = []
+    transfer_margin_patched_values: list[float] = []
+    route_delta_values: list[float] = []
+    num_batches = 0
+
+    for start_index in range(0, len(pairs), batch_size):
+        pair_batch = pairs[start_index : start_index + batch_size]
+        clean_records = [pair["clean_record"] for pair in pair_batch]
+        corrupted_records = [pair["corrupted_record"] for pair in pair_batch]
+        clean_batch = move_batch_to_device(collate_symbolic_kv(clean_records, pad_token_id), device)
+        corrupted_batch = move_batch_to_device(collate_symbolic_kv(corrupted_records, pad_token_id), device)
+        clean_outputs = model(
+            clean_batch["input_ids"],
+            attention_mask=clean_batch["attention_mask"],
+            return_residual_streams=True,
+        )
+        corrupted_outputs = model(
+            corrupted_batch["input_ids"],
+            attention_mask=corrupted_batch["attention_mask"],
+            return_residual_streams=True,
+        )
+        if clean_outputs.residual_streams is None or corrupted_outputs.residual_streams is None:
+            raise RuntimeError("Route-score gradient requires residual streams.")
+        if stage_name not in clean_outputs.residual_streams:
+            raise KeyError(f"Stage {stage_name!r} not found in clean residual streams.")
+        if stage_name not in corrupted_outputs.residual_streams:
+            raise KeyError(f"Stage {stage_name!r} not found in corrupted residual streams.")
+        clean_answer_logits, _, clean_metadata = extract_answer_logits(clean_outputs.logits, clean_batch)
+        corrupted_answer_logits, _, corrupted_metadata = extract_answer_logits(corrupted_outputs.logits, corrupted_batch)
+        _validate_single_query_batch(batch=clean_batch, metadata=clean_metadata, label="route clean")
+        _validate_single_query_batch(batch=corrupted_batch, metadata=corrupted_metadata, label="route corrupted")
+        clean_selected = [
+            _intervention_positions_for_query(
+                batch=clean_batch,
+                metadata=clean_metadata,
+                flat_index=flat_index,
+                position_role=position_role,
+            )
+            for flat_index in range(len(pair_batch))
+        ]
+        corrupted_selected = [
+            _intervention_positions_for_query(
+                batch=corrupted_batch,
+                metadata=corrupted_metadata,
+                flat_index=flat_index,
+                position_role=position_role,
+            )
+            for flat_index in range(len(pair_batch))
+        ]
+        patched_stage = _transfer_stage_tensor(
+            clean_stage=clean_outputs.residual_streams[stage_name],
+            corrupted_stage=corrupted_outputs.residual_streams[stage_name],
+            clean_selected=clean_selected,
+            corrupted_selected=corrupted_selected,
+            basis=basis,
+        )
+        patched_outputs = model(
+            corrupted_batch["input_ids"],
+            attention_mask=corrupted_batch["attention_mask"],
+            residual_patch={stage_name: patched_stage},
+        )
+        patched_answer_logits, _, patched_metadata = extract_answer_logits(patched_outputs.logits, corrupted_batch)
+        _validate_query_metadata_match(
+            baseline_metadata=corrupted_metadata,
+            patched_metadata=patched_metadata,
+        )
+        metric_tensors = _route_group_metrics_from_logits(
+            clean_answer_logits=clean_answer_logits,
+            corrupted_answer_logits=corrupted_answer_logits,
+            patched_answer_logits=patched_answer_logits,
+            pairs=pair_batch,
+            vocab=vocab,
+            device=device,
+        )
+        batch_route_score = metric_tensors["route_delta"].sum()
+        total_route_score = batch_route_score if total_route_score is None else total_route_score + batch_route_score
+        transfer_margin_clean_values.extend(
+            float(value) for value in metric_tensors["transfer_margin_clean"].detach().float().cpu().tolist()
+        )
+        transfer_margin_corrupted_values.extend(
+            float(value) for value in metric_tensors["transfer_margin_corrupted"].detach().float().cpu().tolist()
+        )
+        transfer_margin_patched_values.extend(
+            float(value) for value in metric_tensors["transfer_margin_patched"].detach().float().cpu().tolist()
+        )
+        route_delta_values.extend(
+            float(value) for value in metric_tensors["route_delta"].detach().float().cpu().tolist()
+        )
+        num_batches += 1
+
+    if total_route_score is None:
+        raise RuntimeError("Route-score gradient produced no score tensor.")
+    mean_route_score = total_route_score / float(len(pairs))
+    mean_route_score.backward()
+    gradients, zero_gradient_parameter_names = _parameter_gradients(model=model, require_all=False)
+    model.zero_grad(set_to_none=True)
+    return {
+        "route_score": float(mean_route_score.detach().float().cpu().item()),
+        "num_pairs": len(pairs),
+        "num_batches": num_batches,
+        "transfer_margin_clean_mean": _mean(transfer_margin_clean_values),
+        "transfer_margin_corrupted_mean": _mean(transfer_margin_corrupted_values),
+        "transfer_margin_patched_mean": _mean(transfer_margin_patched_values),
+        "route_delta_mean": _mean(route_delta_values),
+        "route_delta_abs_mean": _mean([abs(value) for value in route_delta_values]),
+        "route_delta_positive_fraction": _fraction(
+            sum(1 for value in route_delta_values if value > 0.0),
+            len(route_delta_values),
+            "route_delta_positive_fraction",
+        ),
+        "route_delta_negative_fraction": _fraction(
+            sum(1 for value in route_delta_values if value < 0.0),
+            len(route_delta_values),
+            "route_delta_negative_fraction",
+        ),
+        "zero_gradient_parameter_names": zero_gradient_parameter_names,
+        "gradients": gradients,
+    }
+
+
+def _compute_route_score_for_pairs(
+    *,
+    model: torch.nn.Module,
+    pairs: list[dict[str, Any]],
+    vocab: Vocabulary,
+    basis: torch.Tensor | None,
+    stage_name: str,
+    position_role: str,
+    batch_size: int,
+    pad_token_id: int,
+    device: torch.device,
+) -> dict[str, Any]:
+    if not pairs:
+        raise ValueError("pairs must not be empty for route-score computation.")
+    model.eval()
+    transfer_margin_clean_values: list[float] = []
+    transfer_margin_corrupted_values: list[float] = []
+    transfer_margin_patched_values: list[float] = []
+    route_delta_values: list[float] = []
+    num_batches = 0
+
+    with torch.no_grad():
+        for start_index in range(0, len(pairs), batch_size):
+            pair_batch = pairs[start_index : start_index + batch_size]
+            clean_records = [pair["clean_record"] for pair in pair_batch]
+            corrupted_records = [pair["corrupted_record"] for pair in pair_batch]
+            clean_batch = move_batch_to_device(collate_symbolic_kv(clean_records, pad_token_id), device)
+            corrupted_batch = move_batch_to_device(collate_symbolic_kv(corrupted_records, pad_token_id), device)
+            clean_outputs = model(
+                clean_batch["input_ids"],
+                attention_mask=clean_batch["attention_mask"],
+                return_residual_streams=True,
+            )
+            corrupted_outputs = model(
+                corrupted_batch["input_ids"],
+                attention_mask=corrupted_batch["attention_mask"],
+                return_residual_streams=True,
+            )
+            if clean_outputs.residual_streams is None or corrupted_outputs.residual_streams is None:
+                raise RuntimeError("Route-score computation requires residual streams.")
+            if stage_name not in clean_outputs.residual_streams:
+                raise KeyError(f"Stage {stage_name!r} not found in clean residual streams.")
+            if stage_name not in corrupted_outputs.residual_streams:
+                raise KeyError(f"Stage {stage_name!r} not found in corrupted residual streams.")
+            clean_answer_logits, _, clean_metadata = extract_answer_logits(clean_outputs.logits, clean_batch)
+            corrupted_answer_logits, _, corrupted_metadata = extract_answer_logits(
+                corrupted_outputs.logits,
+                corrupted_batch,
+            )
+            _validate_single_query_batch(batch=clean_batch, metadata=clean_metadata, label="route clean")
+            _validate_single_query_batch(batch=corrupted_batch, metadata=corrupted_metadata, label="route corrupted")
+            clean_selected = [
+                _intervention_positions_for_query(
+                    batch=clean_batch,
+                    metadata=clean_metadata,
+                    flat_index=flat_index,
+                    position_role=position_role,
+                )
+                for flat_index in range(len(pair_batch))
+            ]
+            corrupted_selected = [
+                _intervention_positions_for_query(
+                    batch=corrupted_batch,
+                    metadata=corrupted_metadata,
+                    flat_index=flat_index,
+                    position_role=position_role,
+                )
+                for flat_index in range(len(pair_batch))
+            ]
+            patched_stage = _transfer_stage_tensor(
+                clean_stage=clean_outputs.residual_streams[stage_name],
+                corrupted_stage=corrupted_outputs.residual_streams[stage_name],
+                clean_selected=clean_selected,
+                corrupted_selected=corrupted_selected,
+                basis=basis,
+            )
+            patched_outputs = model(
+                corrupted_batch["input_ids"],
+                attention_mask=corrupted_batch["attention_mask"],
+                residual_patch={stage_name: patched_stage},
+            )
+            patched_answer_logits, _, patched_metadata = extract_answer_logits(
+                patched_outputs.logits,
+                corrupted_batch,
+            )
+            _validate_query_metadata_match(
+                baseline_metadata=corrupted_metadata,
+                patched_metadata=patched_metadata,
+            )
+            metric_tensors = _route_group_metrics_from_logits(
+                clean_answer_logits=clean_answer_logits,
+                corrupted_answer_logits=corrupted_answer_logits,
+                patched_answer_logits=patched_answer_logits,
+                pairs=pair_batch,
+                vocab=vocab,
+                device=device,
+            )
+            transfer_margin_clean_values.extend(
+                float(value) for value in metric_tensors["transfer_margin_clean"].detach().float().cpu().tolist()
+            )
+            transfer_margin_corrupted_values.extend(
+                float(value)
+                for value in metric_tensors["transfer_margin_corrupted"].detach().float().cpu().tolist()
+            )
+            transfer_margin_patched_values.extend(
+                float(value) for value in metric_tensors["transfer_margin_patched"].detach().float().cpu().tolist()
+            )
+            route_delta_values.extend(
+                float(value) for value in metric_tensors["route_delta"].detach().float().cpu().tolist()
+            )
+            num_batches += 1
+
+    return {
+        "route_score": _mean(route_delta_values),
+        "num_pairs": len(pairs),
+        "num_batches": num_batches,
+        "transfer_margin_clean_mean": _mean(transfer_margin_clean_values),
+        "transfer_margin_corrupted_mean": _mean(transfer_margin_corrupted_values),
+        "transfer_margin_patched_mean": _mean(transfer_margin_patched_values),
+        "route_delta_mean": _mean(route_delta_values),
+        "route_delta_abs_mean": _mean([abs(value) for value in route_delta_values]),
+        "route_delta_positive_fraction": _fraction(
+            sum(1 for value in route_delta_values if value > 0.0),
+            len(route_delta_values),
+            "route_delta_positive_fraction",
+        ),
+        "route_delta_negative_fraction": _fraction(
+            sum(1 for value in route_delta_values if value < 0.0),
+            len(route_delta_values),
+            "route_delta_negative_fraction",
+        ),
+    }
+
+
+def _route_gradient_groups(pairs: list[dict[str, Any]]) -> dict[tuple[str, str], list[dict[str, Any]]]:
+    if not pairs:
+        raise ValueError("Cannot build route-gradient groups from no pairs.")
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for pair in pairs:
+        split = str(pair["split"])
+        pair_type = str(pair["pair_type"])
+        groups[(split, pair_type)].append(pair)
+        groups[("__all__", pair_type)].append(pair)
+        groups[(split, "__all__")].append(pair)
+        groups[("__all__", "__all__")].append(pair)
+    return dict(groups)
+
+
+def _compute_route_gradient_selection_checkpoint(
+    *,
+    model: torch.nn.Module,
+    pairs: list[dict[str, Any]],
+    vocab: Vocabulary,
+    checkpoint_step: int,
+    learning_rate: float,
+    basis: torch.Tensor | None,
+    subspace_summary: dict[str, Any],
+    subspace_name: str,
+    rank: int | None,
+    stage_name: str,
+    position_role: str,
+    loss_side: str,
+    batch_size: int,
+    pad_token_id: int,
+    device: torch.device,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    groups = _route_gradient_groups(pairs)
+    metric_rows: list[dict[str, Any]] = []
+    route_gradients_by_group: dict[tuple[str, str], dict[str, torch.Tensor]] = {}
+    for (split, pair_type), group_pairs in sorted(groups.items()):
+        loss_records = _loss_records_for_pairs(pairs=group_pairs, loss_side=loss_side)
+        loss_payload = _compute_loss_gradient_for_records(
+            model=model,
+            records=loss_records,
+            batch_size=batch_size,
+            pad_token_id=pad_token_id,
+            device=device,
+        )
+        route_payload = _compute_route_score_gradient_for_pairs(
+            model=model,
+            pairs=group_pairs,
+            vocab=vocab,
+            basis=basis,
+            stage_name=stage_name,
+            position_role=position_role,
+            batch_size=batch_size,
+            pad_token_id=pad_token_id,
+            device=device,
+        )
+        loss_gradients = loss_payload["gradients"]
+        route_gradients = route_payload["gradients"]
+        if not isinstance(loss_gradients, dict) or not isinstance(route_gradients, dict):
+            raise TypeError("Gradient payloads must be dictionaries.")
+        dot_summary = _gradient_dot_summary(
+            left_gradients=loss_gradients,
+            right_gradients=route_gradients,
+            label=f"{split}/{pair_type}",
+        )
+        loss_dot_route = float(dot_summary["dot"])
+        negative_loss_dot_route = -loss_dot_route
+        route_gradient_l2_norm = float(dot_summary["right_l2_norm"])
+        metric_rows.append(
+            {
+                "step": checkpoint_step,
+                "learning_rate": learning_rate,
+                "split": split,
+                "pair_type": pair_type,
+                "loss_side": loss_side,
+                "stage": stage_name,
+                "subspace_name": subspace_name,
+                "subspace_type": str(subspace_summary["subspace_type"]),
+                "head_label": subspace_summary.get("head_label"),
+                "rank": rank,
+                "position_role": position_role,
+                "num_pairs": int(route_payload["num_pairs"]),
+                "loss_num_records": int(loss_payload["num_records"]),
+                "loss_num_tokens": int(loss_payload["num_tokens"]),
+                "loss": float(loss_payload["loss"]),
+                "route_score": float(route_payload["route_score"]),
+                "transfer_margin_clean_mean": float(route_payload["transfer_margin_clean_mean"]),
+                "transfer_margin_corrupted_mean": float(route_payload["transfer_margin_corrupted_mean"]),
+                "transfer_margin_patched_mean": float(route_payload["transfer_margin_patched_mean"]),
+                "route_delta_mean": float(route_payload["route_delta_mean"]),
+                "route_delta_abs_mean": float(route_payload["route_delta_abs_mean"]),
+                "route_delta_positive_fraction": float(route_payload["route_delta_positive_fraction"]),
+                "route_delta_negative_fraction": float(route_payload["route_delta_negative_fraction"]),
+                "loss_gradient_l2_norm": float(dot_summary["left_l2_norm"]),
+                "route_gradient_l2_norm": route_gradient_l2_norm,
+                "loss_dot_route_gradient": loss_dot_route,
+                "negative_loss_dot_route_gradient": negative_loss_dot_route,
+                "loss_negative_route_gradient_cosine": _safe_ratio(
+                    negative_loss_dot_route,
+                    float(dot_summary["left_l2_norm"]) * route_gradient_l2_norm,
+                ),
+                "sgd_route_score_delta_linearized": learning_rate * negative_loss_dot_route,
+                "projected_step_size_on_route_gradient": _safe_ratio(
+                    negative_loss_dot_route,
+                    route_gradient_l2_norm * route_gradient_l2_norm,
+                ),
+                "zero_route_gradient_parameter_count": len(route_payload["zero_gradient_parameter_names"]),
+                "zero_route_gradient_parameter_names": route_payload["zero_gradient_parameter_names"],
+            }
+        )
+        route_gradients_by_group[(split, pair_type)] = route_gradients
+
+    pairwise_rows: list[dict[str, Any]] = []
+    pair_type_groups = sorted(
+        key
+        for key in route_gradients_by_group
+        if key[0] == "__all__" and key[1] != "__all__"
+    )
+    for left_index, left_key in enumerate(pair_type_groups):
+        for right_key in pair_type_groups[left_index + 1 :]:
+            dot_summary = _gradient_dot_summary(
+                left_gradients=route_gradients_by_group[left_key],
+                right_gradients=route_gradients_by_group[right_key],
+                label=f"pairwise {left_key[1]} vs {right_key[1]}",
+            )
+            pairwise_rows.append(
+                {
+                    "step": checkpoint_step,
+                    "left_split": left_key[0],
+                    "left_pair_type": left_key[1],
+                    "right_split": right_key[0],
+                    "right_pair_type": right_key[1],
+                    "stage": stage_name,
+                    "subspace_name": subspace_name,
+                    "subspace_type": str(subspace_summary["subspace_type"]),
+                    "head_label": subspace_summary.get("head_label"),
+                    "rank": rank,
+                    "position_role": position_role,
+                    "route_gradient_dot": float(dot_summary["dot"]),
+                    "left_route_gradient_l2_norm": float(dot_summary["left_l2_norm"]),
+                    "right_route_gradient_l2_norm": float(dot_summary["right_l2_norm"]),
+                    "route_gradient_cosine": dot_summary["cosine"],
+                }
+            )
+    return metric_rows, pairwise_rows
+
+
+def _summarize_route_gradient_selection_report(
+    *,
+    metric_rows: list[dict[str, Any]],
+    pairwise_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if not metric_rows:
+        raise ValueError("Cannot summarize route-gradient selection without metric rows.")
+    final_step = max(int(row["step"]) for row in metric_rows)
+    final_rows = [row for row in metric_rows if int(row["step"]) == final_step]
+    final_all_rows = [
+        row
+        for row in final_rows
+        if str(row["split"]) == "__all__" and str(row["pair_type"]) == "__all__"
+    ]
+    if len(final_all_rows) != 1:
+        raise RuntimeError(f"Expected one final all/all row, got {len(final_all_rows)}.")
+    by_pair_type = sorted(
+        [
+            row
+            for row in final_rows
+            if str(row["split"]) == "__all__" and str(row["pair_type"]) != "__all__"
+        ],
+        key=lambda row: float(row["sgd_route_score_delta_linearized"]),
+        reverse=True,
+    )
+    return {
+        "num_checkpoints": len({int(row["step"]) for row in metric_rows}),
+        "steps": sorted({int(row["step"]) for row in metric_rows}),
+        "final_step": final_step,
+        "final_all": final_all_rows[0],
+        "final_by_pair_type_ranked_by_sgd_delta": by_pair_type,
+        "final_by_split_and_pair_type": sorted(
+            final_rows,
+            key=lambda row: (str(row["split"]), str(row["pair_type"])),
+        ),
+        "final_pairwise_route_gradient_rows": [
+            row for row in pairwise_rows if int(row["step"]) == final_step
+        ],
+    }
+
+
+def _plot_route_gradient_support_by_pair_type(
+    *,
+    metric_rows: list[dict[str, Any]],
+    output_path: Path,
+) -> Path | None:
+    final_step = max(int(row["step"]) for row in metric_rows)
+    rows = [
+        row
+        for row in metric_rows
+        if int(row["step"]) == final_step
+        and str(row["split"]) == "__all__"
+        and str(row["pair_type"]) != "__all__"
+    ]
+    if not rows:
+        return None
+    _, plt = _import_matplotlib()
+    rows = sorted(rows, key=lambda row: str(row["pair_type"]))
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.bar(
+        [str(row["pair_type"]) for row in rows],
+        [float(row["negative_loss_dot_route_gradient"]) for row in rows],
+        color="#376f8f",
+    )
+    ax.axhline(0.0, color="#777777", linewidth=1.0, linestyle="--")
+    ax.set_title(f"SGD route support at step {final_step}")
+    ax.set_xlabel("pair type")
+    ax.set_ylabel("-grad(loss) . grad(route score)")
+    ax.grid(axis="y", alpha=0.25)
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, format="svg")
+    plt.close(fig)
+    return output_path
+
+
+def _plot_route_score_vs_gradient_support(
+    *,
+    metric_rows: list[dict[str, Any]],
+    output_path: Path,
+) -> Path | None:
+    rows = [
+        row
+        for row in metric_rows
+        if str(row["split"]) == "__all__" and str(row["pair_type"]) != "__all__"
+    ]
+    if not rows:
+        return None
+    _, plt = _import_matplotlib()
+    pair_types = sorted({str(row["pair_type"]) for row in rows})
+    fig, ax = plt.subplots(figsize=(8, 6))
+    for pair_type in pair_types:
+        typed = sorted([row for row in rows if str(row["pair_type"]) == pair_type], key=lambda row: int(row["step"]))
+        ax.plot(
+            [float(row["route_score"]) for row in typed],
+            [float(row["negative_loss_dot_route_gradient"]) for row in typed],
+            marker="o",
+            label=pair_type,
+        )
+    ax.axhline(0.0, color="#777777", linewidth=1.0, linestyle="--")
+    ax.axvline(0.0, color="#777777", linewidth=1.0, linestyle=":")
+    ax.set_title("Route score vs SGD support")
+    ax.set_xlabel("route score")
+    ax.set_ylabel("-grad(loss) . grad(route score)")
+    ax.grid(alpha=0.25)
+    ax.legend(loc="best")
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, format="svg")
+    plt.close(fig)
+    return output_path
+
+
+def _plot_route_pairwise_gradient_cosine(
+    *,
+    pairwise_rows: list[dict[str, Any]],
+    output_path: Path,
+) -> Path | None:
+    if not pairwise_rows:
+        return None
+    final_step = max(int(row["step"]) for row in pairwise_rows)
+    rows = [row for row in pairwise_rows if int(row["step"]) == final_step]
+    if not rows:
+        return None
+    labels = sorted(
+        {
+            *(str(row["left_pair_type"]) for row in rows),
+            *(str(row["right_pair_type"]) for row in rows),
+        }
+    )
+    index = {label: idx for idx, label in enumerate(labels)}
+    matrix = torch.eye(len(labels), dtype=torch.float32)
+    for row in rows:
+        value = row["route_gradient_cosine"]
+        if value is None:
+            continue
+        left = index[str(row["left_pair_type"])]
+        right = index[str(row["right_pair_type"])]
+        matrix[left, right] = float(value)
+        matrix[right, left] = float(value)
+    _, plt = _import_matplotlib()
+    fig, ax = plt.subplots(figsize=(6, 5))
+    image = ax.imshow(matrix.numpy(), vmin=-1.0, vmax=1.0, cmap="coolwarm")
+    ax.set_title(f"Route gradient cosine at step {final_step}")
+    ax.set_xticks(range(len(labels)))
+    ax.set_yticks(range(len(labels)))
+    ax.set_xticklabels(labels, rotation=30, ha="right")
+    ax.set_yticklabels(labels)
+    for row_index in range(len(labels)):
+        for col_index in range(len(labels)):
+            ax.text(col_index, row_index, f"{float(matrix[row_index, col_index]):.2f}", ha="center", va="center", fontsize=9)
+    fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04)
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, format="svg")
+    plt.close(fig)
+    return output_path
+
+
+def _write_route_gradient_selection_markdown(
+    *,
+    path: Path,
+    report: dict[str, Any],
+    plot_paths: dict[str, Path],
+) -> None:
+    summary = report["summary"]
+    lines = [
+        "# Candidate Route Gradient Selection",
+        "",
+        "## Calculation",
+        "",
+        "The route score is the causal patch shift:",
+        "",
+        "```text",
+        "route_score = patched_transfer_margin - corrupted_transfer_margin",
+        "```",
+        "",
+        "The SGD support score is:",
+        "",
+        "```text",
+        "sgd_support = < -grad_theta loss, grad_theta route_score >",
+        "linearized_delta = learning_rate * sgd_support",
+        "```",
+        "",
+        "Positive support means the local SGD loss step would increase the route score. Negative support means the loss step would weaken it.",
+        "",
+        "## Route",
+        "",
+        f"- subspace: `{report['subspace']['subspace_name']}`",
+        f"- rank: `{report['rank']}`",
+        f"- stage: `{report['stage']}`",
+        f"- position role: `{report['position_role']}`",
+        f"- loss side: `{report['loss_side']}`",
+        f"- device: `{report['device']}`",
+        "",
+        "## Pair Construction",
+        "",
+    ]
+    for pair_type, count in report["pair_construction"]["constructed_counts"].items():
+        lines.append(f"- {pair_type}: `{count}` pairs")
+    lines.extend(
+        [
+            "",
+            "## Final By Pair Type",
+            "",
+            "| pair type | pairs | route score | SGD support | linearized delta | cosine | loss |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for row in summary["final_by_pair_type_ranked_by_sgd_delta"]:
+        cosine = row["loss_negative_route_gradient_cosine"]
+        cosine_text = "" if cosine is None else f"{float(cosine):.6f}"
+        lines.append(
+            "| {pair_type} | {pairs} | {score:.6f} | {support:.6g} | {delta:.6g} | {cosine} | {loss:.6f} |".format(
+                pair_type=row["pair_type"],
+                pairs=int(row["num_pairs"]),
+                score=float(row["route_score"]),
+                support=float(row["negative_loss_dot_route_gradient"]),
+                delta=float(row["sgd_route_score_delta_linearized"]),
+                cosine=cosine_text,
+                loss=float(row["loss"]),
+            )
+        )
+    final_all = summary["final_all"]
+    lines.extend(
+        [
+            "",
+            "## Final All-Pair Result",
+            "",
+            f"- route score: `{float(final_all['route_score']):.6f}`",
+            f"- SGD support: `{float(final_all['negative_loss_dot_route_gradient']):.6g}`",
+            f"- linearized delta: `{float(final_all['sgd_route_score_delta_linearized']):.6g}`",
+            "",
+            "## Raw Outputs",
+            "",
+            f"- metric rows: `{report['metric_rows_path']}`",
+            f"- pairwise rows: `{report['pairwise_rows_path']}`",
+            f"- pair rows: `{report['pair_rows_path']}`",
+            "",
+            "## Plots",
+            "",
+        ]
+    )
+    for label, plot_path in plot_paths.items():
+        lines.append(f"- {label}: `{plot_path}`")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def run_candidate_route_gradient_selection(
+    *,
+    config_path: Path,
+    probe_set_path: Path,
+    checkpoint_dir: Path,
+    output_dir: Path,
+    stage_name: str,
+    subspace_name: str,
+    position_role: str,
+    pair_types: list[str],
+    rank: int | None = None,
+    device_name: str = "mps",
+    checkpoint_paths: list[Path] | None = None,
+    head_layer: int | None = None,
+    head: int | None = None,
+    max_pairs_per_type: int = 64,
+    min_pairs_per_type: int = 1,
+    split_filter: list[str] | None = None,
+    loss_side: str = "both",
+) -> tuple[Path, Path, Path, Path, Path, dict[str, Path]]:
+    if loss_side not in ROUTE_GRADIENT_LOSS_SIDES:
+        raise ValueError(f"Unsupported loss_side {loss_side!r}; expected one of {ROUTE_GRADIENT_LOSS_SIDES}.")
+    spec = TrainSpec.from_path(config_path)
+    probe_records, probe_metadata = load_probe_set(probe_set_path)
+    if str(probe_metadata["benchmark_dir"]) != str(spec.benchmark_dir):
+        raise ValueError(
+            f"Probe set benchmark mismatch: probe={probe_metadata['benchmark_dir']} config={spec.benchmark_dir}"
+        )
+    metadata = read_symbolic_kv_stream_metadata(spec.benchmark_dir)
+    vocab = Vocabulary.from_metadata(metadata["vocabulary"])
+    holdout_pairs = _holdout_pair_set(metadata)
+    device = require_device(device_name)
+    checkpoints = _resolve_checkpoint_paths(checkpoint_dir=checkpoint_dir, checkpoint_paths=checkpoint_paths)
+    model = build_model(spec.model, len(vocab.tokens), device)
+    _validate_geometry_stage(model=model, stage_name=stage_name)
+    if position_role not in GEOMETRY_POSITION_ROLES:
+        raise ValueError(f"Unsupported position role {position_role!r}; expected one of {GEOMETRY_POSITION_ROLES}.")
+    pair_types = sorted(set(pair_types), key=pair_types.index)
+    pairs, pair_construction = _build_causal_patch_pairs(
+        probe_records=probe_records,
+        vocab=vocab,
+        holdout_pairs=holdout_pairs,
+        pair_types=pair_types,
+        max_pairs_per_type=max_pairs_per_type,
+        min_pairs_per_type=min_pairs_per_type,
+        split_filter=split_filter,
+    )
+    if not pairs:
+        raise RuntimeError("Candidate route gradient selection constructed no pairs.")
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    metric_rows_path = output_dir / "candidate_route_gradient_selection_rows.jsonl"
+    pairwise_rows_path = output_dir / "candidate_route_gradient_selection_pairwise_rows.jsonl"
+    pair_rows_path = output_dir / "candidate_route_gradient_selection_pairs.jsonl"
+    progress_path = output_dir / "candidate_route_gradient_selection_progress.json"
+    for partial_path in (metric_rows_path, pairwise_rows_path, pair_rows_path, progress_path):
+        if partial_path.exists():
+            partial_path.unlink()
+    write_jsonl(pair_rows_path, [_pair_metadata(pair) for pair in pairs])
+
+    print(
+        "[candidate-route-gradient-selection] "
+        f"checkpoints={len(checkpoints)} pairs={len(pairs)} pair_types={pair_types} "
+        f"device={device_name} subspace={subspace_name} rank={rank} stage={stage_name} "
+        f"role={position_role} loss_side={loss_side}",
+        flush=True,
+    )
+
+    all_metric_rows: list[dict[str, Any]] = []
+    all_pairwise_rows: list[dict[str, Any]] = []
+    final_subspace_summary: dict[str, Any] | None = None
+    for checkpoint_index, checkpoint_path in enumerate(checkpoints, start=1):
+        checkpoint = load_checkpoint(checkpoint_path, device)
+        load_model_state(model, checkpoint["model_state"])
+        model.eval()
+        step = int(checkpoint["step"])
+        path_step = _checkpoint_step_from_path(checkpoint_path)
+        if step != path_step:
+            raise RuntimeError(f"Checkpoint step mismatch for {checkpoint_path}: payload={step} path={path_step}")
+        basis, subspace_summary = _resolve_causal_patch_basis(
+            model=model,
+            vocab=vocab,
+            subspace_name=subspace_name,
+            rank=rank,
+            head_layer=head_layer,
+            head=head,
+            device=device,
+        )
+        final_subspace_summary = subspace_summary
+        learning_rate = _compute_learning_rate(spec.optimization, step)
+        print(
+            f"[candidate-route-gradient-selection] starting {checkpoint_index}/{len(checkpoints)} {checkpoint_path.name}",
+            flush=True,
+        )
+        metric_rows, pairwise_rows = _compute_route_gradient_selection_checkpoint(
+            model=model,
+            pairs=pairs,
+            vocab=vocab,
+            checkpoint_step=step,
+            learning_rate=learning_rate,
+            basis=basis,
+            subspace_summary=subspace_summary,
+            subspace_name=subspace_name,
+            rank=rank,
+            stage_name=stage_name,
+            position_role=position_role,
+            loss_side=loss_side,
+            batch_size=spec.evaluation.batch_size,
+            pad_token_id=vocab.pad_token_id,
+            device=device,
+        )
+        for row in metric_rows:
+            append_jsonl(metric_rows_path, row)
+        for row in pairwise_rows:
+            append_jsonl(pairwise_rows_path, row)
+        all_metric_rows.extend(metric_rows)
+        all_pairwise_rows.extend(pairwise_rows)
+        write_json(
+            progress_path,
+            {
+                "status": "running",
+                "completed_checkpoints": checkpoint_index,
+                "total_checkpoints": len(checkpoints),
+                "last_completed_step": step,
+                "metric_rows_path": str(metric_rows_path),
+                "pairwise_rows_path": str(pairwise_rows_path),
+                "pair_rows_path": str(pair_rows_path),
+            },
+        )
+        all_row = next(
+            row
+            for row in metric_rows
+            if str(row["split"]) == "__all__" and str(row["pair_type"]) == "__all__"
+        )
+        print(
+            "[candidate-route-gradient-selection] finished "
+            f"step={step} route_score={float(all_row['route_score']):.6f} "
+            f"sgd_support={float(all_row['negative_loss_dot_route_gradient']):.6g} "
+            f"linearized_delta={float(all_row['sgd_route_score_delta_linearized']):.6g}",
+            flush=True,
+        )
+
+    if final_subspace_summary is None:
+        raise RuntimeError("No checkpoints were processed for candidate route gradient selection.")
+    summary = _summarize_route_gradient_selection_report(
+        metric_rows=all_metric_rows,
+        pairwise_rows=all_pairwise_rows,
+    )
+    report_path = output_dir / "candidate_route_gradient_selection_report.json"
+    markdown_path = output_dir / "candidate_route_gradient_selection_report.md"
+    plot_paths: dict[str, Path] = {}
+    support_plot = _plot_route_gradient_support_by_pair_type(
+        metric_rows=all_metric_rows,
+        output_path=output_dir / "candidate_route_gradient_support_by_pair_type.svg",
+    )
+    if support_plot is not None:
+        plot_paths["support_by_pair_type"] = support_plot
+    score_support_plot = _plot_route_score_vs_gradient_support(
+        metric_rows=all_metric_rows,
+        output_path=output_dir / "candidate_route_score_vs_gradient_support.svg",
+    )
+    if score_support_plot is not None:
+        plot_paths["score_vs_support"] = score_support_plot
+    pairwise_plot = _plot_route_pairwise_gradient_cosine(
+        pairwise_rows=all_pairwise_rows,
+        output_path=output_dir / "candidate_route_pairwise_gradient_cosine.svg",
+    )
+    if pairwise_plot is not None:
+        plot_paths["pairwise_gradient_cosine"] = pairwise_plot
+
+    report = {
+        "schema_version": CANDIDATE_ROUTE_GRADIENT_SELECTION_SCHEMA_VERSION,
+        "config_path": str(config_path),
+        "probe_set_path": str(probe_set_path),
+        "checkpoint_dir": str(checkpoint_dir),
+        "device": device_name,
+        "stage": stage_name,
+        "subspace": final_subspace_summary,
+        "subspace_name": subspace_name,
+        "rank": rank,
+        "position_role": position_role,
+        "pair_types": pair_types,
+        "max_pairs_per_type": max_pairs_per_type,
+        "min_pairs_per_type": min_pairs_per_type,
+        "split_filter": split_filter,
+        "loss_side": loss_side,
+        "calculation": {
+            "route_score": "patched_transfer_margin - corrupted_transfer_margin",
+            "sgd_support": "< -grad_theta loss, grad_theta route_score >",
+            "linearized_delta": "learning_rate * sgd_support",
+            "positive_support": "local SGD step is predicted to increase the route score",
+        },
+        "pair_construction": pair_construction,
+        "metric_rows_path": str(metric_rows_path),
+        "pairwise_rows_path": str(pairwise_rows_path),
+        "pair_rows_path": str(pair_rows_path),
+        "summary": summary,
+    }
+    write_json(report_path, report)
+    _write_route_gradient_selection_markdown(path=markdown_path, report=report, plot_paths=plot_paths)
+    write_json(
+        progress_path,
+        {
+            "status": "complete",
+            "completed_checkpoints": len(checkpoints),
+            "total_checkpoints": len(checkpoints),
+            "last_completed_step": int(summary["final_step"]),
+            "report_path": str(report_path),
+            "markdown_path": str(markdown_path),
+            "metric_rows_path": str(metric_rows_path),
+            "pairwise_rows_path": str(pairwise_rows_path),
+            "pair_rows_path": str(pair_rows_path),
+        },
+    )
+    print(
+        f"[candidate-route-gradient-selection] complete report={report_path} rows={metric_rows_path}",
+        flush=True,
+    )
+    return report_path, markdown_path, metric_rows_path, pairwise_rows_path, pair_rows_path, plot_paths
+
+
+def _route_gradient_decomposition_row(
+    *,
+    checkpoint_step: int,
+    learning_rate: float,
+    split: str,
+    pair_type: str,
+    loss_side: str,
+    stage_name: str,
+    subspace_name: str,
+    subspace_summary: dict[str, Any],
+    rank: int | None,
+    position_role: str,
+    group: _RouteGradientDecompositionGroup,
+    dot_summary: dict[str, float | int | None],
+    route_payload: dict[str, Any],
+    loss_payload: dict[str, Any],
+) -> dict[str, Any]:
+    loss_dot_route = float(dot_summary["dot"])
+    negative_loss_dot_route = -loss_dot_route
+    route_gradient_l2_norm = float(dot_summary["right_l2_norm"])
+    loss_gradient_l2_norm = float(dot_summary["left_l2_norm"])
+    num_selected_parameters = int(dot_summary["num_parameters"])
+    return {
+        "step": checkpoint_step,
+        "learning_rate": learning_rate,
+        "split": split,
+        "pair_type": pair_type,
+        "loss_side": loss_side,
+        "stage": stage_name,
+        "subspace_name": subspace_name,
+        "subspace_type": str(subspace_summary["subspace_type"]),
+        "head_label": subspace_summary.get("head_label"),
+        "rank": rank,
+        "position_role": position_role,
+        "num_pairs": int(route_payload["num_pairs"]),
+        "loss_num_records": int(loss_payload["num_records"]),
+        "loss_num_tokens": int(loss_payload["num_tokens"]),
+        "loss": float(loss_payload["loss"]),
+        "route_score": float(route_payload["route_score"]),
+        "transfer_margin_clean_mean": float(route_payload["transfer_margin_clean_mean"]),
+        "transfer_margin_corrupted_mean": float(route_payload["transfer_margin_corrupted_mean"]),
+        "transfer_margin_patched_mean": float(route_payload["transfer_margin_patched_mean"]),
+        "route_delta_mean": float(route_payload["route_delta_mean"]),
+        "route_delta_abs_mean": float(route_payload["route_delta_abs_mean"]),
+        "route_delta_positive_fraction": float(route_payload["route_delta_positive_fraction"]),
+        "route_delta_negative_fraction": float(route_payload["route_delta_negative_fraction"]),
+        "group_id": group.group_id,
+        "group_kind": group.group_kind,
+        "component_type": group.component_type,
+        "partition_name": group.partition_name,
+        "group_layer": group.layer,
+        "group_head": group.head,
+        "group_projection": group.projection,
+        "group_neuron": group.neuron,
+        "selection_count": len(group.selections),
+        "num_selected_parameters": num_selected_parameters,
+        "loss_gradient_l2_norm": loss_gradient_l2_norm,
+        "route_gradient_l2_norm": route_gradient_l2_norm,
+        "loss_dot_route_gradient": loss_dot_route,
+        "negative_loss_dot_route_gradient": negative_loss_dot_route,
+        "loss_negative_route_gradient_cosine": _safe_ratio(
+            negative_loss_dot_route,
+            loss_gradient_l2_norm * route_gradient_l2_norm,
+        ),
+        "sgd_route_score_delta_linearized": learning_rate * negative_loss_dot_route,
+        "support_per_parameter": negative_loss_dot_route / num_selected_parameters,
+        "projected_step_size_on_route_gradient": _safe_ratio(
+            negative_loss_dot_route,
+            route_gradient_l2_norm * route_gradient_l2_norm,
+        ),
+        "notes": list(group.notes),
+    }
+
+
+def _compute_route_gradient_decomposition_checkpoint(
+    *,
+    model: torch.nn.Module,
+    pairs: list[dict[str, Any]],
+    vocab: Vocabulary,
+    checkpoint_step: int,
+    learning_rate: float,
+    basis: torch.Tensor | None,
+    subspace_summary: dict[str, Any],
+    subspace_name: str,
+    rank: int | None,
+    stage_name: str,
+    position_role: str,
+    loss_side: str,
+    batch_size: int,
+    pad_token_id: int,
+    device: torch.device,
+    groups: list[_RouteGradientDecompositionGroup],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    if not groups:
+        raise ValueError("Route-gradient decomposition requires at least one group.")
+    route_groups = _route_gradient_groups(pairs)
+    metric_rows: list[dict[str, Any]] = []
+    decomposition_rows: list[dict[str, Any]] = []
+    global_group = next((group for group in groups if group.group_kind == "global_all"), None)
+    if global_group is None:
+        raise RuntimeError("Route-gradient decomposition groups are missing the global_all group.")
+
+    for (split, pair_type), group_pairs in sorted(route_groups.items()):
+        loss_records = _loss_records_for_pairs(pairs=group_pairs, loss_side=loss_side)
+        loss_payload = _compute_loss_gradient_for_records(
+            model=model,
+            records=loss_records,
+            batch_size=batch_size,
+            pad_token_id=pad_token_id,
+            device=device,
+        )
+        route_payload = _compute_route_score_gradient_for_pairs(
+            model=model,
+            pairs=group_pairs,
+            vocab=vocab,
+            basis=basis,
+            stage_name=stage_name,
+            position_role=position_role,
+            batch_size=batch_size,
+            pad_token_id=pad_token_id,
+            device=device,
+        )
+        loss_gradients = loss_payload["gradients"]
+        route_gradients = route_payload["gradients"]
+        if not isinstance(loss_gradients, dict) or not isinstance(route_gradients, dict):
+            raise TypeError("Gradient payloads must be dictionaries.")
+
+        global_summary = _gradient_dot_summary_for_group(
+            left_gradients=loss_gradients,
+            right_gradients=route_gradients,
+            group=global_group,
+            label=f"{split}/{pair_type}/global",
+        )
+        metric_rows.append(
+            _route_gradient_decomposition_row(
+                checkpoint_step=checkpoint_step,
+                learning_rate=learning_rate,
+                split=split,
+                pair_type=pair_type,
+                loss_side=loss_side,
+                stage_name=stage_name,
+                subspace_name=subspace_name,
+                subspace_summary=subspace_summary,
+                rank=rank,
+                position_role=position_role,
+                group=global_group,
+                dot_summary=global_summary,
+                route_payload=route_payload,
+                loss_payload=loss_payload,
+            )
+        )
+        for group in groups:
+            dot_summary = global_summary if group.group_kind == "global_all" else _gradient_dot_summary_for_group(
+                left_gradients=loss_gradients,
+                right_gradients=route_gradients,
+                group=group,
+                label=f"{split}/{pair_type}/{group.group_id}",
+            )
+            decomposition_rows.append(
+                _route_gradient_decomposition_row(
+                    checkpoint_step=checkpoint_step,
+                    learning_rate=learning_rate,
+                    split=split,
+                    pair_type=pair_type,
+                    loss_side=loss_side,
+                    stage_name=stage_name,
+                    subspace_name=subspace_name,
+                    subspace_summary=subspace_summary,
+                    rank=rank,
+                    position_role=position_role,
+                    group=group,
+                    dot_summary=dot_summary,
+                    route_payload=route_payload,
+                    loss_payload=loss_payload,
+                )
+            )
+    return metric_rows, decomposition_rows
+
+
+def _summarize_route_gradient_decomposition_report(
+    *,
+    metric_rows: list[dict[str, Any]],
+    decomposition_rows: list[dict[str, Any]],
+    top_k_groups: int,
+) -> dict[str, Any]:
+    if top_k_groups <= 0:
+        raise ValueError("top_k_groups must be positive.")
+    if not metric_rows:
+        raise ValueError("Cannot summarize route-gradient decomposition without metric rows.")
+    if not decomposition_rows:
+        raise ValueError("Cannot summarize route-gradient decomposition without decomposition rows.")
+    final_step = max(int(row["step"]) for row in metric_rows)
+    final_metric_rows = [row for row in metric_rows if int(row["step"]) == final_step]
+    final_all_rows = [
+        row
+        for row in final_metric_rows
+        if str(row["split"]) == "__all__" and str(row["pair_type"]) == "__all__"
+    ]
+    if len(final_all_rows) != 1:
+        raise RuntimeError(f"Expected one final all/all metric row, got {len(final_all_rows)}.")
+    final_decomposition_rows = [row for row in decomposition_rows if int(row["step"]) == final_step]
+    final_all_decomposition_rows = [
+        row
+        for row in final_decomposition_rows
+        if str(row["split"]) == "__all__" and str(row["pair_type"]) == "__all__"
+    ]
+    non_global_final = [
+        row
+        for row in final_all_decomposition_rows
+        if str(row["group_kind"]) != "global_all"
+    ]
+    by_kind: dict[str, list[dict[str, Any]]] = {}
+    for row in non_global_final:
+        by_kind.setdefault(str(row["group_kind"]), []).append(row)
+    top_by_kind = {
+        group_kind: {
+            "top_positive_support": sorted(
+                rows,
+                key=lambda row: float(row["negative_loss_dot_route_gradient"]),
+                reverse=True,
+            )[:top_k_groups],
+            "top_negative_support": sorted(
+                rows,
+                key=lambda row: float(row["negative_loss_dot_route_gradient"]),
+            )[:top_k_groups],
+            "top_abs_support": sorted(
+                rows,
+                key=lambda row: abs(float(row["negative_loss_dot_route_gradient"])),
+                reverse=True,
+            )[:top_k_groups],
+        }
+        for group_kind, rows in sorted(by_kind.items())
+    }
+    return {
+        "num_checkpoints": len({int(row["step"]) for row in metric_rows}),
+        "steps": sorted({int(row["step"]) for row in metric_rows}),
+        "final_step": final_step,
+        "final_all": final_all_rows[0],
+        "final_metric_by_split_and_pair_type": sorted(
+            final_metric_rows,
+            key=lambda row: (str(row["split"]), str(row["pair_type"])),
+        ),
+        "final_top_positive_support": sorted(
+            non_global_final,
+            key=lambda row: float(row["negative_loss_dot_route_gradient"]),
+            reverse=True,
+        )[:top_k_groups],
+        "final_top_negative_support": sorted(
+            non_global_final,
+            key=lambda row: float(row["negative_loss_dot_route_gradient"]),
+        )[:top_k_groups],
+        "final_top_abs_support": sorted(
+            non_global_final,
+            key=lambda row: abs(float(row["negative_loss_dot_route_gradient"])),
+            reverse=True,
+        )[:top_k_groups],
+        "final_top_by_group_kind": top_by_kind,
+    }
+
+
+def _plot_route_decomposition_top_support(
+    *,
+    decomposition_rows: list[dict[str, Any]],
+    top_k_groups: int,
+    output_path: Path,
+) -> Path | None:
+    if not decomposition_rows:
+        return None
+    final_step = max(int(row["step"]) for row in decomposition_rows)
+    rows = [
+        row
+        for row in decomposition_rows
+        if int(row["step"]) == final_step
+        and str(row["split"]) == "__all__"
+        and str(row["pair_type"]) == "__all__"
+        and str(row["group_kind"]) not in {"global_all", "parameter_tensor"}
+    ]
+    if not rows:
+        return None
+    top_rows = sorted(
+        rows,
+        key=lambda row: abs(float(row["negative_loss_dot_route_gradient"])),
+        reverse=True,
+    )[:top_k_groups]
+    _, plt = _import_matplotlib()
+    fig, ax = plt.subplots(figsize=(12, max(5, 0.35 * len(top_rows))))
+    y_positions = list(range(len(top_rows)))
+    values = [float(row["negative_loss_dot_route_gradient"]) for row in top_rows]
+    labels = [str(row["group_id"]) for row in top_rows]
+    colors = ["#376f8f" if value >= 0.0 else "#8f374a" for value in values]
+    ax.barh(y_positions, values, color=colors)
+    ax.axvline(0.0, color="#777777", linewidth=1.0, linestyle="--")
+    ax.set_yticks(y_positions)
+    ax.set_yticklabels(labels)
+    ax.invert_yaxis()
+    ax.set_title(f"Top route-gradient supports at step {final_step}")
+    ax.set_xlabel("-grad(loss) . grad(route score)")
+    ax.grid(axis="x", alpha=0.25)
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, format="svg")
+    plt.close(fig)
+    return output_path
+
+
+def _plot_route_decomposition_attention_qkvo_timeline(
+    *,
+    decomposition_rows: list[dict[str, Any]],
+    head_layer: int | None,
+    head: int | None,
+    output_path: Path,
+) -> Path | None:
+    if head_layer is None or head is None:
+        return None
+    rows = [
+        row
+        for row in decomposition_rows
+        if str(row["split"]) == "__all__"
+        and str(row["pair_type"]) != "__all__"
+        and str(row["group_kind"]) == "attention_head_projection"
+        and int(row["group_layer"]) == head_layer
+        and int(row["group_head"]) == head
+    ]
+    if not rows:
+        return None
+    pair_types = sorted({str(row["pair_type"]) for row in rows})
+    selected_pair_type = "query_key" if "query_key" in pair_types else pair_types[0]
+    selected_rows = [row for row in rows if str(row["pair_type"]) == selected_pair_type]
+    projections = ["q_proj", "k_proj", "v_proj", "out_proj"]
+    _, plt = _import_matplotlib()
+    fig, ax = plt.subplots(figsize=(10, 6))
+    for projection in projections:
+        projection_rows = sorted(
+            [row for row in selected_rows if str(row["group_projection"]) == projection],
+            key=lambda row: int(row["step"]),
+        )
+        if not projection_rows:
+            continue
+        ax.plot(
+            [int(row["step"]) for row in projection_rows],
+            [float(row["negative_loss_dot_route_gradient"]) for row in projection_rows],
+            marker="o",
+            label=projection,
+        )
+    ax.axhline(0.0, color="#777777", linewidth=1.0, linestyle="--")
+    ax.set_title(f"L{head_layer}H{head} Q/K/V/O SGD support on {selected_pair_type}")
+    ax.set_xlabel("checkpoint step")
+    ax.set_ylabel("-grad(loss) . grad(route score)")
+    ax.grid(alpha=0.25)
+    ax.legend(loc="best")
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, format="svg")
+    plt.close(fig)
+    return output_path
+
+
+def _plot_route_decomposition_mlp_neuron_histogram(
+    *,
+    decomposition_rows: list[dict[str, Any]],
+    output_path: Path,
+) -> Path | None:
+    if not decomposition_rows:
+        return None
+    final_step = max(int(row["step"]) for row in decomposition_rows)
+    rows = [
+        row
+        for row in decomposition_rows
+        if int(row["step"]) == final_step
+        and str(row["split"]) == "__all__"
+        and str(row["pair_type"]) == "__all__"
+        and str(row["group_kind"]) == "mlp_neuron"
+    ]
+    if not rows:
+        return None
+    _, plt = _import_matplotlib()
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.hist([float(row["negative_loss_dot_route_gradient"]) for row in rows], bins=50, color="#6f8f37")
+    ax.axvline(0.0, color="#777777", linewidth=1.0, linestyle="--")
+    ax.set_title(f"MLP neuron route-gradient support distribution at step {final_step}")
+    ax.set_xlabel("-grad(loss) . grad(route score)")
+    ax.set_ylabel("neuron count")
+    ax.grid(axis="y", alpha=0.25)
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, format="svg")
+    plt.close(fig)
+    return output_path
+
+
+def _write_route_gradient_decomposition_markdown(
+    *,
+    path: Path,
+    report: dict[str, Any],
+    plot_paths: dict[str, Path],
+) -> None:
+    summary = report["summary"]
+    final_all = summary["final_all"]
+    lines = [
+        "# Route Gradient Decomposition",
+        "",
+        "## Calculation",
+        "",
+        "The route score is unchanged from candidate-route-gradient-selection:",
+        "",
+        "```text",
+        "route_score = patched_transfer_margin - corrupted_transfer_margin",
+        "```",
+        "",
+        "For each parameter group `g`, the decomposed support is:",
+        "",
+        "```text",
+        "support_g = < -grad_g loss, grad_g route_score >",
+        "linearized_delta_g = learning_rate * support_g",
+        "```",
+        "",
+        "Positive support means the local SGD step would increase this route through that parameter group. Negative support means that group would weaken or rebalance the route.",
+        "",
+        "## Route",
+        "",
+        f"- subspace: `{report['subspace']['subspace_name']}`",
+        f"- rank: `{report['rank']}`",
+        f"- stage: `{report['stage']}`",
+        f"- position role: `{report['position_role']}`",
+        f"- loss side: `{report['loss_side']}`",
+        f"- device: `{report['device']}`",
+        "",
+        "## Decomposition",
+        "",
+        f"- modes: `{', '.join(report['decomposition']['decomposition_modes'])}`",
+        f"- groups: `{report['decomposition']['num_groups']}`",
+        f"- group counts: `{report['decomposition']['group_counts_by_kind']}`",
+        "",
+        "Rows are not one global partition across all group kinds. Compare rows within the same `group_kind` or `partition_name`.",
+        "",
+        "## Final All-Pair Result",
+        "",
+        f"- route score: `{float(final_all['route_score']):.6f}`",
+        f"- total SGD support: `{float(final_all['negative_loss_dot_route_gradient']):.6g}`",
+        f"- total linearized delta: `{float(final_all['sgd_route_score_delta_linearized']):.6g}`",
+        "",
+        "## Final Top Positive Groups",
+        "",
+        "| group | kind | params | support | linearized delta | cosine |",
+        "| --- | --- | ---: | ---: | ---: | ---: |",
+    ]
+    for row in summary["final_top_positive_support"]:
+        cosine = row["loss_negative_route_gradient_cosine"]
+        cosine_text = "" if cosine is None else f"{float(cosine):.6f}"
+        lines.append(
+            "| {group} | {kind} | {params} | {support:.6g} | {delta:.6g} | {cosine} |".format(
+                group=row["group_id"],
+                kind=row["group_kind"],
+                params=int(row["num_selected_parameters"]),
+                support=float(row["negative_loss_dot_route_gradient"]),
+                delta=float(row["sgd_route_score_delta_linearized"]),
+                cosine=cosine_text,
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "## Final Top Negative Groups",
+            "",
+            "| group | kind | params | support | linearized delta | cosine |",
+            "| --- | --- | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for row in summary["final_top_negative_support"]:
+        cosine = row["loss_negative_route_gradient_cosine"]
+        cosine_text = "" if cosine is None else f"{float(cosine):.6f}"
+        lines.append(
+            "| {group} | {kind} | {params} | {support:.6g} | {delta:.6g} | {cosine} |".format(
+                group=row["group_id"],
+                kind=row["group_kind"],
+                params=int(row["num_selected_parameters"]),
+                support=float(row["negative_loss_dot_route_gradient"]),
+                delta=float(row["sgd_route_score_delta_linearized"]),
+                cosine=cosine_text,
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "## Raw Outputs",
+            "",
+            f"- metric rows: `{report['metric_rows_path']}`",
+            f"- decomposition rows: `{report['decomposition_rows_path']}`",
+            f"- group rows: `{report['group_rows_path']}`",
+            f"- pair rows: `{report['pair_rows_path']}`",
+            "",
+            "## Plots",
+            "",
+        ]
+    )
+    for label, plot_path in plot_paths.items():
+        lines.append(f"- {label}: `{plot_path}`")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def run_route_gradient_decomposition(
+    *,
+    config_path: Path,
+    probe_set_path: Path,
+    checkpoint_dir: Path,
+    output_dir: Path,
+    stage_name: str,
+    subspace_name: str,
+    position_role: str,
+    pair_types: list[str],
+    rank: int | None = None,
+    device_name: str = "mps",
+    checkpoint_paths: list[Path] | None = None,
+    head_layer: int | None = None,
+    head: int | None = None,
+    max_pairs_per_type: int = 64,
+    min_pairs_per_type: int = 1,
+    split_filter: list[str] | None = None,
+    loss_side: str = "both",
+    decomposition_modes: list[str] | None = None,
+    top_k_groups: int = 24,
+) -> tuple[Path, Path, Path, Path, Path, Path, dict[str, Path]]:
+    if loss_side not in ROUTE_GRADIENT_LOSS_SIDES:
+        raise ValueError(f"Unsupported loss_side {loss_side!r}; expected one of {ROUTE_GRADIENT_LOSS_SIDES}.")
+    if top_k_groups <= 0:
+        raise ValueError("top_k_groups must be positive.")
+    resolved_decomposition_modes = _resolve_route_gradient_decomposition_modes(decomposition_modes)
+    spec = TrainSpec.from_path(config_path)
+    probe_records, probe_metadata = load_probe_set(probe_set_path)
+    if str(probe_metadata["benchmark_dir"]) != str(spec.benchmark_dir):
+        raise ValueError(
+            f"Probe set benchmark mismatch: probe={probe_metadata['benchmark_dir']} config={spec.benchmark_dir}"
+        )
+    metadata = read_symbolic_kv_stream_metadata(spec.benchmark_dir)
+    vocab = Vocabulary.from_metadata(metadata["vocabulary"])
+    holdout_pairs = _holdout_pair_set(metadata)
+    device = require_device(device_name)
+    checkpoints = _resolve_checkpoint_paths(checkpoint_dir=checkpoint_dir, checkpoint_paths=checkpoint_paths)
+    model = build_model(spec.model, len(vocab.tokens), device)
+    _validate_geometry_stage(model=model, stage_name=stage_name)
+    if position_role not in GEOMETRY_POSITION_ROLES:
+        raise ValueError(f"Unsupported position role {position_role!r}; expected one of {GEOMETRY_POSITION_ROLES}.")
+    pair_types = sorted(set(pair_types), key=pair_types.index)
+    pairs, pair_construction = _build_causal_patch_pairs(
+        probe_records=probe_records,
+        vocab=vocab,
+        holdout_pairs=holdout_pairs,
+        pair_types=pair_types,
+        max_pairs_per_type=max_pairs_per_type,
+        min_pairs_per_type=min_pairs_per_type,
+        split_filter=split_filter,
+    )
+    if not pairs:
+        raise RuntimeError("Route gradient decomposition constructed no pairs.")
+
+    groups, decomposition_summary = _build_route_gradient_decomposition_groups(
+        model=model,
+        decomposition_modes=resolved_decomposition_modes,
+    )
+    group_rows = [
+        _group_metadata(
+            model_parameters=dict(model.named_parameters(remove_duplicate=False)),
+            group=group,
+        )
+        for group in groups
+    ]
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    metric_rows_path = output_dir / "route_gradient_decomposition_metric_rows.jsonl"
+    decomposition_rows_path = output_dir / "route_gradient_decomposition_rows.jsonl"
+    group_rows_path = output_dir / "route_gradient_decomposition_groups.jsonl"
+    pair_rows_path = output_dir / "route_gradient_decomposition_pairs.jsonl"
+    progress_path = output_dir / "route_gradient_decomposition_progress.json"
+    for partial_path in (metric_rows_path, decomposition_rows_path, group_rows_path, pair_rows_path, progress_path):
+        if partial_path.exists():
+            partial_path.unlink()
+    write_jsonl(pair_rows_path, [_pair_metadata(pair) for pair in pairs])
+    write_jsonl(group_rows_path, group_rows)
+
+    print(
+        "[route-gradient-decomposition] "
+        f"checkpoints={len(checkpoints)} pairs={len(pairs)} pair_types={pair_types} "
+        f"device={device_name} subspace={subspace_name} rank={rank} stage={stage_name} "
+        f"role={position_role} loss_side={loss_side} groups={len(groups)}",
+        flush=True,
+    )
+
+    all_metric_rows: list[dict[str, Any]] = []
+    all_decomposition_rows: list[dict[str, Any]] = []
+    final_subspace_summary: dict[str, Any] | None = None
+    for checkpoint_index, checkpoint_path in enumerate(checkpoints, start=1):
+        checkpoint = load_checkpoint(checkpoint_path, device)
+        load_model_state(model, checkpoint["model_state"])
+        model.eval()
+        step = int(checkpoint["step"])
+        path_step = _checkpoint_step_from_path(checkpoint_path)
+        if step != path_step:
+            raise RuntimeError(f"Checkpoint step mismatch for {checkpoint_path}: payload={step} path={path_step}")
+        basis, subspace_summary = _resolve_causal_patch_basis(
+            model=model,
+            vocab=vocab,
+            subspace_name=subspace_name,
+            rank=rank,
+            head_layer=head_layer,
+            head=head,
+            device=device,
+        )
+        final_subspace_summary = subspace_summary
+        learning_rate = _compute_learning_rate(spec.optimization, step)
+        print(
+            f"[route-gradient-decomposition] starting {checkpoint_index}/{len(checkpoints)} {checkpoint_path.name}",
+            flush=True,
+        )
+        metric_rows, decomposition_rows = _compute_route_gradient_decomposition_checkpoint(
+            model=model,
+            pairs=pairs,
+            vocab=vocab,
+            checkpoint_step=step,
+            learning_rate=learning_rate,
+            basis=basis,
+            subspace_summary=subspace_summary,
+            subspace_name=subspace_name,
+            rank=rank,
+            stage_name=stage_name,
+            position_role=position_role,
+            loss_side=loss_side,
+            batch_size=spec.evaluation.batch_size,
+            pad_token_id=vocab.pad_token_id,
+            device=device,
+            groups=groups,
+        )
+        for row in metric_rows:
+            append_jsonl(metric_rows_path, row)
+        for row in decomposition_rows:
+            append_jsonl(decomposition_rows_path, row)
+        all_metric_rows.extend(metric_rows)
+        all_decomposition_rows.extend(decomposition_rows)
+        write_json(
+            progress_path,
+            {
+                "status": "running",
+                "completed_checkpoints": checkpoint_index,
+                "total_checkpoints": len(checkpoints),
+                "last_completed_step": step,
+                "metric_rows_path": str(metric_rows_path),
+                "decomposition_rows_path": str(decomposition_rows_path),
+                "group_rows_path": str(group_rows_path),
+                "pair_rows_path": str(pair_rows_path),
+            },
+        )
+        all_row = next(
+            row
+            for row in metric_rows
+            if str(row["split"]) == "__all__" and str(row["pair_type"]) == "__all__"
+        )
+        final_checkpoint_rows = [
+            row
+            for row in decomposition_rows
+            if str(row["split"]) == "__all__"
+            and str(row["pair_type"]) == "__all__"
+            and str(row["group_kind"]) != "global_all"
+        ]
+        top_abs_row = max(
+            final_checkpoint_rows,
+            key=lambda row: abs(float(row["negative_loss_dot_route_gradient"])),
+        )
+        print(
+            "[route-gradient-decomposition] finished "
+            f"step={step} route_score={float(all_row['route_score']):.6f} "
+            f"sgd_support={float(all_row['negative_loss_dot_route_gradient']):.6g} "
+            f"top_group={top_abs_row['group_id']} top_support={float(top_abs_row['negative_loss_dot_route_gradient']):.6g}",
+            flush=True,
+        )
+
+    if final_subspace_summary is None:
+        raise RuntimeError("No checkpoints were processed for route gradient decomposition.")
+    summary = _summarize_route_gradient_decomposition_report(
+        metric_rows=all_metric_rows,
+        decomposition_rows=all_decomposition_rows,
+        top_k_groups=top_k_groups,
+    )
+    report_path = output_dir / "route_gradient_decomposition_report.json"
+    markdown_path = output_dir / "route_gradient_decomposition_report.md"
+    plot_paths: dict[str, Path] = {}
+    top_support_plot = _plot_route_decomposition_top_support(
+        decomposition_rows=all_decomposition_rows,
+        top_k_groups=top_k_groups,
+        output_path=output_dir / "route_gradient_decomposition_top_support.svg",
+    )
+    if top_support_plot is not None:
+        plot_paths["top_support"] = top_support_plot
+    qkvo_plot = _plot_route_decomposition_attention_qkvo_timeline(
+        decomposition_rows=all_decomposition_rows,
+        head_layer=head_layer,
+        head=head,
+        output_path=output_dir / "route_gradient_decomposition_attention_qkvo_timeline.svg",
+    )
+    if qkvo_plot is not None:
+        plot_paths["attention_qkvo_timeline"] = qkvo_plot
+    mlp_histogram = _plot_route_decomposition_mlp_neuron_histogram(
+        decomposition_rows=all_decomposition_rows,
+        output_path=output_dir / "route_gradient_decomposition_mlp_neuron_histogram.svg",
+    )
+    if mlp_histogram is not None:
+        plot_paths["mlp_neuron_histogram"] = mlp_histogram
+
+    report = {
+        "schema_version": ROUTE_GRADIENT_DECOMPOSITION_SCHEMA_VERSION,
+        "config_path": str(config_path),
+        "probe_set_path": str(probe_set_path),
+        "checkpoint_dir": str(checkpoint_dir),
+        "device": device_name,
+        "stage": stage_name,
+        "subspace": final_subspace_summary,
+        "subspace_name": subspace_name,
+        "rank": rank,
+        "position_role": position_role,
+        "pair_types": pair_types,
+        "max_pairs_per_type": max_pairs_per_type,
+        "min_pairs_per_type": min_pairs_per_type,
+        "split_filter": split_filter,
+        "loss_side": loss_side,
+        "decomposition": decomposition_summary,
+        "top_k_groups": top_k_groups,
+        "calculation": {
+            "route_score": "patched_transfer_margin - corrupted_transfer_margin",
+            "group_support": "< -grad_group loss, grad_group route_score >",
+            "linearized_delta": "learning_rate * group_support",
+            "positive_support": "local SGD step is predicted to increase the route score through this group",
+            "attention_head_projection_units": (
+                "q/k/v groups use output-channel rows plus bias; out_proj uses input-channel columns and excludes shared out_proj.bias."
+            ),
+            "mlp_neuron_unit": "fc_in row + fc_in bias element + fc_out column; fc_out.bias remains a block parameter.",
+        },
+        "pair_construction": pair_construction,
+        "metric_rows_path": str(metric_rows_path),
+        "decomposition_rows_path": str(decomposition_rows_path),
+        "group_rows_path": str(group_rows_path),
+        "pair_rows_path": str(pair_rows_path),
+        "summary": summary,
+    }
+    write_json(report_path, report)
+    _write_route_gradient_decomposition_markdown(path=markdown_path, report=report, plot_paths=plot_paths)
+    write_json(
+        progress_path,
+        {
+            "status": "complete",
+            "completed_checkpoints": len(checkpoints),
+            "total_checkpoints": len(checkpoints),
+            "last_completed_step": int(summary["final_step"]),
+            "report_path": str(report_path),
+            "markdown_path": str(markdown_path),
+            "metric_rows_path": str(metric_rows_path),
+            "decomposition_rows_path": str(decomposition_rows_path),
+            "group_rows_path": str(group_rows_path),
+            "pair_rows_path": str(pair_rows_path),
+        },
+    )
+    print(
+        f"[route-gradient-decomposition] complete report={report_path} rows={decomposition_rows_path}",
+        flush=True,
+    )
+    return report_path, markdown_path, metric_rows_path, decomposition_rows_path, group_rows_path, pair_rows_path, plot_paths
+
+
+def _model_parameter_snapshot(model: torch.nn.Module) -> dict[str, torch.Tensor]:
+    return {
+        name: parameter.detach().cpu().float().clone()
+        for name, parameter in model.named_parameters(remove_duplicate=False)
+    }
+
+
+def _parameter_delta(
+    *,
+    source_parameters: dict[str, torch.Tensor],
+    target_parameters: dict[str, torch.Tensor],
+    label: str,
+) -> dict[str, torch.Tensor]:
+    source_keys = set(source_parameters)
+    target_keys = set(target_parameters)
+    if source_keys != target_keys:
+        missing_target = sorted(source_keys - target_keys)
+        extra_target = sorted(target_keys - source_keys)
+        raise ValueError(
+            f"Parameter keys differ for {label}: missing_target={missing_target} extra_target={extra_target}"
+        )
+    deltas: dict[str, torch.Tensor] = {}
+    for key in sorted(source_keys):
+        source = source_parameters[key]
+        target = target_parameters[key]
+        if source.shape != target.shape:
+            raise ValueError(
+                f"Parameter shape mismatch for {label} key {key}: {tuple(source.shape)} vs {tuple(target.shape)}"
+            )
+        delta = target - source
+        if not torch.isfinite(delta).all():
+            raise RuntimeError(f"Non-finite parameter delta for {label} key {key}.")
+        deltas[key] = delta
+    return deltas
+
+
+def _sign_match(actual: float, predicted: float) -> bool:
+    if actual == 0.0 and predicted == 0.0:
+        return True
+    return actual * predicted > 0.0
+
+
+def _checkpoint_update_metric_row(
+    *,
+    source_step: int,
+    target_step: int,
+    source_checkpoint: Path,
+    target_checkpoint: Path,
+    learning_rate: float,
+    split: str,
+    pair_type: str,
+    stage_name: str,
+    subspace_name: str,
+    subspace_summary: dict[str, Any],
+    rank: int | None,
+    position_role: str,
+    source_payload: dict[str, Any],
+    target_payload: dict[str, Any],
+    dot_summary: dict[str, float | int | None],
+    min_error_denominator: float,
+) -> dict[str, Any]:
+    actual_delta = float(target_payload["route_score"]) - float(source_payload["route_score"])
+    predicted_delta = float(dot_summary["dot"])
+    residual = actual_delta - predicted_delta
+    relative_error_denominator = max(abs(actual_delta), min_error_denominator)
+    predicted_relative_error_denominator = max(abs(predicted_delta), min_error_denominator)
+    return {
+        "source_step": source_step,
+        "target_step": target_step,
+        "step_gap": target_step - source_step,
+        "source_checkpoint": str(source_checkpoint),
+        "target_checkpoint": str(target_checkpoint),
+        "learning_rate": learning_rate,
+        "split": split,
+        "pair_type": pair_type,
+        "stage": stage_name,
+        "subspace_name": subspace_name,
+        "subspace_type": str(subspace_summary["subspace_type"]),
+        "head_label": subspace_summary.get("head_label"),
+        "rank": rank,
+        "position_role": position_role,
+        "num_pairs": int(source_payload["num_pairs"]),
+        "source_route_score": float(source_payload["route_score"]),
+        "target_route_score": float(target_payload["route_score"]),
+        "actual_delta": actual_delta,
+        "predicted_delta": predicted_delta,
+        "residual": residual,
+        "absolute_error": abs(residual),
+        "relative_error": abs(residual) / relative_error_denominator,
+        "relative_error_denominator": relative_error_denominator,
+        "predicted_relative_error": abs(residual) / predicted_relative_error_denominator,
+        "predicted_relative_error_denominator": predicted_relative_error_denominator,
+        "sign_match": _sign_match(actual=actual_delta, predicted=predicted_delta),
+        "source_transfer_margin_clean_mean": float(source_payload["transfer_margin_clean_mean"]),
+        "source_transfer_margin_corrupted_mean": float(source_payload["transfer_margin_corrupted_mean"]),
+        "source_transfer_margin_patched_mean": float(source_payload["transfer_margin_patched_mean"]),
+        "target_transfer_margin_clean_mean": float(target_payload["transfer_margin_clean_mean"]),
+        "target_transfer_margin_corrupted_mean": float(target_payload["transfer_margin_corrupted_mean"]),
+        "target_transfer_margin_patched_mean": float(target_payload["transfer_margin_patched_mean"]),
+        "source_route_delta_abs_mean": float(source_payload["route_delta_abs_mean"]),
+        "target_route_delta_abs_mean": float(target_payload["route_delta_abs_mean"]),
+        "source_route_delta_positive_fraction": float(source_payload["route_delta_positive_fraction"]),
+        "target_route_delta_positive_fraction": float(target_payload["route_delta_positive_fraction"]),
+        "parameter_delta_l2_norm": float(dot_summary["left_l2_norm"]),
+        "route_gradient_l2_norm": float(dot_summary["right_l2_norm"]),
+        "update_route_gradient_cosine": dot_summary["cosine"],
+        "num_parameters": int(dot_summary["num_parameters"]),
+        "zero_route_gradient_parameter_count": len(source_payload["zero_gradient_parameter_names"]),
+        "zero_route_gradient_parameter_names": source_payload["zero_gradient_parameter_names"],
+    }
+
+
+def _checkpoint_update_decomposition_row(
+    *,
+    metric_row: dict[str, Any],
+    group: _RouteGradientDecompositionGroup,
+    dot_summary: dict[str, float | int | None],
+) -> dict[str, Any]:
+    predicted_delta = float(dot_summary["dot"])
+    route_gradient_l2_norm = float(dot_summary["right_l2_norm"])
+    parameter_delta_l2_norm = float(dot_summary["left_l2_norm"])
+    num_selected_parameters = int(dot_summary["num_parameters"])
+    return {
+        "source_step": int(metric_row["source_step"]),
+        "target_step": int(metric_row["target_step"]),
+        "step_gap": int(metric_row["step_gap"]),
+        "source_checkpoint": metric_row["source_checkpoint"],
+        "target_checkpoint": metric_row["target_checkpoint"],
+        "learning_rate": float(metric_row["learning_rate"]),
+        "split": metric_row["split"],
+        "pair_type": metric_row["pair_type"],
+        "stage": metric_row["stage"],
+        "subspace_name": metric_row["subspace_name"],
+        "subspace_type": metric_row["subspace_type"],
+        "head_label": metric_row["head_label"],
+        "rank": metric_row["rank"],
+        "position_role": metric_row["position_role"],
+        "num_pairs": int(metric_row["num_pairs"]),
+        "source_route_score": float(metric_row["source_route_score"]),
+        "target_route_score": float(metric_row["target_route_score"]),
+        "actual_delta": float(metric_row["actual_delta"]),
+        "global_predicted_delta": float(metric_row["predicted_delta"]),
+        "global_residual": float(metric_row["residual"]),
+        "global_relative_error": float(metric_row["relative_error"]),
+        "group_id": group.group_id,
+        "group_kind": group.group_kind,
+        "component_type": group.component_type,
+        "partition_name": group.partition_name,
+        "group_layer": group.layer,
+        "group_head": group.head,
+        "group_projection": group.projection,
+        "group_neuron": group.neuron,
+        "selection_count": len(group.selections),
+        "num_selected_parameters": num_selected_parameters,
+        "predicted_delta_contribution": predicted_delta,
+        "parameter_delta_l2_norm": parameter_delta_l2_norm,
+        "route_gradient_l2_norm": route_gradient_l2_norm,
+        "update_route_gradient_cosine": dot_summary["cosine"],
+        "contribution_per_parameter": predicted_delta / num_selected_parameters,
+        "notes": list(group.notes),
+    }
+
+
+def _compute_checkpoint_update_attribution_interval(
+    *,
+    model: torch.nn.Module,
+    source_checkpoint_path: Path,
+    target_checkpoint_path: Path,
+    pairs: list[dict[str, Any]],
+    vocab: Vocabulary,
+    learning_rate: float,
+    subspace_name: str,
+    rank: int | None,
+    head_layer: int | None,
+    head: int | None,
+    stage_name: str,
+    position_role: str,
+    batch_size: int,
+    pad_token_id: int,
+    device: torch.device,
+    groups: list[_RouteGradientDecompositionGroup],
+    min_error_denominator: float,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    if not groups:
+        raise ValueError("Checkpoint update attribution requires at least one decomposition group.")
+
+    source_checkpoint = load_checkpoint(source_checkpoint_path, device)
+    load_model_state(model, source_checkpoint["model_state"])
+    model.eval()
+    source_step = int(source_checkpoint["step"])
+    source_path_step = _checkpoint_step_from_path(source_checkpoint_path)
+    if source_step != source_path_step:
+        raise RuntimeError(
+            f"Source checkpoint step mismatch for {source_checkpoint_path}: payload={source_step} path={source_path_step}"
+        )
+    source_parameters = _model_parameter_snapshot(model)
+    basis, subspace_summary = _resolve_causal_patch_basis(
+        model=model,
+        vocab=vocab,
+        subspace_name=subspace_name,
+        rank=rank,
+        head_layer=head_layer,
+        head=head,
+        device=device,
+    )
+
+    route_groups = _route_gradient_groups(pairs)
+    source_payloads: dict[tuple[str, str], dict[str, Any]] = {}
+    for group_key, group_pairs in sorted(route_groups.items()):
+        source_payloads[group_key] = _compute_route_score_gradient_for_pairs(
+            model=model,
+            pairs=group_pairs,
+            vocab=vocab,
+            basis=basis,
+            stage_name=stage_name,
+            position_role=position_role,
+            batch_size=batch_size,
+            pad_token_id=pad_token_id,
+            device=device,
+        )
+
+    target_checkpoint = load_checkpoint(target_checkpoint_path, device)
+    load_model_state(model, target_checkpoint["model_state"])
+    model.eval()
+    target_step = int(target_checkpoint["step"])
+    target_path_step = _checkpoint_step_from_path(target_checkpoint_path)
+    if target_step != target_path_step:
+        raise RuntimeError(
+            f"Target checkpoint step mismatch for {target_checkpoint_path}: payload={target_step} path={target_path_step}"
+        )
+    if target_step <= source_step:
+        raise ValueError(
+            f"Checkpoint update attribution requires increasing steps, got source={source_step} target={target_step}."
+        )
+    target_parameters = _model_parameter_snapshot(model)
+    delta_parameters = _parameter_delta(
+        source_parameters=source_parameters,
+        target_parameters=target_parameters,
+        label=f"{source_step}->{target_step}",
+    )
+
+    metric_rows: list[dict[str, Any]] = []
+    decomposition_rows: list[dict[str, Any]] = []
+    for group_key, group_pairs in sorted(route_groups.items()):
+        split, pair_type = group_key
+        source_payload = source_payloads[group_key]
+        target_payload = _compute_route_score_for_pairs(
+            model=model,
+            pairs=group_pairs,
+            vocab=vocab,
+            basis=basis,
+            stage_name=stage_name,
+            position_role=position_role,
+            batch_size=batch_size,
+            pad_token_id=pad_token_id,
+            device=device,
+        )
+        route_gradients = source_payload["gradients"]
+        if not isinstance(route_gradients, dict):
+            raise TypeError("Route gradient payload must contain a gradients dictionary.")
+        dot_summary = _gradient_dot_summary(
+            left_gradients=delta_parameters,
+            right_gradients=route_gradients,
+            label=f"checkpoint update {source_step}->{target_step} {split}/{pair_type}",
+        )
+        metric_row = _checkpoint_update_metric_row(
+            source_step=source_step,
+            target_step=target_step,
+            source_checkpoint=source_checkpoint_path,
+            target_checkpoint=target_checkpoint_path,
+            learning_rate=learning_rate,
+            split=split,
+            pair_type=pair_type,
+            stage_name=stage_name,
+            subspace_name=subspace_name,
+            subspace_summary=subspace_summary,
+            rank=rank,
+            position_role=position_role,
+            source_payload=source_payload,
+            target_payload=target_payload,
+            dot_summary=dot_summary,
+            min_error_denominator=min_error_denominator,
+        )
+        metric_rows.append(metric_row)
+        for group in groups:
+            group_dot_summary = _gradient_dot_summary_for_group(
+                left_gradients=delta_parameters,
+                right_gradients=route_gradients,
+                group=group,
+                label=f"checkpoint update {source_step}->{target_step} {split}/{pair_type}/{group.group_id}",
+            )
+            decomposition_rows.append(
+                _checkpoint_update_decomposition_row(
+                    metric_row=metric_row,
+                    group=group,
+                    dot_summary=group_dot_summary,
+                )
+            )
+
+    return metric_rows, decomposition_rows, subspace_summary
+
+
+def _summarize_checkpoint_update_attribution(
+    *,
+    metric_rows: list[dict[str, Any]],
+    decomposition_rows: list[dict[str, Any]],
+    top_k_groups: int,
+) -> dict[str, Any]:
+    if top_k_groups <= 0:
+        raise ValueError("top_k_groups must be positive.")
+    if not metric_rows:
+        raise ValueError("Cannot summarize checkpoint update attribution without metric rows.")
+    if not decomposition_rows:
+        raise ValueError("Cannot summarize checkpoint update attribution without decomposition rows.")
+    all_all_rows = [
+        row
+        for row in metric_rows
+        if str(row["split"]) == "__all__" and str(row["pair_type"]) == "__all__"
+    ]
+    if not all_all_rows:
+        raise RuntimeError("Checkpoint update attribution has no __all__/__all__ metric rows.")
+    final_target_step = max(int(row["target_step"]) for row in metric_rows)
+    final_all_rows = [
+        row
+        for row in all_all_rows
+        if int(row["target_step"]) == final_target_step
+    ]
+    if len(final_all_rows) != 1:
+        raise RuntimeError(
+            f"Expected one final __all__/__all__ metric row at target step {final_target_step}, got {len(final_all_rows)}."
+        )
+    final_decomposition_rows = [
+        row
+        for row in decomposition_rows
+        if int(row["target_step"]) == final_target_step
+        and str(row["split"]) == "__all__"
+        and str(row["pair_type"]) == "__all__"
+        and str(row["group_kind"]) not in {"global_all"}
+    ]
+    non_parameter_final = [
+        row for row in final_decomposition_rows if str(row["group_kind"]) != "parameter_tensor"
+    ]
+    sign_match_fraction = _fraction(
+        sum(1 for row in all_all_rows if bool(row["sign_match"])),
+        len(all_all_rows),
+        "checkpoint update sign_match_fraction",
+    )
+    return {
+        "num_intervals": len({(int(row["source_step"]), int(row["target_step"])) for row in metric_rows}),
+        "intervals": sorted(
+            {
+                f"{int(row['source_step'])}->{int(row['target_step'])}"
+                for row in metric_rows
+                if str(row["split"]) == "__all__" and str(row["pair_type"]) == "__all__"
+            }
+        ),
+        "target_steps": sorted({int(row["target_step"]) for row in metric_rows}),
+        "final_target_step": final_target_step,
+        "final_all": final_all_rows[0],
+        "final_metric_by_split_and_pair_type": sorted(
+            [row for row in metric_rows if int(row["target_step"]) == final_target_step],
+            key=lambda row: (str(row["split"]), str(row["pair_type"])),
+        ),
+        "all_all_sign_match_fraction": sign_match_fraction,
+        "all_all_mean_absolute_error": _mean([float(row["absolute_error"]) for row in all_all_rows]),
+        "all_all_mean_relative_error": _mean([float(row["relative_error"]) for row in all_all_rows]),
+        "all_all_worst_relative_error": max(all_all_rows, key=lambda row: float(row["relative_error"])),
+        "final_top_positive_contributions": sorted(
+            non_parameter_final,
+            key=lambda row: float(row["predicted_delta_contribution"]),
+            reverse=True,
+        )[:top_k_groups],
+        "final_top_negative_contributions": sorted(
+            non_parameter_final,
+            key=lambda row: float(row["predicted_delta_contribution"]),
+        )[:top_k_groups],
+        "final_top_abs_contributions": sorted(
+            non_parameter_final,
+            key=lambda row: abs(float(row["predicted_delta_contribution"])),
+            reverse=True,
+        )[:top_k_groups],
+    }
+
+
+def _plot_checkpoint_update_actual_vs_predicted(
+    *,
+    metric_rows: list[dict[str, Any]],
+    output_path: Path,
+) -> Path | None:
+    rows = [
+        row
+        for row in metric_rows
+        if str(row["split"]) == "__all__" and str(row["pair_type"]) == "__all__"
+    ]
+    if not rows:
+        return None
+    _, plt = _import_matplotlib()
+    fig, ax = plt.subplots(figsize=(7, 7))
+    actual = [float(row["actual_delta"]) for row in rows]
+    predicted = [float(row["predicted_delta"]) for row in rows]
+    ax.scatter(predicted, actual, color="#376f8f")
+    min_value = min(actual + predicted)
+    max_value = max(actual + predicted)
+    if min_value == max_value:
+        min_value -= 1.0
+        max_value += 1.0
+    ax.plot([min_value, max_value], [min_value, max_value], color="#777777", linestyle="--", linewidth=1.0)
+    ax.axhline(0.0, color="#999999", linewidth=0.8)
+    ax.axvline(0.0, color="#999999", linewidth=0.8)
+    ax.set_title("Checkpoint update attribution: actual vs predicted")
+    ax.set_xlabel("grad(route) . Delta theta")
+    ax.set_ylabel("route(theta_target) - route(theta_source)")
+    ax.grid(alpha=0.25)
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, format="svg")
+    plt.close(fig)
+    return output_path
+
+
+def _plot_checkpoint_update_relative_error(
+    *,
+    metric_rows: list[dict[str, Any]],
+    output_path: Path,
+) -> Path | None:
+    rows = sorted(
+        [
+            row
+            for row in metric_rows
+            if str(row["split"]) == "__all__" and str(row["pair_type"]) == "__all__"
+        ],
+        key=lambda row: int(row["target_step"]),
+    )
+    if not rows:
+        return None
+    _, plt = _import_matplotlib()
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.plot(
+        [int(row["target_step"]) for row in rows],
+        [float(row["relative_error"]) for row in rows],
+        marker="o",
+        color="#8f6237",
+    )
+    ax.set_title("Checkpoint update attribution relative error")
+    ax.set_xlabel("target checkpoint step")
+    ax.set_ylabel("|actual - predicted| / max(|actual|, epsilon)")
+    ax.grid(alpha=0.25)
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, format="svg")
+    plt.close(fig)
+    return output_path
+
+
+def _plot_checkpoint_update_top_contributions(
+    *,
+    decomposition_rows: list[dict[str, Any]],
+    top_k_groups: int,
+    output_path: Path,
+) -> Path | None:
+    if not decomposition_rows:
+        return None
+    final_target_step = max(int(row["target_step"]) for row in decomposition_rows)
+    rows = [
+        row
+        for row in decomposition_rows
+        if int(row["target_step"]) == final_target_step
+        and str(row["split"]) == "__all__"
+        and str(row["pair_type"]) == "__all__"
+        and str(row["group_kind"]) not in {"global_all", "parameter_tensor"}
+    ]
+    if not rows:
+        return None
+    top_rows = sorted(
+        rows,
+        key=lambda row: abs(float(row["predicted_delta_contribution"])),
+        reverse=True,
+    )[:top_k_groups]
+    _, plt = _import_matplotlib()
+    fig, ax = plt.subplots(figsize=(12, max(5, 0.35 * len(top_rows))))
+    y_positions = list(range(len(top_rows)))
+    values = [float(row["predicted_delta_contribution"]) for row in top_rows]
+    labels = [str(row["group_id"]) for row in top_rows]
+    colors = ["#376f8f" if value >= 0.0 else "#8f374a" for value in values]
+    ax.barh(y_positions, values, color=colors)
+    ax.axvline(0.0, color="#777777", linewidth=1.0, linestyle="--")
+    ax.set_yticks(y_positions)
+    ax.set_yticklabels(labels)
+    ax.invert_yaxis()
+    ax.set_title(f"Top actual-update route contributions ending at step {final_target_step}")
+    ax.set_xlabel("grad(route) . Delta theta contribution")
+    ax.grid(axis="x", alpha=0.25)
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, format="svg")
+    plt.close(fig)
+    return output_path
+
+
+def _write_checkpoint_update_attribution_markdown(
+    *,
+    path: Path,
+    report: dict[str, Any],
+    plot_paths: dict[str, Path],
+) -> None:
+    summary = report["summary"]
+    final_all = summary["final_all"]
+    lines = [
+        "# Checkpoint Update Attribution",
+        "",
+        "## Calculation",
+        "",
+        "This report tests whether actual checkpoint-to-checkpoint parameter movement explains route growth.",
+        "",
+        "```text",
+        "actual_delta = route_score(theta_target; fixed_source_basis) - route_score(theta_source; fixed_source_basis)",
+        "predicted_delta = grad_theta route_score(theta_source; fixed_source_basis) . (theta_target - theta_source)",
+        "residual = actual_delta - predicted_delta",
+        "```",
+        "",
+        "The basis is fixed from the source checkpoint for each interval. This avoids measuring route growth in a moving singular-vector coordinate system.",
+        "",
+        "## Route",
+        "",
+        f"- subspace: `{report['subspace_name']}`",
+        f"- basis mode: `{report['basis_mode']}`",
+        f"- rank: `{report['rank']}`",
+        f"- stage: `{report['stage']}`",
+        f"- position role: `{report['position_role']}`",
+        f"- device: `{report['device']}`",
+        "",
+        "## Final Interval",
+        "",
+        f"- interval: `{final_all['source_step']} -> {final_all['target_step']}`",
+        f"- source route score: `{float(final_all['source_route_score']):.6f}`",
+        f"- target route score: `{float(final_all['target_route_score']):.6f}`",
+        f"- actual delta: `{float(final_all['actual_delta']):.6g}`",
+        f"- predicted delta: `{float(final_all['predicted_delta']):.6g}`",
+        f"- residual: `{float(final_all['residual']):.6g}`",
+        f"- relative error: `{float(final_all['relative_error']):.6g}`",
+        f"- sign match: `{final_all['sign_match']}`",
+        "",
+        "## Reliability Summary",
+        "",
+        f"- all/all sign-match fraction: `{float(summary['all_all_sign_match_fraction']):.6f}`",
+        f"- all/all mean absolute error: `{float(summary['all_all_mean_absolute_error']):.6g}`",
+        f"- all/all mean relative error: `{float(summary['all_all_mean_relative_error']):.6g}`",
+        "",
+        "## Final Top Positive Contributions",
+        "",
+        "| group | kind | params | predicted contribution | cosine |",
+        "| --- | --- | ---: | ---: | ---: |",
+    ]
+    for row in summary["final_top_positive_contributions"]:
+        cosine = row["update_route_gradient_cosine"]
+        cosine_text = "" if cosine is None else f"{float(cosine):.6f}"
+        lines.append(
+            "| {group} | {kind} | {params} | {contribution:.6g} | {cosine} |".format(
+                group=row["group_id"],
+                kind=row["group_kind"],
+                params=int(row["num_selected_parameters"]),
+                contribution=float(row["predicted_delta_contribution"]),
+                cosine=cosine_text,
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "## Final Top Negative Contributions",
+            "",
+            "| group | kind | params | predicted contribution | cosine |",
+            "| --- | --- | ---: | ---: | ---: |",
+        ]
+    )
+    for row in summary["final_top_negative_contributions"]:
+        cosine = row["update_route_gradient_cosine"]
+        cosine_text = "" if cosine is None else f"{float(cosine):.6f}"
+        lines.append(
+            "| {group} | {kind} | {params} | {contribution:.6g} | {cosine} |".format(
+                group=row["group_id"],
+                kind=row["group_kind"],
+                params=int(row["num_selected_parameters"]),
+                contribution=float(row["predicted_delta_contribution"]),
+                cosine=cosine_text,
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "## Raw Outputs",
+            "",
+            f"- metric rows: `{report['metric_rows_path']}`",
+            f"- decomposition rows: `{report['decomposition_rows_path']}`",
+            f"- group rows: `{report['group_rows_path']}`",
+            f"- pair rows: `{report['pair_rows_path']}`",
+            "",
+            "## Plots",
+            "",
+        ]
+    )
+    for label, plot_path in plot_paths.items():
+        lines.append(f"- {label}: `{plot_path}`")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+ATTENTION_SCORE_RECORD_SIDES = ["clean", "corrupted"]
+ATTENTION_SCORE_COMPONENT_FIELDS = {
+    "q_input_source_key": "q_input_source_key",
+    "q_weight_source_key": "q_weight_source_key",
+    "q_bias_source_key": "q_bias_source_key",
+    "q_weight_input_cross_source_key": "q_weight_input_cross_source_key",
+    "source_query_k_input": "source_query_k_input",
+    "source_query_k_weight": "source_query_k_weight",
+    "source_query_k_bias": "source_query_k_bias",
+    "source_query_k_weight_input_cross": "source_query_k_weight_input_cross",
+    "qk_vector_cross": "qk_vector_cross",
+}
+
+
+def _resolve_attention_score_record_sides(record_sides: list[str] | None) -> list[str]:
+    if record_sides is None:
+        return list(ATTENTION_SCORE_RECORD_SIDES)
+    if not record_sides:
+        raise ValueError("record_sides must not be empty when provided.")
+    unsupported = [side for side in record_sides if side not in ATTENTION_SCORE_RECORD_SIDES]
+    if unsupported:
+        raise ValueError(f"Unsupported record sides {unsupported}; expected one of {ATTENTION_SCORE_RECORD_SIDES}.")
+    return sorted(set(record_sides), key=record_sides.index)
+
+
+def _attention_payload_for_records(
+    *,
+    model: torch.nn.Module,
+    records: list[dict[str, Any]],
+    head_layer: int,
+    head: int,
+    pad_token_id: int,
+    device: torch.device,
+) -> dict[str, Any]:
+    if not records:
+        raise ValueError("records must not be empty for attention score decomposition.")
+    if head_layer < 0 or head_layer >= len(model.blocks):
+        raise ValueError(f"head_layer {head_layer} outside model range 0..{len(model.blocks) - 1}.")
+    block = model.blocks[head_layer]
+    if head < 0 or head >= block.attn.n_heads:
+        raise ValueError(f"head {head} outside model range 0..{block.attn.n_heads - 1} for layer {head_layer}.")
+
+    batch = move_batch_to_device(collate_symbolic_kv(records, pad_token_id), device)
+    with torch.no_grad():
+        outputs = model(
+            batch["input_ids"],
+            attention_mask=batch["attention_mask"],
+            return_attentions=True,
+            return_residual_streams=True,
+        )
+    if outputs.attentions is None:
+        raise RuntimeError("Attention score decomposition requires attention tensors.")
+    if outputs.residual_streams is None:
+        raise RuntimeError("Attention score decomposition requires residual streams.")
+    _, _, metadata = extract_answer_logits(outputs.logits, batch)
+    _validate_single_query_batch(batch=batch, metadata=metadata, label="attention score")
+
+    if head_layer == 0:
+        pre_state = outputs.residual_streams["embedding"]
+    else:
+        pre_state = outputs.residual_streams[f"layer_{head_layer - 1}_post_mlp"]
+    attention_input = block.ln_1(pre_state)
+    batch_size, seq_len, _ = attention_input.shape
+    head_dim = block.attn.head_dim
+    head_slice = slice(head * head_dim, (head + 1) * head_dim)
+    q_all = block.attn.q_proj(attention_input).view(batch_size, seq_len, block.attn.n_heads, head_dim)
+    k_all = block.attn.k_proj(attention_input).view(batch_size, seq_len, block.attn.n_heads, head_dim)
+    q_head = q_all[:, :, head, :].detach().float().cpu()
+    k_head = k_all[:, :, head, :].detach().float().cpu()
+    q_weight = block.attn.q_proj.weight.detach().float().cpu()[head_slice, :]
+    k_weight = block.attn.k_proj.weight.detach().float().cpu()[head_slice, :]
+    q_bias = block.attn.q_proj.bias.detach().float().cpu()[head_slice]
+    k_bias = block.attn.k_proj.bias.detach().float().cpu()[head_slice]
+    scores = torch.matmul(q_head, k_head.transpose(-2, -1)) / math.sqrt(head_dim)
+    attention = outputs.attentions[head_layer][:, head, :, :].detach().float().cpu()
+    return {
+        "batch": batch,
+        "metadata": metadata,
+        "attention_input": attention_input.detach().float().cpu(),
+        "q": q_head,
+        "k": k_head,
+        "q_weight": q_weight,
+        "k_weight": k_weight,
+        "q_bias": q_bias,
+        "k_bias": k_bias,
+        "scores": scores,
+        "attention": attention,
+        "head_dim": int(head_dim),
+    }
+
+
+def _single_attention_position(
+    *,
+    batch: dict[str, Any],
+    metadata: dict[str, torch.Tensor],
+    flat_index: int,
+    position_role: str,
+    label: str,
+) -> tuple[int, int]:
+    batch_row, positions = _intervention_positions_for_query(
+        batch=batch,
+        metadata=metadata,
+        flat_index=flat_index,
+        position_role=position_role,
+    )
+    if len(positions) != 1:
+        raise ValueError(
+            f"{label} role {position_role!r} selected {len(positions)} positions; expected exactly one."
+        )
+    return batch_row, int(positions[0])
+
+
+def _attention_key_positions(
+    *,
+    batch: dict[str, Any],
+    metadata: dict[str, torch.Tensor],
+    flat_index: int,
+    position_role: str,
+    max_position: int,
+) -> tuple[int, list[int]]:
+    if position_role not in GEOMETRY_POSITION_ROLES:
+        raise ValueError(f"Unsupported position role {position_role!r}; expected one of {GEOMETRY_POSITION_ROLES}.")
+    if max_position < 0:
+        raise ValueError(f"max_position must be non-negative, got {max_position}.")
+    batch_row = int(metadata["rows"][flat_index].item())
+    query_index = int(metadata["query_indices"][flat_index].item())
+    prediction_position = int(metadata["prediction_positions"][flat_index].item())
+    query_key_position = int(metadata["query_key_positions"][flat_index].item())
+    record = batch["records"][batch_row]
+    query_geometry = _positions_for_query(record, query_index, prediction_position)
+    if position_role == "prediction":
+        raw_positions = [prediction_position]
+    elif position_role in {"query_key", "current_read_key"}:
+        raw_positions = [query_key_position]
+    elif position_role == "support_key":
+        raw_positions = [int(query_geometry["support_key_position"])]
+    elif position_role == "support_value":
+        raw_positions = [int(query_geometry["support_value_position"])]
+    elif position_role == "support_op":
+        raw_positions = [int(query_geometry["support_op_position"])]
+    elif position_role == "support_write":
+        raw_positions = [
+            int(query_geometry["support_op_position"]),
+            int(query_geometry["support_key_position"]),
+            int(query_geometry["support_value_position"]),
+        ]
+    elif position_role == "key_distractors":
+        raw_positions = [int(position) for position in query_geometry["key_distractors"]]
+    elif position_role == "value_distractors":
+        raw_positions = [int(position) for position in query_geometry["value_distractors"]]
+    elif position_role == "all_query_relation":
+        raw_positions = [
+            int(query_geometry["support_key_position"]),
+            int(query_geometry["support_value_position"]),
+            query_key_position,
+        ]
+    elif position_role == "causal_prefix":
+        raw_positions = list(range(max_position + 1))
+    else:
+        raise ValueError(f"Unhandled position role: {position_role}")
+    positions = sorted({position for position in raw_positions if 0 <= position <= max_position})
+    if not positions:
+        raise RuntimeError(
+            f"Key role {position_role!r} selected no positions in the attention causal prefix "
+            f"0..{max_position} for {record['sample_id']} query {query_index}."
+        )
+    return batch_row, positions
+
+
+def _softmax_first_order_delta(
+    *,
+    source_attention_row: torch.Tensor,
+    score_delta_row: torch.Tensor,
+    key_position: int,
+    query_position: int,
+) -> float:
+    if key_position > query_position:
+        return 0.0
+    causal_positions = slice(0, query_position + 1)
+    source_probs = source_attention_row[causal_positions].double()
+    score_delta = score_delta_row[causal_positions].double()
+    centered_score_delta = score_delta[key_position] - torch.dot(source_probs, score_delta)
+    return float((source_probs[key_position] * centered_score_delta).item())
+
+
+def _decompose_qk_score_delta(
+    *,
+    source_payload: dict[str, Any],
+    target_payload: dict[str, Any],
+    batch_row: int,
+    query_position: int,
+    key_position: int,
+    reconstruction_tolerance: float,
+) -> dict[str, float]:
+    head_dim = int(source_payload["head_dim"])
+    if head_dim != int(target_payload["head_dim"]):
+        raise RuntimeError(f"Head dim changed across checkpoints: {head_dim} vs {target_payload['head_dim']}")
+    scale = math.sqrt(head_dim)
+    q0 = source_payload["q"][batch_row, query_position, :].double()
+    q1 = target_payload["q"][batch_row, query_position, :].double()
+    k0 = source_payload["k"][batch_row, key_position, :].double()
+    k1 = target_payload["k"][batch_row, key_position, :].double()
+    xq0 = source_payload["attention_input"][batch_row, query_position, :].double()
+    xq1 = target_payload["attention_input"][batch_row, query_position, :].double()
+    xk0 = source_payload["attention_input"][batch_row, key_position, :].double()
+    xk1 = target_payload["attention_input"][batch_row, key_position, :].double()
+    wq0 = source_payload["q_weight"].double()
+    wq1 = target_payload["q_weight"].double()
+    wk0 = source_payload["k_weight"].double()
+    wk1 = target_payload["k_weight"].double()
+    bq0 = source_payload["q_bias"].double()
+    bq1 = target_payload["q_bias"].double()
+    bk0 = source_payload["k_bias"].double()
+    bk1 = target_payload["k_bias"].double()
+
+    dxq = xq1 - xq0
+    dxk = xk1 - xk0
+    dwq = wq1 - wq0
+    dwk = wk1 - wk0
+    dbq = bq1 - bq0
+    dbk = bk1 - bk0
+
+    q_components = {
+        "input": torch.matmul(dxq, wq0.T),
+        "weight": torch.matmul(xq0, dwq.T),
+        "bias": dbq,
+        "weight_input_cross": torch.matmul(dxq, dwq.T),
+    }
+    k_components = {
+        "input": torch.matmul(dxk, wk0.T),
+        "weight": torch.matmul(xk0, dwk.T),
+        "bias": dbk,
+        "weight_input_cross": torch.matmul(dxk, dwk.T),
+    }
+    dq = q1 - q0
+    dk = k1 - k0
+    dq_reconstructed = sum(q_components.values(), torch.zeros_like(dq))
+    dk_reconstructed = sum(k_components.values(), torch.zeros_like(dk))
+    q_reconstruction_error = float((dq - dq_reconstructed).abs().max().item())
+    k_reconstruction_error = float((dk - dk_reconstructed).abs().max().item())
+    if q_reconstruction_error > reconstruction_tolerance:
+        raise RuntimeError(
+            f"Q delta reconstruction error {q_reconstruction_error} exceeds tolerance {reconstruction_tolerance}."
+        )
+    if k_reconstruction_error > reconstruction_tolerance:
+        raise RuntimeError(
+            f"K delta reconstruction error {k_reconstruction_error} exceeds tolerance {reconstruction_tolerance}."
+        )
+
+    source_score = torch.dot(q0, k0) / scale
+    target_score = torch.dot(q1, k1) / scale
+    q_vector_delta_source_key = torch.dot(dq, k0) / scale
+    source_query_k_vector_delta = torch.dot(q0, dk) / scale
+    qk_vector_cross = torch.dot(dq, dk) / scale
+    component_values = {
+        "q_input_source_key": torch.dot(q_components["input"], k0) / scale,
+        "q_weight_source_key": torch.dot(q_components["weight"], k0) / scale,
+        "q_bias_source_key": torch.dot(q_components["bias"], k0) / scale,
+        "q_weight_input_cross_source_key": torch.dot(q_components["weight_input_cross"], k0) / scale,
+        "source_query_k_input": torch.dot(q0, k_components["input"]) / scale,
+        "source_query_k_weight": torch.dot(q0, k_components["weight"]) / scale,
+        "source_query_k_bias": torch.dot(q0, k_components["bias"]) / scale,
+        "source_query_k_weight_input_cross": torch.dot(q0, k_components["weight_input_cross"]) / scale,
+        "qk_vector_cross": qk_vector_cross,
+    }
+    reconstructed_delta = q_vector_delta_source_key + source_query_k_vector_delta + qk_vector_cross
+    actual_delta = target_score - source_score
+    score_reconstruction_error = float(abs((actual_delta - reconstructed_delta).item()))
+    if score_reconstruction_error > reconstruction_tolerance:
+        raise RuntimeError(
+            f"Score delta reconstruction error {score_reconstruction_error} exceeds tolerance {reconstruction_tolerance}."
+        )
+    linear_score_delta = (
+        component_values["q_input_source_key"]
+        + component_values["q_weight_source_key"]
+        + component_values["q_bias_source_key"]
+        + component_values["source_query_k_input"]
+        + component_values["source_query_k_weight"]
+        + component_values["source_query_k_bias"]
+    )
+    internal_cross_delta = (
+        component_values["q_weight_input_cross_source_key"]
+        + component_values["source_query_k_weight_input_cross"]
+    )
+    return {
+        "source_score": float(source_score.item()),
+        "target_score": float(target_score.item()),
+        "actual_score_delta": float(actual_delta.item()),
+        "reconstructed_score_delta": float(reconstructed_delta.item()),
+        "score_reconstruction_error": score_reconstruction_error,
+        "q_delta_reconstruction_error": q_reconstruction_error,
+        "k_delta_reconstruction_error": k_reconstruction_error,
+        "q_vector_delta_source_key": float(q_vector_delta_source_key.item()),
+        "source_query_k_vector_delta": float(source_query_k_vector_delta.item()),
+        "qk_vector_cross": float(qk_vector_cross.item()),
+        "linear_score_delta": float(linear_score_delta.item()),
+        "internal_weight_input_cross_delta": float(internal_cross_delta.item()),
+        **{field_name: float(value.item()) for field_name, value in component_values.items()},
+    }
+
+
+def _compute_attention_score_delta_interval(
+    *,
+    source_model: torch.nn.Module,
+    target_model: torch.nn.Module,
+    source_checkpoint_path: Path,
+    target_checkpoint_path: Path,
+    pairs: list[dict[str, Any]],
+    head_layer: int,
+    head: int,
+    score_query_role: str,
+    score_key_roles: list[str],
+    record_sides: list[str],
+    batch_size: int,
+    pad_token_id: int,
+    device: torch.device,
+    reconstruction_tolerance: float,
+) -> list[dict[str, Any]]:
+    source_checkpoint = load_checkpoint(source_checkpoint_path, device)
+    target_checkpoint = load_checkpoint(target_checkpoint_path, device)
+    load_model_state(source_model, source_checkpoint["model_state"])
+    load_model_state(target_model, target_checkpoint["model_state"])
+    source_model.eval()
+    target_model.eval()
+    source_step = int(source_checkpoint["step"])
+    target_step = int(target_checkpoint["step"])
+    source_path_step = _checkpoint_step_from_path(source_checkpoint_path)
+    target_path_step = _checkpoint_step_from_path(target_checkpoint_path)
+    if source_step != source_path_step:
+        raise RuntimeError(f"Source checkpoint step mismatch: payload={source_step} path={source_path_step}")
+    if target_step != target_path_step:
+        raise RuntimeError(f"Target checkpoint step mismatch: payload={target_step} path={target_path_step}")
+    if target_step <= source_step:
+        raise ValueError(f"Attention score delta requires increasing steps, got {source_step}->{target_step}.")
+
+    score_rows: list[dict[str, Any]] = []
+    for start_index in range(0, len(pairs), batch_size):
+        pair_batch = pairs[start_index : start_index + batch_size]
+        for record_side in record_sides:
+            side_key = f"{record_side}_record"
+            records = [pair[side_key] for pair in pair_batch]
+            source_payload = _attention_payload_for_records(
+                model=source_model,
+                records=records,
+                head_layer=head_layer,
+                head=head,
+                pad_token_id=pad_token_id,
+                device=device,
+            )
+            target_payload = _attention_payload_for_records(
+                model=target_model,
+                records=records,
+                head_layer=head_layer,
+                head=head,
+                pad_token_id=pad_token_id,
+                device=device,
+            )
+            for pair_index, pair in enumerate(pair_batch):
+                batch_row, query_position = _single_attention_position(
+                    batch=source_payload["batch"],
+                    metadata=source_payload["metadata"],
+                    flat_index=pair_index,
+                    position_role=score_query_role,
+                    label="score query",
+                )
+                target_batch_row, target_query_position = _single_attention_position(
+                    batch=target_payload["batch"],
+                    metadata=target_payload["metadata"],
+                    flat_index=pair_index,
+                    position_role=score_query_role,
+                    label="target score query",
+                )
+                if batch_row != target_batch_row or query_position != target_query_position:
+                    raise RuntimeError("Source/target query position selection disagrees.")
+                source_score_row = source_payload["scores"][batch_row, query_position, :].double()
+                target_score_row = target_payload["scores"][batch_row, query_position, :].double()
+                score_delta_row = target_score_row - source_score_row
+                for score_key_role in score_key_roles:
+                    key_batch_row, key_positions = _attention_key_positions(
+                        batch=source_payload["batch"],
+                        metadata=source_payload["metadata"],
+                        flat_index=pair_index,
+                        position_role=score_key_role,
+                        max_position=query_position,
+                    )
+                    target_key_batch_row, target_key_positions = _attention_key_positions(
+                        batch=target_payload["batch"],
+                        metadata=target_payload["metadata"],
+                        flat_index=pair_index,
+                        position_role=score_key_role,
+                        max_position=query_position,
+                    )
+                    if key_batch_row != batch_row or target_key_batch_row != batch_row:
+                        raise RuntimeError("Source/target key position batch rows disagree with query batch row.")
+                    if key_positions != target_key_positions:
+                        raise RuntimeError("Source/target key position selection disagrees.")
+                    for role_position_index, key_position in enumerate(key_positions):
+                        if key_position > query_position:
+                            raise RuntimeError(
+                                f"Key position {key_position} is after query position {query_position} "
+                                f"for role {score_key_role!r} in pair {pair['pair_id']}."
+                            )
+                        decomposition = _decompose_qk_score_delta(
+                            source_payload=source_payload,
+                            target_payload=target_payload,
+                            batch_row=batch_row,
+                            query_position=query_position,
+                            key_position=key_position,
+                            reconstruction_tolerance=reconstruction_tolerance,
+                        )
+                        source_attention = float(source_payload["attention"][batch_row, query_position, key_position].item())
+                        target_attention = float(target_payload["attention"][batch_row, query_position, key_position].item())
+                        softmax_first_order = _softmax_first_order_delta(
+                            source_attention_row=source_payload["attention"][batch_row, query_position, :],
+                            score_delta_row=score_delta_row,
+                            key_position=key_position,
+                            query_position=query_position,
+                        )
+                        actual_attention_delta = target_attention - source_attention
+                        score_rows.append(
+                            {
+                                "source_step": source_step,
+                                "target_step": target_step,
+                                "step_gap": target_step - source_step,
+                                "source_checkpoint": str(source_checkpoint_path),
+                                "target_checkpoint": str(target_checkpoint_path),
+                                "head_layer": head_layer,
+                                "head": head,
+                                "head_label": _head_label(head_layer, head),
+                                "score_query_role": score_query_role,
+                                "score_key_role": score_key_role,
+                                "record_side": record_side,
+                                "split": str(pair["split"]),
+                                "pair_type": str(pair["pair_type"]),
+                                "pair_id": str(pair["pair_id"]),
+                                "source_sample_id": str(pair["source_sample_id"]),
+                                "source_query_index": int(pair["source_query_index"]),
+                                "role_position_index": role_position_index,
+                                "query_position": query_position,
+                                "key_position": key_position,
+                                "source_attention": source_attention,
+                                "target_attention": target_attention,
+                                "actual_attention_delta": actual_attention_delta,
+                                "softmax_first_order_attention_delta": softmax_first_order,
+                                "softmax_residual": actual_attention_delta - softmax_first_order,
+                                **decomposition,
+                            }
+                        )
+    if not score_rows:
+        raise RuntimeError("Attention score delta interval produced no score rows.")
+    return score_rows
+
+
+def _aggregate_attention_score_delta_rows(score_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not score_rows:
+        raise ValueError("Cannot aggregate empty attention score rows.")
+    metric_names = [
+        "source_score",
+        "target_score",
+        "actual_score_delta",
+        "reconstructed_score_delta",
+        "score_reconstruction_error",
+        "q_delta_reconstruction_error",
+        "k_delta_reconstruction_error",
+        "q_vector_delta_source_key",
+        "source_query_k_vector_delta",
+        "qk_vector_cross",
+        "linear_score_delta",
+        "internal_weight_input_cross_delta",
+        "source_attention",
+        "target_attention",
+        "actual_attention_delta",
+        "softmax_first_order_attention_delta",
+        "softmax_residual",
+    ]
+    groups: dict[tuple[Any, ...], list[dict[str, Any]]] = defaultdict(list)
+    for row in score_rows:
+        group_keys = [
+            (row["split"], row["pair_type"]),
+            ("__all__", row["pair_type"]),
+            (row["split"], "__all__"),
+            ("__all__", "__all__"),
+        ]
+        for split, pair_type in group_keys:
+            groups[
+                (
+                    row["source_step"],
+                    row["target_step"],
+                    split,
+                    pair_type,
+                    row["record_side"],
+                    row["score_key_role"],
+                )
+            ].append(row)
+    metric_rows: list[dict[str, Any]] = []
+    for key, rows in sorted(groups.items()):
+        source_step, target_step, split, pair_type, record_side, score_key_role = key
+        first = rows[0]
+        metric_row: dict[str, Any] = {
+            "source_step": int(source_step),
+            "target_step": int(target_step),
+            "step_gap": int(first["step_gap"]),
+            "split": split,
+            "pair_type": pair_type,
+            "record_side": record_side,
+            "score_key_role": score_key_role,
+            "score_query_role": first["score_query_role"],
+            "head_layer": int(first["head_layer"]),
+            "head": int(first["head"]),
+            "head_label": first["head_label"],
+            "num_scores": len(rows),
+            "num_unique_pairs": len({row["pair_id"] for row in rows}),
+        }
+        for metric_name in metric_names:
+            values = [float(row[metric_name]) for row in rows]
+            metric_row[f"{metric_name}_mean"] = _mean(values)
+            metric_row[f"{metric_name}_abs_mean"] = _mean([abs(value) for value in values])
+            metric_row[f"{metric_name}_std"] = _std(values)
+        metric_rows.append(metric_row)
+    return metric_rows
+
+
+def _aggregate_attention_score_component_rows(score_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not score_rows:
+        raise ValueError("Cannot aggregate empty attention score rows.")
+    groups: dict[tuple[Any, ...], list[float]] = defaultdict(list)
+    first_rows: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for row in score_rows:
+        group_keys = [
+            (row["split"], row["pair_type"]),
+            ("__all__", row["pair_type"]),
+            (row["split"], "__all__"),
+            ("__all__", "__all__"),
+        ]
+        for component_name, field_name in ATTENTION_SCORE_COMPONENT_FIELDS.items():
+            for split, pair_type in group_keys:
+                key = (
+                    row["source_step"],
+                    row["target_step"],
+                    split,
+                    pair_type,
+                    row["record_side"],
+                    row["score_key_role"],
+                    component_name,
+                )
+                groups[key].append(float(row[field_name]))
+                first_rows[key] = row
+    component_rows: list[dict[str, Any]] = []
+    for key, values in sorted(groups.items()):
+        source_step, target_step, split, pair_type, record_side, score_key_role, component_name = key
+        first = first_rows[key]
+        component_rows.append(
+            {
+                "source_step": int(source_step),
+                "target_step": int(target_step),
+                "step_gap": int(first["step_gap"]),
+                "split": split,
+                "pair_type": pair_type,
+                "record_side": record_side,
+                "score_key_role": score_key_role,
+                "score_query_role": first["score_query_role"],
+                "head_layer": int(first["head_layer"]),
+                "head": int(first["head"]),
+                "head_label": first["head_label"],
+                "component": component_name,
+                "num_scores": len(values),
+                "contribution_mean": _mean(values),
+                "contribution_abs_mean": _mean([abs(value) for value in values]),
+                "contribution_std": _std(values),
+            }
+        )
+    return component_rows
+
+
+def _summarize_attention_score_delta(
+    *,
+    metric_rows: list[dict[str, Any]],
+    component_rows: list[dict[str, Any]],
+    top_k_components: int,
+) -> dict[str, Any]:
+    if not metric_rows:
+        raise ValueError("Cannot summarize attention score delta without metric rows.")
+    if not component_rows:
+        raise ValueError("Cannot summarize attention score delta without component rows.")
+    intervals = sorted({(int(row["source_step"]), int(row["target_step"])) for row in metric_rows})
+    final_interval = intervals[-1]
+    final_rows = [
+        row
+        for row in metric_rows
+        if (int(row["source_step"]), int(row["target_step"])) == final_interval
+    ]
+    final_component_rows = [
+        row
+        for row in component_rows
+        if (int(row["source_step"]), int(row["target_step"])) == final_interval
+    ]
+    top_components = sorted(
+        [
+            row
+            for row in final_component_rows
+            if row["split"] == "__all__" and row["pair_type"] == "query_key"
+        ],
+        key=lambda row: abs(float(row["contribution_mean"])),
+        reverse=True,
+    )[:top_k_components]
+    return {
+        "num_intervals": len(intervals),
+        "intervals": [f"{source}->{target}" for source, target in intervals],
+        "num_metric_rows": len(metric_rows),
+        "num_component_rows": len(component_rows),
+        "final_interval": f"{final_interval[0]}->{final_interval[1]}",
+        "final_rows": final_rows,
+        "top_final_query_key_components": top_components,
+    }
+
+
+def _plot_attention_score_delta_components(
+    *,
+    component_rows: list[dict[str, Any]],
+    top_k_components: int,
+    output_path: Path,
+) -> Path | None:
+    if not component_rows:
+        return None
+    intervals = sorted({(int(row["source_step"]), int(row["target_step"])) for row in component_rows})
+    if not intervals:
+        return None
+    final_interval = intervals[-1]
+    rows = [
+        row
+        for row in component_rows
+        if (int(row["source_step"]), int(row["target_step"])) == final_interval
+        and row["split"] == "__all__"
+        and row["pair_type"] == "query_key"
+    ]
+    if not rows:
+        return None
+    rows = sorted(rows, key=lambda row: abs(float(row["contribution_mean"])), reverse=True)[:top_k_components]
+    _, plt = _import_matplotlib()
+    fig, ax = plt.subplots(figsize=(10, max(4, 0.36 * len(rows))))
+    labels = [
+        f"{row['record_side']} {row['score_key_role']} {row['component']}"
+        for row in rows
+    ]
+    values = [float(row["contribution_mean"]) for row in rows]
+    colors = ["#2f7d59" if value >= 0.0 else "#9b3f37" for value in values]
+    positions = list(range(len(rows)))
+    ax.barh(positions, values, color=colors)
+    ax.set_yticks(positions)
+    ax.set_yticklabels(labels, fontsize=8)
+    ax.axvline(0.0, color="#333333", linewidth=0.8)
+    ax.set_xlabel("mean contribution to QK score delta")
+    ax.set_title(f"Top attention score delta terms {final_interval[0]}->{final_interval[1]}")
+    ax.invert_yaxis()
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path)
+    plt.close(fig)
+    return output_path
+
+
+def _plot_attention_softmax_residual(
+    *,
+    metric_rows: list[dict[str, Any]],
+    output_path: Path,
+) -> Path | None:
+    rows = [
+        row
+        for row in metric_rows
+        if row["split"] == "__all__" and row["pair_type"] in {"query_key", "distractor"}
+    ]
+    if not rows:
+        return None
+    _, plt = _import_matplotlib()
+    fig, ax = plt.subplots(figsize=(9, 4.8))
+    labels = [
+        f"{row['source_step']}->{row['target_step']} {row['pair_type']} {row['record_side']} {row['score_key_role']}"
+        for row in rows
+    ]
+    values = [float(row["softmax_residual_mean"]) for row in rows]
+    colors = ["#2f7d59" if value >= 0.0 else "#9b3f37" for value in values]
+    positions = list(range(len(rows)))
+    ax.bar(positions, values, color=colors)
+    ax.axhline(0.0, color="#333333", linewidth=0.8)
+    ax.set_xticks(positions)
+    ax.set_xticklabels(labels, rotation=70, ha="right", fontsize=7)
+    ax.set_ylabel("mean softmax residual")
+    ax.set_title("Attention probability delta not explained by source-softmax linearization")
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path)
+    plt.close(fig)
+    return output_path
+
+
+def _write_attention_score_delta_markdown(
+    *,
+    path: Path,
+    report: dict[str, Any],
+    plot_paths: dict[str, Path],
+) -> None:
+    summary = report["summary"]
+    lines = [
+        "# Attention Score Delta Decomposition",
+        "",
+        "## Calculation",
+        "",
+        "For one head and one attention score:",
+        "",
+        "`score = q_i . k_j / sqrt(d_head)`",
+        "",
+        "Across a checkpoint interval the exact score delta is decomposed as:",
+        "",
+        "`Delta score = Delta q . k0 + q0 . Delta k + Delta q . Delta k`",
+        "",
+        "`Delta q` and `Delta k` are also split into attention-input, projection-weight, projection-bias, and weight-input cross terms.",
+        "",
+        "## Run",
+        "",
+        f"- head: `{report['head_label']}`",
+        f"- query role: `{report['score_query_role']}`",
+        f"- key roles: `{report['score_key_roles']}`",
+        f"- record sides: `{report['record_sides']}`",
+        f"- intervals: `{summary['intervals']}`",
+        "",
+        "## Artifacts",
+        "",
+        f"- metric rows: `{report['metric_rows_path']}`",
+        f"- score rows: `{report['score_rows_path']}`",
+        f"- component rows: `{report['component_rows_path']}`",
+        f"- pair rows: `{report['pair_rows_path']}`",
+        "",
+        "## Top Final Query-Key Components",
+        "",
+        "| component | record side | key role | contribution mean | abs mean |",
+        "|---|---|---|---:|---:|",
+    ]
+    for row in summary["top_final_query_key_components"]:
+        lines.append(
+            "| `{component}` | `{side}` | `{role}` | {mean:.6f} | {abs_mean:.6f} |".format(
+                component=row["component"],
+                side=row["record_side"],
+                role=row["score_key_role"],
+                mean=float(row["contribution_mean"]),
+                abs_mean=float(row["contribution_abs_mean"]),
+            )
+        )
+    if plot_paths:
+        lines.extend(["", "## Plots", ""])
+        for label, plot_path in plot_paths.items():
+            lines.append(f"- {label}: `{plot_path}`")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def run_attention_score_delta_decomposition(
+    *,
+    config_path: Path,
+    probe_set_path: Path,
+    checkpoint_dir: Path,
+    output_dir: Path,
+    head_layer: int,
+    head: int,
+    score_query_role: str,
+    score_key_roles: list[str],
+    pair_types: list[str],
+    device_name: str = "mps",
+    checkpoint_paths: list[Path] | None = None,
+    record_sides: list[str] | None = None,
+    max_pairs_per_type: int = 64,
+    min_pairs_per_type: int = 1,
+    split_filter: list[str] | None = None,
+    reconstruction_tolerance: float = 1.0e-3,
+    top_k_components: int = 16,
+) -> tuple[Path, Path, Path, Path, Path, Path, dict[str, Path]]:
+    if not score_key_roles:
+        raise ValueError("At least one --score-key-role is required.")
+    unsupported_roles = [
+        role
+        for role in [score_query_role, *score_key_roles]
+        if role not in GEOMETRY_POSITION_ROLES
+    ]
+    if unsupported_roles:
+        raise ValueError(f"Unsupported attention score roles {unsupported_roles}; expected one of {GEOMETRY_POSITION_ROLES}.")
+    if reconstruction_tolerance <= 0.0:
+        raise ValueError("reconstruction_tolerance must be positive.")
+    if top_k_components <= 0:
+        raise ValueError("top_k_components must be positive.")
+
+    resolved_record_sides = _resolve_attention_score_record_sides(record_sides)
+    spec = TrainSpec.from_path(config_path)
+    probe_records, probe_metadata = load_probe_set(probe_set_path)
+    if str(probe_metadata["benchmark_dir"]) != str(spec.benchmark_dir):
+        raise ValueError(
+            f"Probe set benchmark mismatch: probe={probe_metadata['benchmark_dir']} config={spec.benchmark_dir}"
+        )
+    metadata = read_symbolic_kv_stream_metadata(spec.benchmark_dir)
+    vocab = Vocabulary.from_metadata(metadata["vocabulary"])
+    holdout_pairs = _holdout_pair_set(metadata)
+    device = require_device(device_name)
+    checkpoints = _resolve_checkpoint_paths(checkpoint_dir=checkpoint_dir, checkpoint_paths=checkpoint_paths)
+    if len(checkpoints) < 2:
+        raise ValueError("attention-score-delta-decomposition requires at least two checkpoints.")
+    source_model = build_model(spec.model, len(vocab.tokens), device)
+    target_model = build_model(spec.model, len(vocab.tokens), device)
+    if head_layer < 0 or head_layer >= len(source_model.blocks):
+        raise ValueError(f"head_layer {head_layer} outside model range 0..{len(source_model.blocks) - 1}.")
+    if head < 0 or head >= source_model.blocks[head_layer].attn.n_heads:
+        raise ValueError(
+            f"head {head} outside model range 0..{source_model.blocks[head_layer].attn.n_heads - 1} for layer {head_layer}."
+        )
+    pair_types = sorted(set(pair_types), key=pair_types.index)
+    pairs, pair_construction = _build_causal_patch_pairs(
+        probe_records=probe_records,
+        vocab=vocab,
+        holdout_pairs=holdout_pairs,
+        pair_types=pair_types,
+        max_pairs_per_type=max_pairs_per_type,
+        min_pairs_per_type=min_pairs_per_type,
+        split_filter=split_filter,
+    )
+    if not pairs:
+        raise RuntimeError("Attention score delta decomposition constructed no pairs.")
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    metric_rows_path = output_dir / "attention_score_delta_rows.jsonl"
+    score_rows_path = output_dir / "attention_score_delta_score_rows.jsonl"
+    component_rows_path = output_dir / "attention_score_delta_components.jsonl"
+    pair_rows_path = output_dir / "attention_score_delta_pairs.jsonl"
+    progress_path = output_dir / "attention_score_delta_progress.json"
+    for partial_path in (metric_rows_path, score_rows_path, component_rows_path, pair_rows_path, progress_path):
+        if partial_path.exists():
+            partial_path.unlink()
+    write_jsonl(pair_rows_path, [_pair_metadata(pair) for pair in pairs])
+
+    intervals = list(zip(checkpoints[:-1], checkpoints[1:], strict=True))
+    print(
+        "[attention-score-delta-decomposition] "
+        f"intervals={len(intervals)} checkpoints={len(checkpoints)} pairs={len(pairs)} "
+        f"pair_types={pair_types} device={device_name} head={_head_label(head_layer, head)} "
+        f"query_role={score_query_role} key_roles={score_key_roles} record_sides={resolved_record_sides}",
+        flush=True,
+    )
+    all_score_rows: list[dict[str, Any]] = []
+    for interval_index, (source_checkpoint_path, target_checkpoint_path) in enumerate(intervals, start=1):
+        source_step = _checkpoint_step_from_path(source_checkpoint_path)
+        target_step = _checkpoint_step_from_path(target_checkpoint_path)
+        print(
+            "[attention-score-delta-decomposition] starting "
+            f"{interval_index}/{len(intervals)} {source_checkpoint_path.name}->{target_checkpoint_path.name}",
+            flush=True,
+        )
+        score_rows = _compute_attention_score_delta_interval(
+            source_model=source_model,
+            target_model=target_model,
+            source_checkpoint_path=source_checkpoint_path,
+            target_checkpoint_path=target_checkpoint_path,
+            pairs=pairs,
+            head_layer=head_layer,
+            head=head,
+            score_query_role=score_query_role,
+            score_key_roles=score_key_roles,
+            record_sides=resolved_record_sides,
+            batch_size=spec.evaluation.batch_size,
+            pad_token_id=vocab.pad_token_id,
+            device=device,
+            reconstruction_tolerance=reconstruction_tolerance,
+        )
+        for row in score_rows:
+            append_jsonl(score_rows_path, row)
+        all_score_rows.extend(score_rows)
+        interval_metric_rows = _aggregate_attention_score_delta_rows(score_rows)
+        all_row = next(
+            row
+            for row in interval_metric_rows
+            if row["split"] == "__all__"
+            and row["pair_type"] == "__all__"
+            and row["record_side"] == resolved_record_sides[0]
+            and row["score_key_role"] == score_key_roles[0]
+        )
+        print(
+            "[attention-score-delta-decomposition] finished "
+            f"{source_step}->{target_step} score_delta={float(all_row['actual_score_delta_mean']):.6g} "
+            f"linear={float(all_row['linear_score_delta_mean']):.6g} "
+            f"qk_cross={float(all_row['qk_vector_cross_mean']):.6g} "
+            f"softmax_residual={float(all_row['softmax_residual_mean']):.6g}",
+            flush=True,
+        )
+        write_json(
+            progress_path,
+            {
+                "status": "running",
+                "completed_intervals": interval_index,
+                "total_intervals": len(intervals),
+                "last_source_step": source_step,
+                "last_target_step": target_step,
+                "score_rows_path": str(score_rows_path),
+            },
+        )
+
+    metric_rows = _aggregate_attention_score_delta_rows(all_score_rows)
+    component_rows = _aggregate_attention_score_component_rows(all_score_rows)
+    write_jsonl(metric_rows_path, metric_rows)
+    write_jsonl(component_rows_path, component_rows)
+    summary = _summarize_attention_score_delta(
+        metric_rows=metric_rows,
+        component_rows=component_rows,
+        top_k_components=top_k_components,
+    )
+    plot_paths: dict[str, Path] = {}
+    component_plot = _plot_attention_score_delta_components(
+        component_rows=component_rows,
+        top_k_components=top_k_components,
+        output_path=output_dir / "attention_score_delta_components.svg",
+    )
+    if component_plot is not None:
+        plot_paths["components"] = component_plot
+    softmax_plot = _plot_attention_softmax_residual(
+        metric_rows=metric_rows,
+        output_path=output_dir / "attention_score_delta_softmax_residual.svg",
+    )
+    if softmax_plot is not None:
+        plot_paths["softmax_residual"] = softmax_plot
+
+    report_path = output_dir / "attention_score_delta_report.json"
+    markdown_path = output_dir / "attention_score_delta_report.md"
+    report = {
+        "schema_version": ATTENTION_SCORE_DELTA_DECOMPOSITION_SCHEMA_VERSION,
+        "config_path": str(config_path),
+        "probe_set_path": str(probe_set_path),
+        "checkpoint_dir": str(checkpoint_dir),
+        "device": device_name,
+        "head_layer": head_layer,
+        "head": head,
+        "head_label": _head_label(head_layer, head),
+        "score_query_role": score_query_role,
+        "score_key_roles": score_key_roles,
+        "record_sides": resolved_record_sides,
+        "pair_types": pair_types,
+        "max_pairs_per_type": max_pairs_per_type,
+        "min_pairs_per_type": min_pairs_per_type,
+        "split_filter": split_filter,
+        "reconstruction_tolerance": reconstruction_tolerance,
+        "top_k_components": top_k_components,
+        "calculation": {
+            "score": "q_i . k_j / sqrt(d_head)",
+            "score_delta": "Delta q . k0 + q0 . Delta k + Delta q . Delta k",
+            "q_delta": "W_Q0 Delta x_q + Delta W_Q x_q0 + Delta b_Q + Delta W_Q Delta x_q",
+            "k_delta": "W_K0 Delta x_k + Delta W_K x_k0 + Delta b_K + Delta W_K Delta x_k",
+            "softmax_first_order": "Delta p_j ~= p_j * (Delta score_j - E_p[Delta score]) at the source checkpoint",
+        },
+        "pair_construction": pair_construction,
+        "metric_rows_path": str(metric_rows_path),
+        "score_rows_path": str(score_rows_path),
+        "component_rows_path": str(component_rows_path),
+        "pair_rows_path": str(pair_rows_path),
+        "summary": summary,
+    }
+    write_json(report_path, report)
+    _write_attention_score_delta_markdown(path=markdown_path, report=report, plot_paths=plot_paths)
+    write_json(
+        progress_path,
+        {
+            "status": "complete",
+            "completed_intervals": len(intervals),
+            "total_intervals": len(intervals),
+            "report_path": str(report_path),
+            "markdown_path": str(markdown_path),
+            "metric_rows_path": str(metric_rows_path),
+            "score_rows_path": str(score_rows_path),
+            "component_rows_path": str(component_rows_path),
+            "pair_rows_path": str(pair_rows_path),
+        },
+    )
+    print(
+        f"[attention-score-delta-decomposition] complete report={report_path} rows={metric_rows_path}",
+        flush=True,
+    )
+    return report_path, markdown_path, metric_rows_path, score_rows_path, component_rows_path, pair_rows_path, plot_paths
+
+
+ATTENTION_SCORE_UPDATE_COMPONENTS = ["score", "q_side", "k_side"]
+
+
+def _resolve_attention_score_update_components(components: list[str] | None) -> list[str]:
+    if components is None:
+        return list(ATTENTION_SCORE_UPDATE_COMPONENTS)
+    if not components:
+        raise ValueError("score update components must not be empty when provided.")
+    unsupported = [component for component in components if component not in ATTENTION_SCORE_UPDATE_COMPONENTS]
+    if unsupported:
+        raise ValueError(
+            f"Unsupported attention score update components {unsupported}; "
+            f"expected one of {ATTENTION_SCORE_UPDATE_COMPONENTS}."
+        )
+    return sorted(set(components), key=components.index)
+
+
+def _attention_score_tensor_payload_for_records(
+    *,
+    model: torch.nn.Module,
+    records: list[dict[str, Any]],
+    head_layer: int,
+    head: int,
+    pad_token_id: int,
+    device: torch.device,
+) -> dict[str, Any]:
+    if not records:
+        raise ValueError("records must not be empty for attention score update attribution.")
+    if head_layer < 0 or head_layer >= len(model.blocks):
+        raise ValueError(f"head_layer {head_layer} outside model range 0..{len(model.blocks) - 1}.")
+    block = model.blocks[head_layer]
+    if head < 0 or head >= block.attn.n_heads:
+        raise ValueError(f"head {head} outside model range 0..{block.attn.n_heads - 1} for layer {head_layer}.")
+
+    batch = move_batch_to_device(collate_symbolic_kv(records, pad_token_id), device)
+    outputs = model(
+        batch["input_ids"],
+        attention_mask=batch["attention_mask"],
+        return_residual_streams=True,
+    )
+    if outputs.residual_streams is None:
+        raise RuntimeError("Attention score update attribution requires residual streams.")
+    _, _, metadata = extract_answer_logits(outputs.logits, batch)
+    _validate_single_query_batch(batch=batch, metadata=metadata, label="attention score update")
+
+    if head_layer == 0:
+        pre_state = outputs.residual_streams["embedding"]
+    else:
+        pre_state = outputs.residual_streams[f"layer_{head_layer - 1}_post_mlp"]
+    attention_input = block.ln_1(pre_state)
+    batch_size, seq_len, _ = attention_input.shape
+    head_dim = block.attn.head_dim
+    q_all = block.attn.q_proj(attention_input).view(batch_size, seq_len, block.attn.n_heads, head_dim)
+    k_all = block.attn.k_proj(attention_input).view(batch_size, seq_len, block.attn.n_heads, head_dim)
+    return {
+        "batch": batch,
+        "metadata": metadata,
+        "q": q_all[:, :, head, :],
+        "k": k_all[:, :, head, :],
+        "head_dim": int(head_dim),
+    }
+
+
+def _attention_score_component_tensor(
+    *,
+    q_vector: torch.Tensor,
+    k_vector: torch.Tensor,
+    score_component: str,
+    scale: float,
+) -> torch.Tensor:
+    if score_component == "score":
+        return torch.dot(q_vector, k_vector) / scale
+    if score_component == "q_side":
+        return torch.dot(q_vector, k_vector.detach()) / scale
+    if score_component == "k_side":
+        return torch.dot(q_vector.detach(), k_vector) / scale
+    raise ValueError(
+        f"Unsupported attention score update component {score_component!r}; "
+        f"expected one of {ATTENTION_SCORE_UPDATE_COMPONENTS}."
+    )
+
+
+def _compute_attention_score_component_gradient_for_pairs(
+    *,
+    model: torch.nn.Module,
+    pairs: list[dict[str, Any]],
+    head_layer: int,
+    head: int,
+    score_query_role: str,
+    score_key_role: str,
+    record_side: str,
+    score_component: str,
+    batch_size: int,
+    pad_token_id: int,
+    device: torch.device,
+) -> dict[str, Any]:
+    if not pairs:
+        raise ValueError("pairs must not be empty for attention score component gradient computation.")
+    if record_side not in ATTENTION_SCORE_RECORD_SIDES:
+        raise ValueError(f"Unsupported record side {record_side!r}; expected one of {ATTENTION_SCORE_RECORD_SIDES}.")
+    if score_component not in ATTENTION_SCORE_UPDATE_COMPONENTS:
+        raise ValueError(
+            f"Unsupported attention score update component {score_component!r}; "
+            f"expected one of {ATTENTION_SCORE_UPDATE_COMPONENTS}."
+        )
+
+    model.eval()
+    model.zero_grad(set_to_none=True)
+    total_score: torch.Tensor | None = None
+    score_values: list[float] = []
+    num_scores = 0
+    num_batches = 0
+    side_key = f"{record_side}_record"
+
+    for start_index in range(0, len(pairs), batch_size):
+        pair_batch = pairs[start_index : start_index + batch_size]
+        records = [pair[side_key] for pair in pair_batch]
+        payload = _attention_score_tensor_payload_for_records(
+            model=model,
+            records=records,
+            head_layer=head_layer,
+            head=head,
+            pad_token_id=pad_token_id,
+            device=device,
+        )
+        batch_terms: list[torch.Tensor] = []
+        scale = math.sqrt(int(payload["head_dim"]))
+        for pair_index, pair in enumerate(pair_batch):
+            batch_row, query_position = _single_attention_position(
+                batch=payload["batch"],
+                metadata=payload["metadata"],
+                flat_index=pair_index,
+                position_role=score_query_role,
+                label="score update query",
+            )
+            key_batch_row, key_positions = _attention_key_positions(
+                batch=payload["batch"],
+                metadata=payload["metadata"],
+                flat_index=pair_index,
+                position_role=score_key_role,
+                max_position=query_position,
+            )
+            if key_batch_row != batch_row:
+                raise RuntimeError(
+                    f"Key role {score_key_role!r} selected batch row {key_batch_row}, "
+                    f"but query role {score_query_role!r} selected batch row {batch_row} for pair {pair['pair_id']}."
+                )
+            for key_position in key_positions:
+                if key_position > query_position:
+                    raise RuntimeError(
+                        f"Key position {key_position} is after query position {query_position} "
+                        f"for role {score_key_role!r} in pair {pair['pair_id']}."
+                    )
+                q_vector = payload["q"][batch_row, query_position, :]
+                k_vector = payload["k"][batch_row, key_position, :]
+                score = _attention_score_component_tensor(
+                    q_vector=q_vector,
+                    k_vector=k_vector,
+                    score_component=score_component,
+                    scale=scale,
+                )
+                batch_terms.append(score)
+                score_values.append(float(score.detach().float().cpu().item()))
+        if not batch_terms:
+            raise RuntimeError(
+                f"Attention score update batch produced no scores for record_side={record_side!r} "
+                f"score_key_role={score_key_role!r}."
+            )
+        batch_score = torch.stack(batch_terms).sum()
+        total_score = batch_score if total_score is None else total_score + batch_score
+        num_scores += len(batch_terms)
+        num_batches += 1
+
+    if total_score is None or num_scores <= 0:
+        raise RuntimeError("Attention score component gradient produced no score tensor.")
+    mean_score = total_score / float(num_scores)
+    mean_score.backward()
+    gradients, zero_gradient_parameter_names = _parameter_gradients(model=model, require_all=False)
+    model.zero_grad(set_to_none=True)
+    return {
+        "score_value": float(mean_score.detach().float().cpu().item()),
+        "score_value_abs_mean": _mean([abs(value) for value in score_values]),
+        "score_value_std": _std(score_values),
+        "num_scores": num_scores,
+        "num_pairs": len(pairs),
+        "num_batches": num_batches,
+        "zero_gradient_parameter_names": zero_gradient_parameter_names,
+        "gradients": gradients,
+    }
+
+
+def _attention_score_update_actual_summary(
+    *,
+    score_rows: list[dict[str, Any]],
+    split: str,
+    pair_type: str,
+    record_side: str,
+    score_key_role: str,
+    score_component: str,
+) -> dict[str, Any]:
+    rows = [
+        row
+        for row in score_rows
+        if (split == "__all__" or str(row["split"]) == split)
+        and (pair_type == "__all__" or str(row["pair_type"]) == pair_type)
+        and str(row["record_side"]) == record_side
+        and str(row["score_key_role"]) == score_key_role
+    ]
+    if not rows:
+        raise RuntimeError(
+            f"No attention score rows for split={split!r} pair_type={pair_type!r} "
+            f"record_side={record_side!r} score_key_role={score_key_role!r}."
+        )
+    source_values = [float(row["source_score"]) for row in rows]
+    total_delta_values = [float(row["actual_score_delta"]) for row in rows]
+    q_side_delta_values = [float(row["q_vector_delta_source_key"]) for row in rows]
+    k_side_delta_values = [float(row["source_query_k_vector_delta"]) for row in rows]
+    qk_cross_values = [float(row["qk_vector_cross"]) for row in rows]
+    if score_component == "score":
+        actual_delta_values = total_delta_values
+        target_values = [float(row["target_score"]) for row in rows]
+    elif score_component == "q_side":
+        actual_delta_values = q_side_delta_values
+        target_values = [
+            float(row["source_score"]) + float(row["q_vector_delta_source_key"])
+            for row in rows
+        ]
+    elif score_component == "k_side":
+        actual_delta_values = k_side_delta_values
+        target_values = [
+            float(row["source_score"]) + float(row["source_query_k_vector_delta"])
+            for row in rows
+        ]
+    else:
+        raise ValueError(
+            f"Unsupported attention score update component {score_component!r}; "
+            f"expected one of {ATTENTION_SCORE_UPDATE_COMPONENTS}."
+        )
+    return {
+        "num_scores": len(rows),
+        "num_unique_pairs": len({str(row["pair_id"]) for row in rows}),
+        "source_value": _mean(source_values),
+        "target_value": _mean(target_values),
+        "actual_delta": _mean(actual_delta_values),
+        "actual_delta_abs_mean": _mean([abs(value) for value in actual_delta_values]),
+        "actual_delta_std": _std(actual_delta_values),
+        "actual_total_score_delta_mean": _mean(total_delta_values),
+        "actual_q_side_delta_mean": _mean(q_side_delta_values),
+        "actual_k_side_delta_mean": _mean(k_side_delta_values),
+        "actual_qk_cross_delta_mean": _mean(qk_cross_values),
+        "source_attention_mean": _mean([float(row["source_attention"]) for row in rows]),
+        "target_attention_mean": _mean([float(row["target_attention"]) for row in rows]),
+        "actual_attention_delta_mean": _mean([float(row["actual_attention_delta"]) for row in rows]),
+    }
+
+
+def _attention_score_update_metric_row(
+    *,
+    source_step: int,
+    target_step: int,
+    source_checkpoint: Path,
+    target_checkpoint: Path,
+    learning_rate: float,
+    split: str,
+    pair_type: str,
+    head_layer: int,
+    head: int,
+    score_query_role: str,
+    score_key_role: str,
+    record_side: str,
+    score_component: str,
+    actual_summary: dict[str, Any],
+    source_payload: dict[str, Any],
+    dot_summary: dict[str, float | int | None],
+    min_error_denominator: float,
+) -> dict[str, Any]:
+    actual_delta = float(actual_summary["actual_delta"])
+    predicted_delta = float(dot_summary["dot"])
+    residual = actual_delta - predicted_delta
+    relative_error_denominator = max(abs(actual_delta), min_error_denominator)
+    predicted_relative_error_denominator = max(abs(predicted_delta), min_error_denominator)
+    return {
+        "source_step": source_step,
+        "target_step": target_step,
+        "step_gap": target_step - source_step,
+        "source_checkpoint": str(source_checkpoint),
+        "target_checkpoint": str(target_checkpoint),
+        "learning_rate": learning_rate,
+        "split": split,
+        "pair_type": pair_type,
+        "head_layer": head_layer,
+        "head": head,
+        "head_label": _head_label(head_layer, head),
+        "score_query_role": score_query_role,
+        "score_key_role": score_key_role,
+        "record_side": record_side,
+        "score_component": score_component,
+        "num_pairs": int(source_payload["num_pairs"]),
+        "num_scores": int(actual_summary["num_scores"]),
+        "num_unique_pairs": int(actual_summary["num_unique_pairs"]),
+        "source_value": float(actual_summary["source_value"]),
+        "target_value": float(actual_summary["target_value"]),
+        "source_objective_value": float(source_payload["score_value"]),
+        "source_objective_value_abs_mean": float(source_payload["score_value_abs_mean"]),
+        "source_objective_value_std": float(source_payload["score_value_std"]),
+        "actual_delta": actual_delta,
+        "actual_delta_abs_mean": float(actual_summary["actual_delta_abs_mean"]),
+        "actual_delta_std": float(actual_summary["actual_delta_std"]),
+        "predicted_delta": predicted_delta,
+        "residual": residual,
+        "absolute_error": abs(residual),
+        "relative_error": abs(residual) / relative_error_denominator,
+        "relative_error_denominator": relative_error_denominator,
+        "predicted_relative_error": abs(residual) / predicted_relative_error_denominator,
+        "predicted_relative_error_denominator": predicted_relative_error_denominator,
+        "sign_match": _sign_match(actual=actual_delta, predicted=predicted_delta),
+        "actual_total_score_delta_mean": float(actual_summary["actual_total_score_delta_mean"]),
+        "actual_q_side_delta_mean": float(actual_summary["actual_q_side_delta_mean"]),
+        "actual_k_side_delta_mean": float(actual_summary["actual_k_side_delta_mean"]),
+        "actual_qk_cross_delta_mean": float(actual_summary["actual_qk_cross_delta_mean"]),
+        "source_attention_mean": float(actual_summary["source_attention_mean"]),
+        "target_attention_mean": float(actual_summary["target_attention_mean"]),
+        "actual_attention_delta_mean": float(actual_summary["actual_attention_delta_mean"]),
+        "parameter_delta_l2_norm": float(dot_summary["left_l2_norm"]),
+        "score_gradient_l2_norm": float(dot_summary["right_l2_norm"]),
+        "update_score_gradient_cosine": dot_summary["cosine"],
+        "num_parameters": int(dot_summary["num_parameters"]),
+        "zero_score_gradient_parameter_count": len(source_payload["zero_gradient_parameter_names"]),
+        "zero_score_gradient_parameter_names": source_payload["zero_gradient_parameter_names"],
+    }
+
+
+def _attention_score_update_decomposition_row(
+    *,
+    metric_row: dict[str, Any],
+    group: _RouteGradientDecompositionGroup,
+    dot_summary: dict[str, float | int | None],
+) -> dict[str, Any]:
+    predicted_delta = float(dot_summary["dot"])
+    score_gradient_l2_norm = float(dot_summary["right_l2_norm"])
+    parameter_delta_l2_norm = float(dot_summary["left_l2_norm"])
+    num_selected_parameters = int(dot_summary["num_parameters"])
+    return {
+        "source_step": int(metric_row["source_step"]),
+        "target_step": int(metric_row["target_step"]),
+        "step_gap": int(metric_row["step_gap"]),
+        "source_checkpoint": metric_row["source_checkpoint"],
+        "target_checkpoint": metric_row["target_checkpoint"],
+        "learning_rate": float(metric_row["learning_rate"]),
+        "split": metric_row["split"],
+        "pair_type": metric_row["pair_type"],
+        "head_label": metric_row["head_label"],
+        "head_layer": int(metric_row["head_layer"]),
+        "head": int(metric_row["head"]),
+        "score_query_role": metric_row["score_query_role"],
+        "score_key_role": metric_row["score_key_role"],
+        "record_side": metric_row["record_side"],
+        "score_component": metric_row["score_component"],
+        "num_pairs": int(metric_row["num_pairs"]),
+        "num_scores": int(metric_row["num_scores"]),
+        "source_value": float(metric_row["source_value"]),
+        "target_value": float(metric_row["target_value"]),
+        "actual_delta": float(metric_row["actual_delta"]),
+        "global_predicted_delta": float(metric_row["predicted_delta"]),
+        "global_residual": float(metric_row["residual"]),
+        "global_relative_error": float(metric_row["relative_error"]),
+        "group_id": group.group_id,
+        "group_kind": group.group_kind,
+        "component_type": group.component_type,
+        "partition_name": group.partition_name,
+        "group_layer": group.layer,
+        "group_head": group.head,
+        "group_projection": group.projection,
+        "group_neuron": group.neuron,
+        "selection_count": len(group.selections),
+        "num_selected_parameters": num_selected_parameters,
+        "predicted_delta_contribution": predicted_delta,
+        "parameter_delta_l2_norm": parameter_delta_l2_norm,
+        "score_gradient_l2_norm": score_gradient_l2_norm,
+        "update_score_gradient_cosine": dot_summary["cosine"],
+        "contribution_per_parameter": predicted_delta / num_selected_parameters,
+        "notes": list(group.notes),
+    }
+
+
+def _compute_attention_score_update_attribution_interval(
+    *,
+    source_model: torch.nn.Module,
+    target_model: torch.nn.Module,
+    source_checkpoint_path: Path,
+    target_checkpoint_path: Path,
+    pairs: list[dict[str, Any]],
+    learning_rate: float,
+    head_layer: int,
+    head: int,
+    score_query_role: str,
+    score_key_roles: list[str],
+    record_sides: list[str],
+    score_components: list[str],
+    batch_size: int,
+    pad_token_id: int,
+    device: torch.device,
+    groups: list[_RouteGradientDecompositionGroup],
+    reconstruction_tolerance: float,
+    min_error_denominator: float,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    if not groups:
+        raise ValueError("Attention score update attribution requires at least one decomposition group.")
+
+    score_rows = _compute_attention_score_delta_interval(
+        source_model=source_model,
+        target_model=target_model,
+        source_checkpoint_path=source_checkpoint_path,
+        target_checkpoint_path=target_checkpoint_path,
+        pairs=pairs,
+        head_layer=head_layer,
+        head=head,
+        score_query_role=score_query_role,
+        score_key_roles=score_key_roles,
+        record_sides=record_sides,
+        batch_size=batch_size,
+        pad_token_id=pad_token_id,
+        device=device,
+        reconstruction_tolerance=reconstruction_tolerance,
+    )
+    source_step = _checkpoint_step_from_path(source_checkpoint_path)
+    target_step = _checkpoint_step_from_path(target_checkpoint_path)
+    source_parameters = _model_parameter_snapshot(source_model)
+    target_parameters = _model_parameter_snapshot(target_model)
+    delta_parameters = _parameter_delta(
+        source_parameters=source_parameters,
+        target_parameters=target_parameters,
+        label=f"attention score update {source_step}->{target_step}",
+    )
+
+    pair_groups = _route_gradient_groups(pairs)
+    metric_rows: list[dict[str, Any]] = []
+    decomposition_rows: list[dict[str, Any]] = []
+    for (split, pair_type), group_pairs in sorted(pair_groups.items()):
+        for record_side in record_sides:
+            for score_key_role in score_key_roles:
+                for score_component in score_components:
+                    actual_summary = _attention_score_update_actual_summary(
+                        score_rows=score_rows,
+                        split=split,
+                        pair_type=pair_type,
+                        record_side=record_side,
+                        score_key_role=score_key_role,
+                        score_component=score_component,
+                    )
+                    source_payload = _compute_attention_score_component_gradient_for_pairs(
+                        model=source_model,
+                        pairs=group_pairs,
+                        head_layer=head_layer,
+                        head=head,
+                        score_query_role=score_query_role,
+                        score_key_role=score_key_role,
+                        record_side=record_side,
+                        score_component=score_component,
+                        batch_size=batch_size,
+                        pad_token_id=pad_token_id,
+                        device=device,
+                    )
+                    score_gradients = source_payload["gradients"]
+                    if not isinstance(score_gradients, dict):
+                        raise TypeError("Attention score gradient payload must contain a gradients dictionary.")
+                    dot_summary = _gradient_dot_summary(
+                        left_gradients=delta_parameters,
+                        right_gradients=score_gradients,
+                        label=(
+                            f"attention score update {source_step}->{target_step} "
+                            f"{split}/{pair_type}/{record_side}/{score_key_role}/{score_component}"
+                        ),
+                    )
+                    metric_row = _attention_score_update_metric_row(
+                        source_step=source_step,
+                        target_step=target_step,
+                        source_checkpoint=source_checkpoint_path,
+                        target_checkpoint=target_checkpoint_path,
+                        learning_rate=learning_rate,
+                        split=split,
+                        pair_type=pair_type,
+                        head_layer=head_layer,
+                        head=head,
+                        score_query_role=score_query_role,
+                        score_key_role=score_key_role,
+                        record_side=record_side,
+                        score_component=score_component,
+                        actual_summary=actual_summary,
+                        source_payload=source_payload,
+                        dot_summary=dot_summary,
+                        min_error_denominator=min_error_denominator,
+                    )
+                    metric_rows.append(metric_row)
+                    for group in groups:
+                        group_dot_summary = _gradient_dot_summary_for_group(
+                            left_gradients=delta_parameters,
+                            right_gradients=score_gradients,
+                            group=group,
+                            label=(
+                                f"attention score update {source_step}->{target_step} "
+                                f"{split}/{pair_type}/{record_side}/{score_key_role}/{score_component}/{group.group_id}"
+                            ),
+                        )
+                        decomposition_rows.append(
+                            _attention_score_update_decomposition_row(
+                                metric_row=metric_row,
+                                group=group,
+                                dot_summary=group_dot_summary,
+                            )
+                        )
+
+    return metric_rows, decomposition_rows, score_rows
+
+
+def _summarize_attention_score_update_attribution(
+    *,
+    metric_rows: list[dict[str, Any]],
+    decomposition_rows: list[dict[str, Any]],
+    top_k_groups: int,
+) -> dict[str, Any]:
+    if top_k_groups <= 0:
+        raise ValueError("top_k_groups must be positive.")
+    if not metric_rows:
+        raise ValueError("Cannot summarize attention score update attribution without metric rows.")
+    if not decomposition_rows:
+        raise ValueError("Cannot summarize attention score update attribution without decomposition rows.")
+    all_rows = [
+        row
+        for row in metric_rows
+        if str(row["split"]) == "__all__" and str(row["pair_type"]) == "__all__"
+    ]
+    if not all_rows:
+        raise RuntimeError("Attention score update attribution has no __all__/__all__ metric rows.")
+    final_target_step = max(int(row["target_step"]) for row in metric_rows)
+    final_rows = [
+        row for row in all_rows if int(row["target_step"]) == final_target_step
+    ]
+    final_decomposition_rows = [
+        row
+        for row in decomposition_rows
+        if int(row["target_step"]) == final_target_step
+        and str(row["split"]) == "__all__"
+        and str(row["pair_type"]) == "__all__"
+        and str(row["group_kind"]) not in {"global_all", "parameter_tensor"}
+    ]
+    return {
+        "num_intervals": len({(int(row["source_step"]), int(row["target_step"])) for row in metric_rows}),
+        "intervals": sorted(
+            {
+                f"{int(row['source_step'])}->{int(row['target_step'])}"
+                for row in all_rows
+            }
+        ),
+        "target_steps": sorted({int(row["target_step"]) for row in metric_rows}),
+        "final_target_step": final_target_step,
+        "final_metric_rows": sorted(
+            final_rows,
+            key=lambda row: (
+                str(row["record_side"]),
+                str(row["score_key_role"]),
+                str(row["score_component"]),
+            ),
+        ),
+        "all_all_sign_match_fraction": _fraction(
+            sum(1 for row in all_rows if bool(row["sign_match"])),
+            len(all_rows),
+            "attention score update sign_match_fraction",
+        ),
+        "all_all_mean_absolute_error": _mean([float(row["absolute_error"]) for row in all_rows]),
+        "all_all_mean_relative_error": _mean([float(row["relative_error"]) for row in all_rows]),
+        "all_all_worst_relative_error": max(all_rows, key=lambda row: float(row["relative_error"])),
+        "final_top_positive_contributions": sorted(
+            final_decomposition_rows,
+            key=lambda row: float(row["predicted_delta_contribution"]),
+            reverse=True,
+        )[:top_k_groups],
+        "final_top_negative_contributions": sorted(
+            final_decomposition_rows,
+            key=lambda row: float(row["predicted_delta_contribution"]),
+        )[:top_k_groups],
+        "final_top_abs_contributions": sorted(
+            final_decomposition_rows,
+            key=lambda row: abs(float(row["predicted_delta_contribution"])),
+            reverse=True,
+        )[:top_k_groups],
+    }
+
+
+def _plot_attention_score_update_actual_vs_predicted(
+    *,
+    metric_rows: list[dict[str, Any]],
+    output_path: Path,
+) -> Path | None:
+    rows = [
+        row
+        for row in metric_rows
+        if str(row["split"]) == "__all__" and str(row["pair_type"]) == "__all__"
+    ]
+    if not rows:
+        return None
+    _, plt = _import_matplotlib()
+    fig, ax = plt.subplots(figsize=(7, 7))
+    actual = [float(row["actual_delta"]) for row in rows]
+    predicted = [float(row["predicted_delta"]) for row in rows]
+    ax.scatter(predicted, actual, color="#376f8f")
+    min_value = min(actual + predicted)
+    max_value = max(actual + predicted)
+    if min_value == max_value:
+        min_value -= 1.0
+        max_value += 1.0
+    ax.plot([min_value, max_value], [min_value, max_value], color="#777777", linestyle="--", linewidth=1.0)
+    ax.axhline(0.0, color="#999999", linewidth=0.8)
+    ax.axvline(0.0, color="#999999", linewidth=0.8)
+    ax.set_title("Attention score update attribution: actual vs predicted")
+    ax.set_xlabel("grad(score component) . Delta theta")
+    ax.set_ylabel("actual score-component delta")
+    ax.grid(alpha=0.25)
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, format="svg")
+    plt.close(fig)
+    return output_path
+
+
+def _plot_attention_score_update_top_contributions(
+    *,
+    decomposition_rows: list[dict[str, Any]],
+    top_k_groups: int,
+    output_path: Path,
+) -> Path | None:
+    if not decomposition_rows:
+        return None
+    final_target_step = max(int(row["target_step"]) for row in decomposition_rows)
+    rows = [
+        row
+        for row in decomposition_rows
+        if int(row["target_step"]) == final_target_step
+        and str(row["split"]) == "__all__"
+        and str(row["pair_type"]) == "__all__"
+        and str(row["group_kind"]) not in {"global_all", "parameter_tensor"}
+    ]
+    if not rows:
+        return None
+    top_rows = sorted(
+        rows,
+        key=lambda row: abs(float(row["predicted_delta_contribution"])),
+        reverse=True,
+    )[:top_k_groups]
+    _, plt = _import_matplotlib()
+    fig, ax = plt.subplots(figsize=(13, max(5, 0.38 * len(top_rows))))
+    y_positions = list(range(len(top_rows)))
+    values = [float(row["predicted_delta_contribution"]) for row in top_rows]
+    labels = [
+        f"{row['score_component']} {row['record_side']} {row['score_key_role']} {row['group_id']}"
+        for row in top_rows
+    ]
+    colors = ["#376f8f" if value >= 0.0 else "#8f374a" for value in values]
+    ax.barh(y_positions, values, color=colors)
+    ax.axvline(0.0, color="#777777", linewidth=1.0, linestyle="--")
+    ax.set_yticks(y_positions)
+    ax.set_yticklabels(labels, fontsize=8)
+    ax.invert_yaxis()
+    ax.set_title(f"Top actual-update attention score contributions ending at step {final_target_step}")
+    ax.set_xlabel("grad(score component) . Delta theta contribution")
+    ax.grid(axis="x", alpha=0.25)
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, format="svg")
+    plt.close(fig)
+    return output_path
+
+
+def _write_attention_score_update_attribution_markdown(
+    *,
+    path: Path,
+    report: dict[str, Any],
+    plot_paths: dict[str, Path],
+) -> None:
+    summary = report["summary"]
+    lines = [
+        "# Attention Score Update Attribution",
+        "",
+        "## Calculation",
+        "",
+        "This report tests whether actual checkpoint-to-checkpoint parameter movement explains raw QK score geometry changes.",
+        "",
+        "```text",
+        "score = q_i . k_j / sqrt(d_head)",
+        "predicted_delta = grad_theta score_component(theta_source) . (theta_target - theta_source)",
+        "residual = actual_delta - predicted_delta",
+        "```",
+        "",
+        "`q_side` holds the source key vector fixed and differentiates only through the query side.",
+        "`k_side` holds the source query vector fixed and differentiates only through the key side.",
+        "",
+        "## Run",
+        "",
+        f"- head: `{report['head_label']}`",
+        f"- query role: `{report['score_query_role']}`",
+        f"- key roles: `{report['score_key_roles']}`",
+        f"- record sides: `{report['record_sides']}`",
+        f"- score components: `{report['score_components']}`",
+        f"- intervals: `{summary['intervals']}`",
+        "",
+        "## Final Metrics",
+        "",
+        "| record side | key role | component | actual delta | predicted delta | residual | relative error | sign match |",
+        "|---|---|---|---:|---:|---:|---:|---|",
+    ]
+    for row in summary["final_metric_rows"]:
+        lines.append(
+            "| `{side}` | `{role}` | `{component}` | {actual:.6g} | {predicted:.6g} | {residual:.6g} | {error:.6g} | `{sign}` |".format(
+                side=row["record_side"],
+                role=row["score_key_role"],
+                component=row["score_component"],
+                actual=float(row["actual_delta"]),
+                predicted=float(row["predicted_delta"]),
+                residual=float(row["residual"]),
+                error=float(row["relative_error"]),
+                sign=bool(row["sign_match"]),
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "## Top Positive Contributions",
+            "",
+            "| group | component | kind | contribution | cosine |",
+            "|---|---|---|---:|---:|",
+        ]
+    )
+    for row in summary["final_top_positive_contributions"]:
+        cosine = row["update_score_gradient_cosine"]
+        cosine_text = "" if cosine is None else f"{float(cosine):.6f}"
+        lines.append(
+            "| `{group}` | `{component}` | `{kind}` | {contribution:.6g} | {cosine} |".format(
+                group=row["group_id"],
+                component=row["score_component"],
+                kind=row["group_kind"],
+                contribution=float(row["predicted_delta_contribution"]),
+                cosine=cosine_text,
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "## Top Negative Contributions",
+            "",
+            "| group | component | kind | contribution | cosine |",
+            "|---|---|---|---:|---:|",
+        ]
+    )
+    for row in summary["final_top_negative_contributions"]:
+        cosine = row["update_score_gradient_cosine"]
+        cosine_text = "" if cosine is None else f"{float(cosine):.6f}"
+        lines.append(
+            "| `{group}` | `{component}` | `{kind}` | {contribution:.6g} | {cosine} |".format(
+                group=row["group_id"],
+                component=row["score_component"],
+                kind=row["group_kind"],
+                contribution=float(row["predicted_delta_contribution"]),
+                cosine=cosine_text,
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "## Raw Outputs",
+            "",
+            f"- metric rows: `{report['metric_rows_path']}`",
+            f"- decomposition rows: `{report['decomposition_rows_path']}`",
+            f"- group rows: `{report['group_rows_path']}`",
+            f"- score rows: `{report['score_rows_path']}`",
+            f"- pair rows: `{report['pair_rows_path']}`",
+        ]
+    )
+    if plot_paths:
+        lines.extend(["", "## Plots", ""])
+        for label, plot_path in plot_paths.items():
+            lines.append(f"- {label}: `{plot_path}`")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def run_attention_score_update_attribution(
+    *,
+    config_path: Path,
+    probe_set_path: Path,
+    checkpoint_dir: Path,
+    output_dir: Path,
+    head_layer: int,
+    head: int,
+    score_query_role: str,
+    score_key_roles: list[str],
+    pair_types: list[str],
+    device_name: str = "mps",
+    checkpoint_paths: list[Path] | None = None,
+    record_sides: list[str] | None = None,
+    score_components: list[str] | None = None,
+    max_pairs_per_type: int = 64,
+    min_pairs_per_type: int = 1,
+    split_filter: list[str] | None = None,
+    decomposition_modes: list[str] | None = None,
+    reconstruction_tolerance: float = 1.0e-3,
+    top_k_groups: int = 24,
+    min_error_denominator: float = 1.0e-9,
+) -> tuple[Path, Path, Path, Path, Path, Path, Path, dict[str, Path]]:
+    if not score_key_roles:
+        raise ValueError("At least one --score-key-role is required.")
+    unsupported_roles = [
+        role
+        for role in [score_query_role, *score_key_roles]
+        if role not in GEOMETRY_POSITION_ROLES
+    ]
+    if unsupported_roles:
+        raise ValueError(f"Unsupported attention score roles {unsupported_roles}; expected one of {GEOMETRY_POSITION_ROLES}.")
+    if reconstruction_tolerance <= 0.0:
+        raise ValueError("reconstruction_tolerance must be positive.")
+    if top_k_groups <= 0:
+        raise ValueError("top_k_groups must be positive.")
+    if min_error_denominator <= 0.0:
+        raise ValueError("min_error_denominator must be positive.")
+
+    resolved_record_sides = _resolve_attention_score_record_sides(record_sides)
+    resolved_score_components = _resolve_attention_score_update_components(score_components)
+    resolved_decomposition_modes = _resolve_route_gradient_decomposition_modes(decomposition_modes)
+    spec = TrainSpec.from_path(config_path)
+    probe_records, probe_metadata = load_probe_set(probe_set_path)
+    if str(probe_metadata["benchmark_dir"]) != str(spec.benchmark_dir):
+        raise ValueError(
+            f"Probe set benchmark mismatch: probe={probe_metadata['benchmark_dir']} config={spec.benchmark_dir}"
+        )
+    metadata = read_symbolic_kv_stream_metadata(spec.benchmark_dir)
+    vocab = Vocabulary.from_metadata(metadata["vocabulary"])
+    holdout_pairs = _holdout_pair_set(metadata)
+    device = require_device(device_name)
+    checkpoints = _resolve_checkpoint_paths(checkpoint_dir=checkpoint_dir, checkpoint_paths=checkpoint_paths)
+    if len(checkpoints) < 2:
+        raise ValueError("attention-score-update-attribution requires at least two checkpoints.")
+    source_model = build_model(spec.model, len(vocab.tokens), device)
+    target_model = build_model(spec.model, len(vocab.tokens), device)
+    if head_layer < 0 or head_layer >= len(source_model.blocks):
+        raise ValueError(f"head_layer {head_layer} outside model range 0..{len(source_model.blocks) - 1}.")
+    if head < 0 or head >= source_model.blocks[head_layer].attn.n_heads:
+        raise ValueError(
+            f"head {head} outside model range 0..{source_model.blocks[head_layer].attn.n_heads - 1} for layer {head_layer}."
+        )
+    pair_types = sorted(set(pair_types), key=pair_types.index)
+    pairs, pair_construction = _build_causal_patch_pairs(
+        probe_records=probe_records,
+        vocab=vocab,
+        holdout_pairs=holdout_pairs,
+        pair_types=pair_types,
+        max_pairs_per_type=max_pairs_per_type,
+        min_pairs_per_type=min_pairs_per_type,
+        split_filter=split_filter,
+    )
+    if not pairs:
+        raise RuntimeError("Attention score update attribution constructed no pairs.")
+
+    groups, decomposition_summary = _build_route_gradient_decomposition_groups(
+        model=source_model,
+        decomposition_modes=resolved_decomposition_modes,
+    )
+    group_rows = [
+        _group_metadata(
+            model_parameters=dict(source_model.named_parameters(remove_duplicate=False)),
+            group=group,
+        )
+        for group in groups
+    ]
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    metric_rows_path = output_dir / "attention_score_update_attribution_rows.jsonl"
+    decomposition_rows_path = output_dir / "attention_score_update_attribution_decomposition_rows.jsonl"
+    group_rows_path = output_dir / "attention_score_update_attribution_groups.jsonl"
+    score_rows_path = output_dir / "attention_score_update_attribution_score_rows.jsonl"
+    pair_rows_path = output_dir / "attention_score_update_attribution_pairs.jsonl"
+    progress_path = output_dir / "attention_score_update_attribution_progress.json"
+    for partial_path in (
+        metric_rows_path,
+        decomposition_rows_path,
+        group_rows_path,
+        score_rows_path,
+        pair_rows_path,
+        progress_path,
+    ):
+        if partial_path.exists():
+            partial_path.unlink()
+    write_jsonl(pair_rows_path, [_pair_metadata(pair) for pair in pairs])
+    write_jsonl(group_rows_path, group_rows)
+
+    intervals = list(zip(checkpoints[:-1], checkpoints[1:], strict=True))
+    print(
+        "[attention-score-update-attribution] "
+        f"intervals={len(intervals)} checkpoints={len(checkpoints)} pairs={len(pairs)} "
+        f"pair_types={pair_types} device={device_name} head={_head_label(head_layer, head)} "
+        f"query_role={score_query_role} key_roles={score_key_roles} record_sides={resolved_record_sides} "
+        f"components={resolved_score_components} groups={len(groups)}",
+        flush=True,
+    )
+
+    all_metric_rows: list[dict[str, Any]] = []
+    all_decomposition_rows: list[dict[str, Any]] = []
+    all_score_rows: list[dict[str, Any]] = []
+    for interval_index, (source_checkpoint_path, target_checkpoint_path) in enumerate(intervals, start=1):
+        source_step = _checkpoint_step_from_path(source_checkpoint_path)
+        target_step = _checkpoint_step_from_path(target_checkpoint_path)
+        learning_rate = _compute_learning_rate(spec.optimization, source_step)
+        print(
+            "[attention-score-update-attribution] starting "
+            f"{interval_index}/{len(intervals)} {source_checkpoint_path.name}->{target_checkpoint_path.name}",
+            flush=True,
+        )
+        metric_rows, decomposition_rows, score_rows = _compute_attention_score_update_attribution_interval(
+            source_model=source_model,
+            target_model=target_model,
+            source_checkpoint_path=source_checkpoint_path,
+            target_checkpoint_path=target_checkpoint_path,
+            pairs=pairs,
+            learning_rate=learning_rate,
+            head_layer=head_layer,
+            head=head,
+            score_query_role=score_query_role,
+            score_key_roles=score_key_roles,
+            record_sides=resolved_record_sides,
+            score_components=resolved_score_components,
+            batch_size=spec.evaluation.batch_size,
+            pad_token_id=vocab.pad_token_id,
+            device=device,
+            groups=groups,
+            reconstruction_tolerance=reconstruction_tolerance,
+            min_error_denominator=min_error_denominator,
+        )
+        for row in metric_rows:
+            append_jsonl(metric_rows_path, row)
+        for row in decomposition_rows:
+            append_jsonl(decomposition_rows_path, row)
+        for row in score_rows:
+            append_jsonl(score_rows_path, row)
+        all_metric_rows.extend(metric_rows)
+        all_decomposition_rows.extend(decomposition_rows)
+        all_score_rows.extend(score_rows)
+        all_row = next(
+            row
+            for row in metric_rows
+            if str(row["split"]) == "__all__"
+            and str(row["pair_type"]) == "__all__"
+            and str(row["record_side"]) == resolved_record_sides[0]
+            and str(row["score_key_role"]) == score_key_roles[0]
+            and str(row["score_component"]) == resolved_score_components[0]
+        )
+        print(
+            "[attention-score-update-attribution] finished "
+            f"{source_step}->{target_step} component={all_row['score_component']} "
+            f"actual_delta={float(all_row['actual_delta']):.6g} "
+            f"predicted_delta={float(all_row['predicted_delta']):.6g} "
+            f"relative_error={float(all_row['relative_error']):.6g} "
+            f"sign_match={all_row['sign_match']}",
+            flush=True,
+        )
+        write_json(
+            progress_path,
+            {
+                "status": "running",
+                "completed_intervals": interval_index,
+                "total_intervals": len(intervals),
+                "last_source_step": source_step,
+                "last_target_step": target_step,
+                "metric_rows_path": str(metric_rows_path),
+                "decomposition_rows_path": str(decomposition_rows_path),
+                "score_rows_path": str(score_rows_path),
+            },
+        )
+
+    summary = _summarize_attention_score_update_attribution(
+        metric_rows=all_metric_rows,
+        decomposition_rows=all_decomposition_rows,
+        top_k_groups=top_k_groups,
+    )
+    plot_paths: dict[str, Path] = {}
+    actual_vs_predicted_plot = _plot_attention_score_update_actual_vs_predicted(
+        metric_rows=all_metric_rows,
+        output_path=output_dir / "attention_score_update_actual_vs_predicted.svg",
+    )
+    if actual_vs_predicted_plot is not None:
+        plot_paths["actual_vs_predicted"] = actual_vs_predicted_plot
+    top_contributions_plot = _plot_attention_score_update_top_contributions(
+        decomposition_rows=all_decomposition_rows,
+        top_k_groups=top_k_groups,
+        output_path=output_dir / "attention_score_update_top_contributions.svg",
+    )
+    if top_contributions_plot is not None:
+        plot_paths["top_contributions"] = top_contributions_plot
+
+    report_path = output_dir / "attention_score_update_attribution_report.json"
+    markdown_path = output_dir / "attention_score_update_attribution_report.md"
+    report = {
+        "schema_version": ATTENTION_SCORE_UPDATE_ATTRIBUTION_SCHEMA_VERSION,
+        "config_path": str(config_path),
+        "probe_set_path": str(probe_set_path),
+        "checkpoint_dir": str(checkpoint_dir),
+        "device": device_name,
+        "head_layer": head_layer,
+        "head": head,
+        "head_label": _head_label(head_layer, head),
+        "score_query_role": score_query_role,
+        "score_key_roles": score_key_roles,
+        "record_sides": resolved_record_sides,
+        "score_components": resolved_score_components,
+        "pair_types": pair_types,
+        "max_pairs_per_type": max_pairs_per_type,
+        "min_pairs_per_type": min_pairs_per_type,
+        "split_filter": split_filter,
+        "decomposition": decomposition_summary,
+        "reconstruction_tolerance": reconstruction_tolerance,
+        "top_k_groups": top_k_groups,
+        "min_error_denominator": min_error_denominator,
+        "calculation": {
+            "score": "q_i . k_j / sqrt(d_head)",
+            "score_component": "score differentiates through q and k; q_side differentiates only through q; k_side differentiates only through k",
+            "actual_delta": (
+                "score uses target_score-source_score; q_side uses Delta q . k0 / sqrt(d_head); "
+                "k_side uses q0 . Delta k / sqrt(d_head)"
+            ),
+            "predicted_delta": "grad_theta score_component(theta_source) . (theta_target - theta_source)",
+            "residual": "actual_delta - predicted_delta",
+            "group_contribution": "grad_group score_component(theta_source) . Delta theta_group",
+            "cross_term_warning": "The qk cross term Delta q . Delta k is measured in score_rows but has no first-order gradient attribution row.",
+        },
+        "pair_construction": pair_construction,
+        "metric_rows_path": str(metric_rows_path),
+        "decomposition_rows_path": str(decomposition_rows_path),
+        "group_rows_path": str(group_rows_path),
+        "score_rows_path": str(score_rows_path),
+        "pair_rows_path": str(pair_rows_path),
+        "summary": summary,
+    }
+    write_json(report_path, report)
+    _write_attention_score_update_attribution_markdown(path=markdown_path, report=report, plot_paths=plot_paths)
+    write_json(
+        progress_path,
+        {
+            "status": "complete",
+            "completed_intervals": len(intervals),
+            "total_intervals": len(intervals),
+            "last_target_step": int(summary["final_target_step"]),
+            "report_path": str(report_path),
+            "markdown_path": str(markdown_path),
+            "metric_rows_path": str(metric_rows_path),
+            "decomposition_rows_path": str(decomposition_rows_path),
+            "group_rows_path": str(group_rows_path),
+            "score_rows_path": str(score_rows_path),
+            "pair_rows_path": str(pair_rows_path),
+        },
+    )
+    print(
+        f"[attention-score-update-attribution] complete report={report_path} rows={metric_rows_path}",
+        flush=True,
+    )
+    return (
+        report_path,
+        markdown_path,
+        metric_rows_path,
+        decomposition_rows_path,
+        group_rows_path,
+        score_rows_path,
+        pair_rows_path,
+        plot_paths,
+    )
+
+
+def _attention_retrieval_separation_key_label(*, support_key_role: str, distractor_key_role: str) -> str:
+    return f"{support_key_role}-minus-mean-{distractor_key_role}"
+
+
+def _attention_retrieval_separation_component_gradient_for_pairs(
+    *,
+    model: torch.nn.Module,
+    pairs: list[dict[str, Any]],
+    head_layer: int,
+    head: int,
+    score_query_role: str,
+    support_key_role: str,
+    distractor_key_role: str,
+    record_side: str,
+    score_component: str,
+    batch_size: int,
+    pad_token_id: int,
+    device: torch.device,
+) -> dict[str, Any]:
+    if not pairs:
+        raise ValueError("pairs must not be empty for retrieval-separation gradient computation.")
+    if record_side not in ATTENTION_SCORE_RECORD_SIDES:
+        raise ValueError(f"Unsupported record side {record_side!r}; expected one of {ATTENTION_SCORE_RECORD_SIDES}.")
+    if score_component not in ATTENTION_SCORE_UPDATE_COMPONENTS:
+        raise ValueError(
+            f"Unsupported attention score update component {score_component!r}; "
+            f"expected one of {ATTENTION_SCORE_UPDATE_COMPONENTS}."
+        )
+
+    model.eval()
+    model.zero_grad(set_to_none=True)
+    total_separation: torch.Tensor | None = None
+    separation_values: list[float] = []
+    support_score_values: list[float] = []
+    distractor_score_values: list[float] = []
+    num_support_scores = 0
+    num_distractor_scores = 0
+    num_batches = 0
+    side_key = f"{record_side}_record"
+
+    for start_index in range(0, len(pairs), batch_size):
+        pair_batch = pairs[start_index : start_index + batch_size]
+        records = [pair[side_key] for pair in pair_batch]
+        payload = _attention_score_tensor_payload_for_records(
+            model=model,
+            records=records,
+            head_layer=head_layer,
+            head=head,
+            pad_token_id=pad_token_id,
+            device=device,
+        )
+        scale = math.sqrt(int(payload["head_dim"]))
+        pair_terms: list[torch.Tensor] = []
+        for pair_index, pair in enumerate(pair_batch):
+            batch_row, query_position = _single_attention_position(
+                batch=payload["batch"],
+                metadata=payload["metadata"],
+                flat_index=pair_index,
+                position_role=score_query_role,
+                label="retrieval separation query",
+            )
+            support_batch_row, support_positions = _attention_key_positions(
+                batch=payload["batch"],
+                metadata=payload["metadata"],
+                flat_index=pair_index,
+                position_role=support_key_role,
+                max_position=query_position,
+            )
+            distractor_batch_row, distractor_positions = _attention_key_positions(
+                batch=payload["batch"],
+                metadata=payload["metadata"],
+                flat_index=pair_index,
+                position_role=distractor_key_role,
+                max_position=query_position,
+            )
+            if support_batch_row != batch_row:
+                raise RuntimeError(
+                    f"Support role {support_key_role!r} selected batch row {support_batch_row}, "
+                    f"but query role {score_query_role!r} selected batch row {batch_row} for pair {pair['pair_id']}."
+                )
+            if distractor_batch_row != batch_row:
+                raise RuntimeError(
+                    f"Distractor role {distractor_key_role!r} selected batch row {distractor_batch_row}, "
+                    f"but query role {score_query_role!r} selected batch row {batch_row} for pair {pair['pair_id']}."
+                )
+            support_terms: list[torch.Tensor] = []
+            distractor_terms: list[torch.Tensor] = []
+            q_vector = payload["q"][batch_row, query_position, :]
+            for key_position in support_positions:
+                if key_position > query_position:
+                    raise RuntimeError(
+                        f"Support key position {key_position} is after query position {query_position} "
+                        f"for pair {pair['pair_id']}."
+                    )
+                k_vector = payload["k"][batch_row, key_position, :]
+                score = _attention_score_component_tensor(
+                    q_vector=q_vector,
+                    k_vector=k_vector,
+                    score_component=score_component,
+                    scale=scale,
+                )
+                support_terms.append(score)
+                support_score_values.append(float(score.detach().float().cpu().item()))
+            for key_position in distractor_positions:
+                if key_position > query_position:
+                    raise RuntimeError(
+                        f"Distractor key position {key_position} is after query position {query_position} "
+                        f"for pair {pair['pair_id']}."
+                    )
+                k_vector = payload["k"][batch_row, key_position, :]
+                score = _attention_score_component_tensor(
+                    q_vector=q_vector,
+                    k_vector=k_vector,
+                    score_component=score_component,
+                    scale=scale,
+                )
+                distractor_terms.append(score)
+                distractor_score_values.append(float(score.detach().float().cpu().item()))
+            if not support_terms:
+                raise RuntimeError(f"No support scores for pair {pair['pair_id']} and role {support_key_role!r}.")
+            if not distractor_terms:
+                raise RuntimeError(f"No distractor scores for pair {pair['pair_id']} and role {distractor_key_role!r}.")
+            support_mean = torch.stack(support_terms).mean()
+            distractor_mean = torch.stack(distractor_terms).mean()
+            pair_separation = support_mean - distractor_mean
+            pair_terms.append(pair_separation)
+            separation_values.append(float(pair_separation.detach().float().cpu().item()))
+            num_support_scores += len(support_terms)
+            num_distractor_scores += len(distractor_terms)
+        if not pair_terms:
+            raise RuntimeError("Retrieval separation batch produced no pair terms.")
+        batch_separation = torch.stack(pair_terms).sum()
+        total_separation = batch_separation if total_separation is None else total_separation + batch_separation
+        num_batches += 1
+
+    if total_separation is None:
+        raise RuntimeError("Retrieval separation gradient produced no objective tensor.")
+    mean_separation = total_separation / float(len(pairs))
+    mean_separation.backward()
+    gradients, zero_gradient_parameter_names = _parameter_gradients(model=model, require_all=False)
+    model.zero_grad(set_to_none=True)
+    return {
+        "score_value": float(mean_separation.detach().float().cpu().item()),
+        "score_value_abs_mean": _mean([abs(value) for value in separation_values]),
+        "score_value_std": _std(separation_values),
+        "support_score_value_mean": _mean(support_score_values),
+        "distractor_score_value_mean": _mean(distractor_score_values),
+        "num_scores": num_support_scores + num_distractor_scores,
+        "num_support_scores": num_support_scores,
+        "num_distractor_scores": num_distractor_scores,
+        "num_pairs": len(pairs),
+        "num_batches": num_batches,
+        "zero_gradient_parameter_names": zero_gradient_parameter_names,
+        "gradients": gradients,
+    }
+
+
+def _attention_score_row_component_values(row: dict[str, Any], score_component: str) -> dict[str, float]:
+    source_score = float(row["source_score"])
+    if score_component == "score":
+        target_value = float(row["target_score"])
+        delta_value = float(row["actual_score_delta"])
+    elif score_component == "q_side":
+        delta_value = float(row["q_vector_delta_source_key"])
+        target_value = source_score + delta_value
+    elif score_component == "k_side":
+        delta_value = float(row["source_query_k_vector_delta"])
+        target_value = source_score + delta_value
+    else:
+        raise ValueError(
+            f"Unsupported attention score update component {score_component!r}; "
+            f"expected one of {ATTENTION_SCORE_UPDATE_COMPONENTS}."
+        )
+    return {
+        "source": source_score,
+        "target": target_value,
+        "delta": delta_value,
+        "total_delta": float(row["actual_score_delta"]),
+        "q_side_delta": float(row["q_vector_delta_source_key"]),
+        "k_side_delta": float(row["source_query_k_vector_delta"]),
+        "qk_cross_delta": float(row["qk_vector_cross"]),
+        "source_attention": float(row["source_attention"]),
+        "target_attention": float(row["target_attention"]),
+        "attention_delta": float(row["actual_attention_delta"]),
+    }
+
+
+def _mean_field(values: list[dict[str, float]], field: str) -> float:
+    return _mean([float(value[field]) for value in values])
+
+
+def _attention_retrieval_separation_actual_summary(
+    *,
+    score_rows: list[dict[str, Any]],
+    split: str,
+    pair_type: str,
+    record_side: str,
+    support_key_role: str,
+    distractor_key_role: str,
+    score_component: str,
+) -> dict[str, Any]:
+    rows = [
+        row
+        for row in score_rows
+        if (split == "__all__" or str(row["split"]) == split)
+        and (pair_type == "__all__" or str(row["pair_type"]) == pair_type)
+        and str(row["record_side"]) == record_side
+        and str(row["score_key_role"]) in {support_key_role, distractor_key_role}
+    ]
+    if not rows:
+        raise RuntimeError(
+            f"No attention score rows for retrieval separation split={split!r} pair_type={pair_type!r} "
+            f"record_side={record_side!r} support={support_key_role!r} distractor={distractor_key_role!r}."
+        )
+    by_pair: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(lambda: defaultdict(list))
+    for row in rows:
+        by_pair[str(row["pair_id"])][str(row["score_key_role"])].append(row)
+    missing_support = sorted(pair_id for pair_id, role_rows in by_pair.items() if not role_rows.get(support_key_role))
+    missing_distractor = sorted(pair_id for pair_id, role_rows in by_pair.items() if not role_rows.get(distractor_key_role))
+    if missing_support or missing_distractor:
+        raise RuntimeError(
+            "Retrieval separation requires both support and distractor rows for every pair; "
+            f"missing_support={missing_support[:10]} missing_distractor={missing_distractor[:10]}."
+        )
+
+    source_values: list[float] = []
+    target_values: list[float] = []
+    actual_delta_values: list[float] = []
+    support_delta_values: list[float] = []
+    distractor_delta_values: list[float] = []
+    q_side_delta_values: list[float] = []
+    k_side_delta_values: list[float] = []
+    qk_cross_delta_values: list[float] = []
+    total_score_delta_values: list[float] = []
+    source_attention_values: list[float] = []
+    target_attention_values: list[float] = []
+    attention_delta_values: list[float] = []
+    support_score_counts: list[int] = []
+    distractor_score_counts: list[int] = []
+    for pair_id, role_rows in sorted(by_pair.items()):
+        support_values = [
+            _attention_score_row_component_values(row, score_component)
+            for row in role_rows[support_key_role]
+        ]
+        distractor_values = [
+            _attention_score_row_component_values(row, score_component)
+            for row in role_rows[distractor_key_role]
+        ]
+        support_source = _mean_field(support_values, "source")
+        distractor_source = _mean_field(distractor_values, "source")
+        support_target = _mean_field(support_values, "target")
+        distractor_target = _mean_field(distractor_values, "target")
+        support_delta = _mean_field(support_values, "delta")
+        distractor_delta = _mean_field(distractor_values, "delta")
+        source_values.append(support_source - distractor_source)
+        target_values.append(support_target - distractor_target)
+        actual_delta_values.append(support_delta - distractor_delta)
+        support_delta_values.append(support_delta)
+        distractor_delta_values.append(distractor_delta)
+        q_side_delta_values.append(
+            _mean_field(support_values, "q_side_delta") - _mean_field(distractor_values, "q_side_delta")
+        )
+        k_side_delta_values.append(
+            _mean_field(support_values, "k_side_delta") - _mean_field(distractor_values, "k_side_delta")
+        )
+        qk_cross_delta_values.append(
+            _mean_field(support_values, "qk_cross_delta") - _mean_field(distractor_values, "qk_cross_delta")
+        )
+        total_score_delta_values.append(
+            _mean_field(support_values, "total_delta") - _mean_field(distractor_values, "total_delta")
+        )
+        source_attention_values.append(
+            _mean_field(support_values, "source_attention") - _mean_field(distractor_values, "source_attention")
+        )
+        target_attention_values.append(
+            _mean_field(support_values, "target_attention") - _mean_field(distractor_values, "target_attention")
+        )
+        attention_delta_values.append(
+            _mean_field(support_values, "attention_delta") - _mean_field(distractor_values, "attention_delta")
+        )
+        support_score_counts.append(len(support_values))
+        distractor_score_counts.append(len(distractor_values))
+
+    return {
+        "num_scores": sum(support_score_counts) + sum(distractor_score_counts),
+        "num_support_scores": sum(support_score_counts),
+        "num_distractor_scores": sum(distractor_score_counts),
+        "num_unique_pairs": len(by_pair),
+        "support_scores_per_pair_mean": _mean([float(value) for value in support_score_counts]),
+        "distractor_scores_per_pair_mean": _mean([float(value) for value in distractor_score_counts]),
+        "source_value": _mean(source_values),
+        "target_value": _mean(target_values),
+        "actual_delta": _mean(actual_delta_values),
+        "actual_delta_abs_mean": _mean([abs(value) for value in actual_delta_values]),
+        "actual_delta_std": _std(actual_delta_values),
+        "support_delta_mean": _mean(support_delta_values),
+        "distractor_delta_mean": _mean(distractor_delta_values),
+        "actual_total_score_delta_mean": _mean(total_score_delta_values),
+        "actual_q_side_delta_mean": _mean(q_side_delta_values),
+        "actual_k_side_delta_mean": _mean(k_side_delta_values),
+        "actual_qk_cross_delta_mean": _mean(qk_cross_delta_values),
+        "source_attention_mean": _mean(source_attention_values),
+        "target_attention_mean": _mean(target_attention_values),
+        "actual_attention_delta_mean": _mean(attention_delta_values),
+    }
+
+
+def _compute_attention_retrieval_separation_update_attribution_interval(
+    *,
+    source_model: torch.nn.Module,
+    target_model: torch.nn.Module,
+    source_checkpoint_path: Path,
+    target_checkpoint_path: Path,
+    pairs: list[dict[str, Any]],
+    learning_rate: float,
+    head_layer: int,
+    head: int,
+    score_query_role: str,
+    support_key_role: str,
+    distractor_key_role: str,
+    record_sides: list[str],
+    score_components: list[str],
+    batch_size: int,
+    pad_token_id: int,
+    device: torch.device,
+    groups: list[_RouteGradientDecompositionGroup],
+    reconstruction_tolerance: float,
+    min_error_denominator: float,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    score_rows = _compute_attention_score_delta_interval(
+        source_model=source_model,
+        target_model=target_model,
+        source_checkpoint_path=source_checkpoint_path,
+        target_checkpoint_path=target_checkpoint_path,
+        pairs=pairs,
+        head_layer=head_layer,
+        head=head,
+        score_query_role=score_query_role,
+        score_key_roles=[support_key_role, distractor_key_role],
+        record_sides=record_sides,
+        batch_size=batch_size,
+        pad_token_id=pad_token_id,
+        device=device,
+        reconstruction_tolerance=reconstruction_tolerance,
+    )
+    source_step = _checkpoint_step_from_path(source_checkpoint_path)
+    target_step = _checkpoint_step_from_path(target_checkpoint_path)
+    source_parameters = _model_parameter_snapshot(source_model)
+    target_parameters = _model_parameter_snapshot(target_model)
+    delta_parameters = _parameter_delta(
+        source_parameters=source_parameters,
+        target_parameters=target_parameters,
+        label=f"attention retrieval separation update {source_step}->{target_step}",
+    )
+
+    score_key_label = _attention_retrieval_separation_key_label(
+        support_key_role=support_key_role,
+        distractor_key_role=distractor_key_role,
+    )
+    pair_groups = _route_gradient_groups(pairs)
+    metric_rows: list[dict[str, Any]] = []
+    decomposition_rows: list[dict[str, Any]] = []
+    for (split, pair_type), group_pairs in sorted(pair_groups.items()):
+        for record_side in record_sides:
+            for score_component in score_components:
+                actual_summary = _attention_retrieval_separation_actual_summary(
+                    score_rows=score_rows,
+                    split=split,
+                    pair_type=pair_type,
+                    record_side=record_side,
+                    support_key_role=support_key_role,
+                    distractor_key_role=distractor_key_role,
+                    score_component=score_component,
+                )
+                source_payload = _attention_retrieval_separation_component_gradient_for_pairs(
+                    model=source_model,
+                    pairs=group_pairs,
+                    head_layer=head_layer,
+                    head=head,
+                    score_query_role=score_query_role,
+                    support_key_role=support_key_role,
+                    distractor_key_role=distractor_key_role,
+                    record_side=record_side,
+                    score_component=score_component,
+                    batch_size=batch_size,
+                    pad_token_id=pad_token_id,
+                    device=device,
+                )
+                score_gradients = source_payload["gradients"]
+                if not isinstance(score_gradients, dict):
+                    raise TypeError("Retrieval-separation gradient payload must contain a gradients dictionary.")
+                dot_summary = _gradient_dot_summary(
+                    left_gradients=delta_parameters,
+                    right_gradients=score_gradients,
+                    label=(
+                        f"attention retrieval separation update {source_step}->{target_step} "
+                        f"{split}/{pair_type}/{record_side}/{score_component}"
+                    ),
+                )
+                metric_row = _attention_score_update_metric_row(
+                    source_step=source_step,
+                    target_step=target_step,
+                    source_checkpoint=source_checkpoint_path,
+                    target_checkpoint=target_checkpoint_path,
+                    learning_rate=learning_rate,
+                    split=split,
+                    pair_type=pair_type,
+                    head_layer=head_layer,
+                    head=head,
+                    score_query_role=score_query_role,
+                    score_key_role=score_key_label,
+                    record_side=record_side,
+                    score_component=score_component,
+                    actual_summary=actual_summary,
+                    source_payload=source_payload,
+                    dot_summary=dot_summary,
+                    min_error_denominator=min_error_denominator,
+                )
+                metric_row.update(
+                    {
+                        "objective": "retrieval_separation",
+                        "support_key_role": support_key_role,
+                        "distractor_key_role": distractor_key_role,
+                        "support_delta_mean": float(actual_summary["support_delta_mean"]),
+                        "distractor_delta_mean": float(actual_summary["distractor_delta_mean"]),
+                        "num_support_scores": int(actual_summary["num_support_scores"]),
+                        "num_distractor_scores": int(actual_summary["num_distractor_scores"]),
+                        "support_scores_per_pair_mean": float(actual_summary["support_scores_per_pair_mean"]),
+                        "distractor_scores_per_pair_mean": float(actual_summary["distractor_scores_per_pair_mean"]),
+                    }
+                )
+                metric_rows.append(metric_row)
+                for group in groups:
+                    group_dot_summary = _gradient_dot_summary_for_group(
+                        left_gradients=delta_parameters,
+                        right_gradients=score_gradients,
+                        group=group,
+                        label=(
+                            f"attention retrieval separation update {source_step}->{target_step} "
+                            f"{split}/{pair_type}/{record_side}/{score_component}/{group.group_id}"
+                        ),
+                    )
+                    decomposition_row = _attention_score_update_decomposition_row(
+                        metric_row=metric_row,
+                        group=group,
+                        dot_summary=group_dot_summary,
+                    )
+                    decomposition_row.update(
+                        {
+                            "objective": "retrieval_separation",
+                            "support_key_role": support_key_role,
+                            "distractor_key_role": distractor_key_role,
+                        }
+                    )
+                    decomposition_rows.append(decomposition_row)
+    return metric_rows, decomposition_rows, score_rows
+
+
+def _write_attention_retrieval_separation_update_markdown(
+    *,
+    path: Path,
+    report: dict[str, Any],
+    plot_paths: dict[str, Path],
+) -> None:
+    summary = report["summary"]
+    lines = [
+        "# Attention Retrieval Separation Update Attribution",
+        "",
+        "## Calculation",
+        "",
+        "This report tests whether actual checkpoint-to-checkpoint parameter movement explains relative QK retrieval geometry.",
+        "",
+        "```text",
+        "support_mean = mean_j score(prediction, support_value_j)",
+        "distractor_mean = mean_j score(prediction, value_distractor_j)",
+        "retrieval_separation = support_mean - distractor_mean",
+        "predicted_delta = grad_theta retrieval_separation_component(theta_source) . (theta_target - theta_source)",
+        "```",
+        "",
+        "`q_side` holds source key vectors fixed and differentiates only through the query side.",
+        "`k_side` holds the source query vector fixed and differentiates only through the key side.",
+        "",
+        "## Run",
+        "",
+        f"- head: `{report['head_label']}`",
+        f"- query role: `{report['score_query_role']}`",
+        f"- support role: `{report['support_key_role']}`",
+        f"- distractor role: `{report['distractor_key_role']}`",
+        f"- record sides: `{report['record_sides']}`",
+        f"- score components: `{report['score_components']}`",
+        f"- intervals: `{summary['intervals']}`",
+        "",
+        "## Final Metrics",
+        "",
+        "| record side | component | actual delta | predicted delta | residual | relative error | sign match | support delta | distractor delta |",
+        "|---|---|---:|---:|---:|---:|---|---:|---:|",
+    ]
+    for row in summary["final_metric_rows"]:
+        lines.append(
+            "| `{side}` | `{component}` | {actual:.6g} | {predicted:.6g} | {residual:.6g} | {error:.6g} | `{sign}` | {support:.6g} | {distractor:.6g} |".format(
+                side=row["record_side"],
+                component=row["score_component"],
+                actual=float(row["actual_delta"]),
+                predicted=float(row["predicted_delta"]),
+                residual=float(row["residual"]),
+                error=float(row["relative_error"]),
+                sign=bool(row["sign_match"]),
+                support=float(row["support_delta_mean"]),
+                distractor=float(row["distractor_delta_mean"]),
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "## Top Positive Contributions",
+            "",
+            "| group | component | kind | contribution | cosine |",
+            "|---|---|---|---:|---:|",
+        ]
+    )
+    for row in summary["final_top_positive_contributions"]:
+        cosine = row["update_score_gradient_cosine"]
+        cosine_text = "" if cosine is None else f"{float(cosine):.6f}"
+        lines.append(
+            "| `{group}` | `{component}` | `{kind}` | {contribution:.6g} | {cosine} |".format(
+                group=row["group_id"],
+                component=row["score_component"],
+                kind=row["group_kind"],
+                contribution=float(row["predicted_delta_contribution"]),
+                cosine=cosine_text,
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "## Top Negative Contributions",
+            "",
+            "| group | component | kind | contribution | cosine |",
+            "|---|---|---|---:|---:|",
+        ]
+    )
+    for row in summary["final_top_negative_contributions"]:
+        cosine = row["update_score_gradient_cosine"]
+        cosine_text = "" if cosine is None else f"{float(cosine):.6f}"
+        lines.append(
+            "| `{group}` | `{component}` | `{kind}` | {contribution:.6g} | {cosine} |".format(
+                group=row["group_id"],
+                component=row["score_component"],
+                kind=row["group_kind"],
+                contribution=float(row["predicted_delta_contribution"]),
+                cosine=cosine_text,
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "## Raw Outputs",
+            "",
+            f"- metric rows: `{report['metric_rows_path']}`",
+            f"- decomposition rows: `{report['decomposition_rows_path']}`",
+            f"- group rows: `{report['group_rows_path']}`",
+            f"- score rows: `{report['score_rows_path']}`",
+            f"- pair rows: `{report['pair_rows_path']}`",
+        ]
+    )
+    if plot_paths:
+        lines.extend(["", "## Plots", ""])
+        for label, plot_path in plot_paths.items():
+            lines.append(f"- {label}: `{plot_path}`")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def run_attention_retrieval_separation_update_attribution(
+    *,
+    config_path: Path,
+    probe_set_path: Path,
+    checkpoint_dir: Path,
+    output_dir: Path,
+    head_layer: int,
+    head: int,
+    score_query_role: str,
+    support_key_role: str,
+    distractor_key_role: str,
+    pair_types: list[str],
+    device_name: str = "mps",
+    checkpoint_paths: list[Path] | None = None,
+    record_sides: list[str] | None = None,
+    score_components: list[str] | None = None,
+    max_pairs_per_type: int = 64,
+    min_pairs_per_type: int = 1,
+    split_filter: list[str] | None = None,
+    decomposition_modes: list[str] | None = None,
+    reconstruction_tolerance: float = 1.0e-3,
+    top_k_groups: int = 24,
+    min_error_denominator: float = 1.0e-9,
+) -> tuple[Path, Path, Path, Path, Path, Path, Path, dict[str, Path]]:
+    unsupported_roles = [
+        role
+        for role in [score_query_role, support_key_role, distractor_key_role]
+        if role not in GEOMETRY_POSITION_ROLES
+    ]
+    if unsupported_roles:
+        raise ValueError(f"Unsupported attention roles {unsupported_roles}; expected one of {GEOMETRY_POSITION_ROLES}.")
+    if support_key_role == distractor_key_role:
+        raise ValueError("support_key_role and distractor_key_role must be different.")
+    if reconstruction_tolerance <= 0.0:
+        raise ValueError("reconstruction_tolerance must be positive.")
+    if top_k_groups <= 0:
+        raise ValueError("top_k_groups must be positive.")
+    if min_error_denominator <= 0.0:
+        raise ValueError("min_error_denominator must be positive.")
+
+    resolved_record_sides = _resolve_attention_score_record_sides(record_sides)
+    resolved_score_components = _resolve_attention_score_update_components(score_components)
+    resolved_decomposition_modes = _resolve_route_gradient_decomposition_modes(decomposition_modes)
+    spec = TrainSpec.from_path(config_path)
+    probe_records, probe_metadata = load_probe_set(probe_set_path)
+    if str(probe_metadata["benchmark_dir"]) != str(spec.benchmark_dir):
+        raise ValueError(
+            f"Probe set benchmark mismatch: probe={probe_metadata['benchmark_dir']} config={spec.benchmark_dir}"
+        )
+    metadata = read_symbolic_kv_stream_metadata(spec.benchmark_dir)
+    vocab = Vocabulary.from_metadata(metadata["vocabulary"])
+    holdout_pairs = _holdout_pair_set(metadata)
+    device = require_device(device_name)
+    checkpoints = _resolve_checkpoint_paths(checkpoint_dir=checkpoint_dir, checkpoint_paths=checkpoint_paths)
+    if len(checkpoints) < 2:
+        raise ValueError("attention-retrieval-separation-update-attribution requires at least two checkpoints.")
+    source_model = build_model(spec.model, len(vocab.tokens), device)
+    target_model = build_model(spec.model, len(vocab.tokens), device)
+    if head_layer < 0 or head_layer >= len(source_model.blocks):
+        raise ValueError(f"head_layer {head_layer} outside model range 0..{len(source_model.blocks) - 1}.")
+    if head < 0 or head >= source_model.blocks[head_layer].attn.n_heads:
+        raise ValueError(
+            f"head {head} outside model range 0..{source_model.blocks[head_layer].attn.n_heads - 1} for layer {head_layer}."
+        )
+    pair_types = sorted(set(pair_types), key=pair_types.index)
+    pairs, pair_construction = _build_causal_patch_pairs(
+        probe_records=probe_records,
+        vocab=vocab,
+        holdout_pairs=holdout_pairs,
+        pair_types=pair_types,
+        max_pairs_per_type=max_pairs_per_type,
+        min_pairs_per_type=min_pairs_per_type,
+        split_filter=split_filter,
+    )
+    if not pairs:
+        raise RuntimeError("Attention retrieval separation update attribution constructed no pairs.")
+
+    groups, decomposition_summary = _build_route_gradient_decomposition_groups(
+        model=source_model,
+        decomposition_modes=resolved_decomposition_modes,
+    )
+    group_rows = [
+        _group_metadata(
+            model_parameters=dict(source_model.named_parameters(remove_duplicate=False)),
+            group=group,
+        )
+        for group in groups
+    ]
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    metric_rows_path = output_dir / "attention_retrieval_separation_update_attribution_rows.jsonl"
+    decomposition_rows_path = output_dir / "attention_retrieval_separation_update_attribution_decomposition_rows.jsonl"
+    group_rows_path = output_dir / "attention_retrieval_separation_update_attribution_groups.jsonl"
+    score_rows_path = output_dir / "attention_retrieval_separation_update_attribution_score_rows.jsonl"
+    pair_rows_path = output_dir / "attention_retrieval_separation_update_attribution_pairs.jsonl"
+    progress_path = output_dir / "attention_retrieval_separation_update_attribution_progress.json"
+    for partial_path in (
+        metric_rows_path,
+        decomposition_rows_path,
+        group_rows_path,
+        score_rows_path,
+        pair_rows_path,
+        progress_path,
+    ):
+        if partial_path.exists():
+            partial_path.unlink()
+    write_jsonl(pair_rows_path, [_pair_metadata(pair) for pair in pairs])
+    write_jsonl(group_rows_path, group_rows)
+
+    intervals = list(zip(checkpoints[:-1], checkpoints[1:], strict=True))
+    print(
+        "[attention-retrieval-separation-update-attribution] "
+        f"intervals={len(intervals)} checkpoints={len(checkpoints)} pairs={len(pairs)} "
+        f"pair_types={pair_types} device={device_name} head={_head_label(head_layer, head)} "
+        f"query_role={score_query_role} support={support_key_role} distractor={distractor_key_role} "
+        f"record_sides={resolved_record_sides} components={resolved_score_components} groups={len(groups)}",
+        flush=True,
+    )
+
+    all_metric_rows: list[dict[str, Any]] = []
+    all_decomposition_rows: list[dict[str, Any]] = []
+    all_score_rows: list[dict[str, Any]] = []
+    for interval_index, (source_checkpoint_path, target_checkpoint_path) in enumerate(intervals, start=1):
+        source_step = _checkpoint_step_from_path(source_checkpoint_path)
+        target_step = _checkpoint_step_from_path(target_checkpoint_path)
+        learning_rate = _compute_learning_rate(spec.optimization, source_step)
+        print(
+            "[attention-retrieval-separation-update-attribution] starting "
+            f"{interval_index}/{len(intervals)} {source_checkpoint_path.name}->{target_checkpoint_path.name}",
+            flush=True,
+        )
+        metric_rows, decomposition_rows, score_rows = _compute_attention_retrieval_separation_update_attribution_interval(
+            source_model=source_model,
+            target_model=target_model,
+            source_checkpoint_path=source_checkpoint_path,
+            target_checkpoint_path=target_checkpoint_path,
+            pairs=pairs,
+            learning_rate=learning_rate,
+            head_layer=head_layer,
+            head=head,
+            score_query_role=score_query_role,
+            support_key_role=support_key_role,
+            distractor_key_role=distractor_key_role,
+            record_sides=resolved_record_sides,
+            score_components=resolved_score_components,
+            batch_size=spec.evaluation.batch_size,
+            pad_token_id=vocab.pad_token_id,
+            device=device,
+            groups=groups,
+            reconstruction_tolerance=reconstruction_tolerance,
+            min_error_denominator=min_error_denominator,
+        )
+        for row in metric_rows:
+            append_jsonl(metric_rows_path, row)
+        for row in decomposition_rows:
+            append_jsonl(decomposition_rows_path, row)
+        for row in score_rows:
+            append_jsonl(score_rows_path, row)
+        all_metric_rows.extend(metric_rows)
+        all_decomposition_rows.extend(decomposition_rows)
+        all_score_rows.extend(score_rows)
+        all_row = next(
+            row
+            for row in metric_rows
+            if str(row["split"]) == "__all__"
+            and str(row["pair_type"]) == "__all__"
+            and str(row["record_side"]) == resolved_record_sides[0]
+            and str(row["score_component"]) == resolved_score_components[0]
+        )
+        print(
+            "[attention-retrieval-separation-update-attribution] finished "
+            f"{source_step}->{target_step} component={all_row['score_component']} "
+            f"actual_delta={float(all_row['actual_delta']):.6g} "
+            f"predicted_delta={float(all_row['predicted_delta']):.6g} "
+            f"relative_error={float(all_row['relative_error']):.6g} "
+            f"sign_match={all_row['sign_match']}",
+            flush=True,
+        )
+        write_json(
+            progress_path,
+            {
+                "status": "running",
+                "completed_intervals": interval_index,
+                "total_intervals": len(intervals),
+                "last_source_step": source_step,
+                "last_target_step": target_step,
+                "metric_rows_path": str(metric_rows_path),
+                "decomposition_rows_path": str(decomposition_rows_path),
+                "score_rows_path": str(score_rows_path),
+            },
+        )
+
+    summary = _summarize_attention_score_update_attribution(
+        metric_rows=all_metric_rows,
+        decomposition_rows=all_decomposition_rows,
+        top_k_groups=top_k_groups,
+    )
+    plot_paths: dict[str, Path] = {}
+    actual_vs_predicted_plot = _plot_attention_score_update_actual_vs_predicted(
+        metric_rows=all_metric_rows,
+        output_path=output_dir / "attention_retrieval_separation_update_actual_vs_predicted.svg",
+    )
+    if actual_vs_predicted_plot is not None:
+        plot_paths["actual_vs_predicted"] = actual_vs_predicted_plot
+    top_contributions_plot = _plot_attention_score_update_top_contributions(
+        decomposition_rows=all_decomposition_rows,
+        top_k_groups=top_k_groups,
+        output_path=output_dir / "attention_retrieval_separation_update_top_contributions.svg",
+    )
+    if top_contributions_plot is not None:
+        plot_paths["top_contributions"] = top_contributions_plot
+
+    report_path = output_dir / "attention_retrieval_separation_update_attribution_report.json"
+    markdown_path = output_dir / "attention_retrieval_separation_update_attribution_report.md"
+    report = {
+        "schema_version": ATTENTION_RETRIEVAL_SEPARATION_UPDATE_ATTRIBUTION_SCHEMA_VERSION,
+        "config_path": str(config_path),
+        "probe_set_path": str(probe_set_path),
+        "checkpoint_dir": str(checkpoint_dir),
+        "device": device_name,
+        "head_layer": head_layer,
+        "head": head,
+        "head_label": _head_label(head_layer, head),
+        "score_query_role": score_query_role,
+        "support_key_role": support_key_role,
+        "distractor_key_role": distractor_key_role,
+        "score_key_role": _attention_retrieval_separation_key_label(
+            support_key_role=support_key_role,
+            distractor_key_role=distractor_key_role,
+        ),
+        "record_sides": resolved_record_sides,
+        "score_components": resolved_score_components,
+        "pair_types": pair_types,
+        "max_pairs_per_type": max_pairs_per_type,
+        "min_pairs_per_type": min_pairs_per_type,
+        "split_filter": split_filter,
+        "decomposition": decomposition_summary,
+        "reconstruction_tolerance": reconstruction_tolerance,
+        "top_k_groups": top_k_groups,
+        "min_error_denominator": min_error_denominator,
+        "calculation": {
+            "score": "q_i . k_j / sqrt(d_head)",
+            "retrieval_separation": "mean support score minus mean distractor score, computed per pair then averaged",
+            "score_component": "score differentiates through q and k; q_side differentiates only through q; k_side differentiates only through k",
+            "actual_delta": "target retrieval_separation minus source retrieval_separation for the selected component",
+            "predicted_delta": "grad_theta retrieval_separation_component(theta_source) . (theta_target - theta_source)",
+            "residual": "actual_delta - predicted_delta",
+            "group_contribution": "grad_group retrieval_separation_component(theta_source) . Delta theta_group",
+        },
+        "pair_construction": pair_construction,
+        "metric_rows_path": str(metric_rows_path),
+        "decomposition_rows_path": str(decomposition_rows_path),
+        "group_rows_path": str(group_rows_path),
+        "score_rows_path": str(score_rows_path),
+        "pair_rows_path": str(pair_rows_path),
+        "summary": summary,
+    }
+    write_json(report_path, report)
+    _write_attention_retrieval_separation_update_markdown(path=markdown_path, report=report, plot_paths=plot_paths)
+    write_json(
+        progress_path,
+        {
+            "status": "complete",
+            "completed_intervals": len(intervals),
+            "total_intervals": len(intervals),
+            "last_target_step": int(summary["final_target_step"]),
+            "report_path": str(report_path),
+            "markdown_path": str(markdown_path),
+            "metric_rows_path": str(metric_rows_path),
+            "decomposition_rows_path": str(decomposition_rows_path),
+            "group_rows_path": str(group_rows_path),
+            "score_rows_path": str(score_rows_path),
+            "pair_rows_path": str(pair_rows_path),
+        },
+    )
+    print(
+        f"[attention-retrieval-separation-update-attribution] complete report={report_path} rows={metric_rows_path}",
+        flush=True,
+    )
+    return (
+        report_path,
+        markdown_path,
+        metric_rows_path,
+        decomposition_rows_path,
+        group_rows_path,
+        score_rows_path,
+        pair_rows_path,
+        plot_paths,
+    )
+
+
+ATTENTION_RETRIEVAL_CHAIN_METRICS = [
+    "qk_support_score",
+    "qk_distractor_score",
+    "qk_separation",
+    "attention_support_mean",
+    "attention_distractor_mean",
+    "attention_separation",
+    "attention_support_mass",
+    "attention_distractor_mass",
+    "attention_mass_separation",
+    "head_margin_dla",
+    "head_answer_logit_dla",
+    "head_value_margin_dla",
+    "support_ov_value_margin",
+    "attended_support_ov_value_margin",
+    "answer_margin",
+    "answer_loss",
+]
+
+ATTENTION_DOWNSTREAM_UPDATE_SCALARS = [
+    "attention_separation",
+    "attention_mass_separation",
+    "head_answer_logit_dla",
+    "head_value_margin_dla",
+    "support_ov_value_margin",
+    "attended_support_ov_value_margin",
+    "head_margin_dla_fixed_readout",
+    "answer_margin",
+    "negative_answer_loss",
+]
+
+
+def _single_vector_value_margin(
+    *,
+    residual_vector: torch.Tensor,
+    correct_token_id: int,
+    value_token_ids: torch.Tensor,
+    unembed: torch.Tensor,
+) -> torch.Tensor:
+    matches = (value_token_ids == int(correct_token_id)).nonzero(as_tuple=False).flatten()
+    if matches.numel() != 1:
+        raise RuntimeError(f"Expected exactly one value-token match for token id {correct_token_id}, got {matches.numel()}.")
+    value_scores = torch.matmul(unembed.index_select(0, value_token_ids), residual_vector)
+    target_index = int(matches[0].item())
+    correct = value_scores[target_index]
+    masked = value_scores.clone()
+    masked[target_index] = torch.finfo(masked.dtype).min
+    return correct - masked.max()
+
+
+def _attention_retrieval_chain_payload_for_records(
+    *,
+    model: torch.nn.Module,
+    records: list[dict[str, Any]],
+    head_layer: int,
+    head: int,
+    vocab: Vocabulary,
+    pad_token_id: int,
+    device: torch.device,
+) -> dict[str, Any]:
+    if not records:
+        raise ValueError("records must not be empty for attention retrieval chain report.")
+    if head_layer < 0 or head_layer >= len(model.blocks):
+        raise ValueError(f"head_layer {head_layer} outside model range 0..{len(model.blocks) - 1}.")
+    block = model.blocks[head_layer]
+    if head < 0 or head >= block.attn.n_heads:
+        raise ValueError(f"head {head} outside model range 0..{block.attn.n_heads - 1} for layer {head_layer}.")
+
+    batch = move_batch_to_device(collate_symbolic_kv(records, pad_token_id), device)
+    with torch.no_grad():
+        outputs = model(
+            batch["input_ids"],
+            attention_mask=batch["attention_mask"],
+            return_attentions=True,
+            return_residual_streams=True,
+        )
+    if outputs.attentions is None:
+        raise RuntimeError("Attention retrieval chain report requires attention probabilities.")
+    if outputs.residual_streams is None:
+        raise RuntimeError("Attention retrieval chain report requires residual streams.")
+    answer_logits, answer_targets, metadata = extract_answer_logits(outputs.logits, batch)
+    _validate_single_query_batch(batch=batch, metadata=metadata, label="attention retrieval chain")
+
+    value_token_ids = torch.tensor(vocab.value_token_ids, device=device, dtype=torch.long)
+    answer_margins = _value_margin(answer_logits, answer_targets, value_token_ids)
+    answer_losses = torch.nn.functional.cross_entropy(answer_logits, answer_targets, reduction="none")
+    wrong_token_ids = _best_wrong_value_token_ids(
+        logits=answer_logits,
+        answer_targets=answer_targets,
+        value_token_ids=value_token_ids,
+    )
+    final_pre_stage = f"layer_{len(model.blocks) - 1}_post_mlp"
+    final_pre_vectors = outputs.residual_streams[final_pre_stage][
+        metadata["rows"],
+        metadata["prediction_positions"],
+        :,
+    ]
+    margin_gradients, recomputed_margins = _margin_gradient_vectors(
+        model=model,
+        final_residual_vectors=final_pre_vectors,
+        correct_token_ids=answer_targets,
+        wrong_token_ids=wrong_token_ids,
+    )
+    if not torch.allclose(recomputed_margins, answer_margins, atol=1e-4, rtol=1e-4):
+        max_delta = (recomputed_margins - answer_margins).abs().max().item()
+        raise RuntimeError(f"Attention chain margin-gradient check failed: max_delta={max_delta:.6g}")
+
+    if head_layer == 0:
+        pre_state = outputs.residual_streams["embedding"]
+    else:
+        pre_state = outputs.residual_streams[f"layer_{head_layer - 1}_post_mlp"]
+    attention_input = block.ln_1(pre_state)
+    batch_size, seq_len, _ = attention_input.shape
+    head_dim = block.attn.head_dim
+    q_all = block.attn.q_proj(attention_input).view(batch_size, seq_len, block.attn.n_heads, head_dim)
+    k_all = block.attn.k_proj(attention_input).view(batch_size, seq_len, block.attn.n_heads, head_dim)
+    v_all = block.attn.v_proj(attention_input).view(batch_size, seq_len, block.attn.n_heads, head_dim)
+    q_head = q_all[:, :, head, :]
+    k_head = k_all[:, :, head, :]
+    v_head = v_all[:, :, head, :]
+    scores = torch.matmul(q_head, k_head.transpose(-2, -1)) / math.sqrt(head_dim)
+    attention = outputs.attentions[head_layer][:, head, :, :]
+    head_slice = slice(head * head_dim, (head + 1) * head_dim)
+    out_head = block.attn.out_proj.weight[:, head_slice]
+
+    return {
+        "batch": batch,
+        "metadata": metadata,
+        "answer_logits": answer_logits,
+        "answer_targets": answer_targets,
+        "answer_margins": answer_margins,
+        "answer_losses": answer_losses,
+        "answer_correct": answer_logits.argmax(dim=-1) == answer_targets,
+        "margin_gradients": margin_gradients,
+        "value_token_ids": value_token_ids,
+        "scores": scores,
+        "attention": attention,
+        "v": v_head,
+        "out_head": out_head,
+        "unembed": model.lm_head.weight,
+    }
+
+
+def _compute_attention_retrieval_chain_checkpoint(
+    *,
+    model: torch.nn.Module,
+    checkpoint_path: Path,
+    pairs: list[dict[str, Any]],
+    vocab: Vocabulary,
+    head_layer: int,
+    head: int,
+    score_query_role: str,
+    support_key_role: str,
+    distractor_key_role: str,
+    record_sides: list[str],
+    batch_size: int,
+    pad_token_id: int,
+    device: torch.device,
+) -> list[dict[str, Any]]:
+    checkpoint = load_checkpoint(checkpoint_path, device)
+    load_model_state(model, checkpoint["model_state"])
+    model.eval()
+    step = int(checkpoint["step"])
+    path_step = _checkpoint_step_from_path(checkpoint_path)
+    if step != path_step:
+        raise RuntimeError(f"Checkpoint step mismatch: payload={step} path={path_step}")
+
+    pair_metric_rows: list[dict[str, Any]] = []
+    for start_index in range(0, len(pairs), batch_size):
+        pair_batch = pairs[start_index : start_index + batch_size]
+        for record_side in record_sides:
+            side_key = f"{record_side}_record"
+            records = [pair[side_key] for pair in pair_batch]
+            payload = _attention_retrieval_chain_payload_for_records(
+                model=model,
+                records=records,
+                head_layer=head_layer,
+                head=head,
+                vocab=vocab,
+                pad_token_id=pad_token_id,
+                device=device,
+            )
+            for pair_index, pair in enumerate(pair_batch):
+                batch_row, query_position = _single_attention_position(
+                    batch=payload["batch"],
+                    metadata=payload["metadata"],
+                    flat_index=pair_index,
+                    position_role=score_query_role,
+                    label="retrieval chain query",
+                )
+                support_batch_row, support_positions = _attention_key_positions(
+                    batch=payload["batch"],
+                    metadata=payload["metadata"],
+                    flat_index=pair_index,
+                    position_role=support_key_role,
+                    max_position=query_position,
+                )
+                distractor_batch_row, distractor_positions = _attention_key_positions(
+                    batch=payload["batch"],
+                    metadata=payload["metadata"],
+                    flat_index=pair_index,
+                    position_role=distractor_key_role,
+                    max_position=query_position,
+                )
+                if support_batch_row != batch_row:
+                    raise RuntimeError(
+                        f"Support role {support_key_role!r} selected batch row {support_batch_row}, "
+                        f"but query role {score_query_role!r} selected row {batch_row} for pair {pair['pair_id']}."
+                    )
+                if distractor_batch_row != batch_row:
+                    raise RuntimeError(
+                        f"Distractor role {distractor_key_role!r} selected batch row {distractor_batch_row}, "
+                        f"but query role {score_query_role!r} selected row {batch_row} for pair {pair['pair_id']}."
+                    )
+
+                score_row = payload["scores"][batch_row, query_position, :]
+                attention_row = payload["attention"][batch_row, query_position, :]
+                support_position_tensor = torch.tensor(support_positions, device=device, dtype=torch.long)
+                distractor_position_tensor = torch.tensor(distractor_positions, device=device, dtype=torch.long)
+                support_scores = score_row.index_select(0, support_position_tensor)
+                distractor_scores = score_row.index_select(0, distractor_position_tensor)
+                support_attention = attention_row.index_select(0, support_position_tensor)
+                distractor_attention = attention_row.index_select(0, distractor_position_tensor)
+
+                head_output = torch.matmul(attention_row, payload["v"][batch_row])
+                head_write = torch.matmul(head_output, payload["out_head"].T)
+                support_v = payload["v"][batch_row].index_select(0, support_position_tensor).mean(dim=0)
+                support_head_write = torch.matmul(support_v, payload["out_head"].T)
+                answer_token_id = int(payload["answer_targets"][pair_index].item())
+                support_ov_value_margin = _single_vector_value_margin(
+                    residual_vector=support_head_write,
+                    correct_token_id=answer_token_id,
+                    value_token_ids=payload["value_token_ids"],
+                    unembed=payload["unembed"],
+                )
+                head_value_margin_dla = _single_vector_value_margin(
+                    residual_vector=head_write,
+                    correct_token_id=answer_token_id,
+                    value_token_ids=payload["value_token_ids"],
+                    unembed=payload["unembed"],
+                )
+                head_answer_logit_dla = torch.dot(head_write, payload["unembed"][answer_token_id])
+                head_margin_dla = torch.dot(head_write, payload["margin_gradients"][pair_index])
+
+                support_attention_mean = support_attention.mean()
+                distractor_attention_mean = distractor_attention.mean()
+                support_attention_mass = support_attention.sum()
+                distractor_attention_mass = distractor_attention.sum()
+                qk_support_score = support_scores.mean()
+                qk_distractor_score = distractor_scores.mean()
+                pair_metric_rows.append(
+                    {
+                        "step": step,
+                        "checkpoint": str(checkpoint_path),
+                        "split": str(pair["split"]),
+                        "pair_type": str(pair["pair_type"]),
+                        "record_side": record_side,
+                        "pair_id": str(pair["pair_id"]),
+                        "source_sample_id": str(pair["source_sample_id"]),
+                        "source_query_index": int(pair["source_query_index"]),
+                        "head_layer": head_layer,
+                        "head": head,
+                        "head_label": _head_label(head_layer, head),
+                        "score_query_role": score_query_role,
+                        "support_key_role": support_key_role,
+                        "distractor_key_role": distractor_key_role,
+                        "query_position": int(query_position),
+                        "support_positions": [int(position) for position in support_positions],
+                        "distractor_positions": [int(position) for position in distractor_positions],
+                        "num_support_positions": int(len(support_positions)),
+                        "num_distractor_positions": int(len(distractor_positions)),
+                        "qk_support_score": float(qk_support_score.detach().float().cpu().item()),
+                        "qk_distractor_score": float(qk_distractor_score.detach().float().cpu().item()),
+                        "qk_separation": float((qk_support_score - qk_distractor_score).detach().float().cpu().item()),
+                        "attention_support_mean": float(support_attention_mean.detach().float().cpu().item()),
+                        "attention_distractor_mean": float(distractor_attention_mean.detach().float().cpu().item()),
+                        "attention_separation": float(
+                            (support_attention_mean - distractor_attention_mean).detach().float().cpu().item()
+                        ),
+                        "attention_support_mass": float(support_attention_mass.detach().float().cpu().item()),
+                        "attention_distractor_mass": float(distractor_attention_mass.detach().float().cpu().item()),
+                        "attention_mass_separation": float(
+                            (support_attention_mass - distractor_attention_mass).detach().float().cpu().item()
+                        ),
+                        "head_margin_dla": float(head_margin_dla.detach().float().cpu().item()),
+                        "head_answer_logit_dla": float(head_answer_logit_dla.detach().float().cpu().item()),
+                        "head_value_margin_dla": float(head_value_margin_dla.detach().float().cpu().item()),
+                        "support_ov_value_margin": float(support_ov_value_margin.detach().float().cpu().item()),
+                        "attended_support_ov_value_margin": float(
+                            (support_attention_mean * support_ov_value_margin).detach().float().cpu().item()
+                        ),
+                        "answer_margin": float(payload["answer_margins"][pair_index].detach().float().cpu().item()),
+                        "answer_loss": float(payload["answer_losses"][pair_index].detach().float().cpu().item()),
+                        "answer_correct": bool(payload["answer_correct"][pair_index].detach().cpu().item()),
+                    }
+                )
+    if not pair_metric_rows:
+        raise RuntimeError("Attention retrieval chain checkpoint produced no pair metric rows.")
+    return pair_metric_rows
+
+
+def _aggregate_attention_retrieval_chain_checkpoint_rows(pair_metric_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not pair_metric_rows:
+        raise ValueError("Cannot aggregate empty attention retrieval chain pair rows.")
+    groups: dict[tuple[Any, ...], list[dict[str, Any]]] = defaultdict(list)
+    for row in pair_metric_rows:
+        group_keys = [
+            (row["split"], row["pair_type"]),
+            ("__all__", row["pair_type"]),
+            (row["split"], "__all__"),
+            ("__all__", "__all__"),
+        ]
+        for split, pair_type in group_keys:
+            groups[(row["step"], split, pair_type, row["record_side"])].append(row)
+
+    checkpoint_rows: list[dict[str, Any]] = []
+    for key, rows in sorted(groups.items()):
+        step, split, pair_type, record_side = key
+        first = rows[0]
+        checkpoint_row: dict[str, Any] = {
+            "step": int(step),
+            "checkpoint": str(first["checkpoint"]),
+            "split": split,
+            "pair_type": pair_type,
+            "record_side": record_side,
+            "head_layer": int(first["head_layer"]),
+            "head": int(first["head"]),
+            "head_label": first["head_label"],
+            "score_query_role": first["score_query_role"],
+            "support_key_role": first["support_key_role"],
+            "distractor_key_role": first["distractor_key_role"],
+            "num_pairs": len(rows),
+            "answer_accuracy": _fraction(
+                sum(1 for row in rows if bool(row["answer_correct"])),
+                len(rows),
+                "attention retrieval chain answer accuracy",
+            ),
+        }
+        for metric_name in ATTENTION_RETRIEVAL_CHAIN_METRICS:
+            values = [float(row[metric_name]) for row in rows]
+            checkpoint_row[f"{metric_name}_mean"] = _mean(values)
+            checkpoint_row[f"{metric_name}_std"] = _std(values)
+        checkpoint_rows.append(checkpoint_row)
+    return checkpoint_rows
+
+
+def _build_attention_retrieval_chain_delta_rows(checkpoint_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not checkpoint_rows:
+        raise ValueError("Cannot build attention retrieval chain deltas from empty checkpoint rows.")
+    groups: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in checkpoint_rows:
+        groups[(str(row["split"]), str(row["pair_type"]), str(row["record_side"]))].append(row)
+
+    delta_rows: list[dict[str, Any]] = []
+    for key, rows in sorted(groups.items()):
+        split, pair_type, record_side = key
+        sorted_rows = sorted(rows, key=lambda row: int(row["step"]))
+        for source_row, target_row in zip(sorted_rows[:-1], sorted_rows[1:], strict=True):
+            source_step = int(source_row["step"])
+            target_step = int(target_row["step"])
+            if target_step <= source_step:
+                raise RuntimeError(f"Non-increasing chain checkpoint steps for {key}: {source_step}->{target_step}")
+            if int(source_row["num_pairs"]) != int(target_row["num_pairs"]):
+                raise RuntimeError(
+                    f"Pair count changed across chain interval {source_step}->{target_step} for {key}: "
+                    f"{source_row['num_pairs']} vs {target_row['num_pairs']}"
+                )
+            delta_row: dict[str, Any] = {
+                "source_step": source_step,
+                "target_step": target_step,
+                "step_gap": target_step - source_step,
+                "split": split,
+                "pair_type": pair_type,
+                "record_side": record_side,
+                "head_layer": int(source_row["head_layer"]),
+                "head": int(source_row["head"]),
+                "head_label": source_row["head_label"],
+                "score_query_role": source_row["score_query_role"],
+                "support_key_role": source_row["support_key_role"],
+                "distractor_key_role": source_row["distractor_key_role"],
+                "num_pairs": int(source_row["num_pairs"]),
+                "delta_answer_accuracy": float(target_row["answer_accuracy"]) - float(source_row["answer_accuracy"]),
+            }
+            for metric_name in ATTENTION_RETRIEVAL_CHAIN_METRICS:
+                delta_row[f"delta_{metric_name}_mean"] = (
+                    float(target_row[f"{metric_name}_mean"]) - float(source_row[f"{metric_name}_mean"])
+                )
+            delta_row["negative_delta_answer_loss_mean"] = -float(delta_row["delta_answer_loss_mean"])
+            delta_rows.append(delta_row)
+    return delta_rows
+
+
+def _pearson_correlation_report(
+    *,
+    x_values: list[float],
+    y_values: list[float],
+    label: str,
+) -> dict[str, Any]:
+    if len(x_values) != len(y_values):
+        raise ValueError(f"Correlation input length mismatch for {label}: {len(x_values)} vs {len(y_values)}.")
+    if len(x_values) < 2:
+        return {
+            "label": label,
+            "value": None,
+            "status": "not_computed",
+            "reason": "requires_at_least_two_intervals",
+            "num_points": len(x_values),
+        }
+    x_mean = _mean(x_values)
+    y_mean = _mean(y_values)
+    x_centered = [value - x_mean for value in x_values]
+    y_centered = [value - y_mean for value in y_values]
+    x_norm = math.sqrt(sum(value * value for value in x_centered))
+    y_norm = math.sqrt(sum(value * value for value in y_centered))
+    if x_norm == 0.0 or y_norm == 0.0:
+        return {
+            "label": label,
+            "value": None,
+            "status": "not_computed",
+            "reason": "zero_variance",
+            "num_points": len(x_values),
+        }
+    value = sum(x * y for x, y in zip(x_centered, y_centered, strict=True)) / (x_norm * y_norm)
+    return {
+        "label": label,
+        "value": float(value),
+        "status": "computed",
+        "reason": None,
+        "num_points": len(x_values),
+    }
+
+
+def _summarize_attention_retrieval_chain(
+    *,
+    checkpoint_rows: list[dict[str, Any]],
+    delta_rows: list[dict[str, Any]],
+    record_sides: list[str],
+) -> dict[str, Any]:
+    if not checkpoint_rows:
+        raise ValueError("Cannot summarize attention retrieval chain without checkpoint rows.")
+    steps = sorted({int(row["step"]) for row in checkpoint_rows})
+    final_step = steps[-1]
+    primary_record_side = record_sides[0]
+    primary_rows = [
+        row
+        for row in checkpoint_rows
+        if row["split"] == "__all__" and row["pair_type"] == "__all__" and row["record_side"] == primary_record_side
+    ]
+    if len(primary_rows) != len(steps):
+        raise RuntimeError(
+            f"Expected one primary checkpoint row per step for record_side={primary_record_side}, "
+            f"got {len(primary_rows)} rows for {len(steps)} steps."
+        )
+    final_primary = next(row for row in primary_rows if int(row["step"]) == final_step)
+    primary_delta_rows = [
+        row
+        for row in delta_rows
+        if row["split"] == "__all__" and row["pair_type"] == "__all__" and row["record_side"] == primary_record_side
+    ]
+    total_delta: dict[str, float] = {}
+    if len(primary_rows) >= 2:
+        first_primary = sorted(primary_rows, key=lambda row: int(row["step"]))[0]
+        for metric_name in ATTENTION_RETRIEVAL_CHAIN_METRICS:
+            total_delta[f"delta_{metric_name}_mean"] = (
+                float(final_primary[f"{metric_name}_mean"]) - float(first_primary[f"{metric_name}_mean"])
+            )
+        total_delta["negative_delta_answer_loss_mean"] = -float(total_delta["delta_answer_loss_mean"])
+
+    correlations = {
+        "qk_to_attention": _pearson_correlation_report(
+            x_values=[float(row["delta_qk_separation_mean"]) for row in primary_delta_rows],
+            y_values=[float(row["delta_attention_separation_mean"]) for row in primary_delta_rows],
+            label="delta_qk_separation_mean vs delta_attention_separation_mean",
+        ),
+        "attention_to_head_margin_dla": _pearson_correlation_report(
+            x_values=[float(row["delta_attention_separation_mean"]) for row in primary_delta_rows],
+            y_values=[float(row["delta_head_margin_dla_mean"]) for row in primary_delta_rows],
+            label="delta_attention_separation_mean vs delta_head_margin_dla_mean",
+        ),
+        "head_margin_dla_to_answer_margin": _pearson_correlation_report(
+            x_values=[float(row["delta_head_margin_dla_mean"]) for row in primary_delta_rows],
+            y_values=[float(row["delta_answer_margin_mean"]) for row in primary_delta_rows],
+            label="delta_head_margin_dla_mean vs delta_answer_margin_mean",
+        ),
+        "answer_margin_to_loss_reduction": _pearson_correlation_report(
+            x_values=[float(row["delta_answer_margin_mean"]) for row in primary_delta_rows],
+            y_values=[float(row["negative_delta_answer_loss_mean"]) for row in primary_delta_rows],
+            label="delta_answer_margin_mean vs -delta_answer_loss_mean",
+        ),
+    }
+    return {
+        "num_checkpoints": len(steps),
+        "steps": steps,
+        "num_checkpoint_rows": len(checkpoint_rows),
+        "num_delta_rows": len(delta_rows),
+        "primary_record_side": primary_record_side,
+        "final_primary_row": final_primary,
+        "primary_delta_rows": primary_delta_rows,
+        "total_primary_delta": total_delta,
+        "correlations": correlations,
+    }
+
+
+def _plot_attention_retrieval_chain_trajectory(
+    *,
+    checkpoint_rows: list[dict[str, Any]],
+    record_side: str,
+    output_path: Path,
+) -> Path | None:
+    rows = sorted(
+        [
+            row
+            for row in checkpoint_rows
+            if row["split"] == "__all__" and row["pair_type"] == "__all__" and row["record_side"] == record_side
+        ],
+        key=lambda row: int(row["step"]),
+    )
+    if not rows:
+        return None
+    _, plt = _import_matplotlib()
+    fig, axes = plt.subplots(5, 1, figsize=(11, 12), sharex=True)
+    steps = [int(row["step"]) for row in rows]
+    plotted = [
+        ("qk_separation_mean", "QK support - distractor score"),
+        ("attention_separation_mean", "attention support - distractor prob"),
+        ("head_margin_dla_mean", "head direct margin attribution"),
+        ("answer_margin_mean", "answer margin"),
+        ("answer_loss_mean", "answer loss"),
+    ]
+    for axis, (field_name, label) in zip(axes, plotted, strict=True):
+        axis.plot(steps, [float(row[field_name]) for row in rows], marker="o")
+        axis.axhline(0.0, color="#777777", linewidth=0.8, linestyle="--")
+        axis.set_ylabel(label)
+        axis.grid(alpha=0.25)
+    axes[-1].set_xlabel("checkpoint step")
+    fig.suptitle(f"Attention retrieval chain for {record_side} records")
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, format="svg")
+    plt.close(fig)
+    return output_path
+
+
+def _plot_attention_retrieval_chain_deltas(
+    *,
+    delta_rows: list[dict[str, Any]],
+    record_side: str,
+    output_path: Path,
+) -> Path | None:
+    rows = [
+        row
+        for row in delta_rows
+        if row["split"] == "__all__" and row["pair_type"] == "__all__" and row["record_side"] == record_side
+    ]
+    if not rows:
+        return None
+    _, plt = _import_matplotlib()
+    fig, axes = plt.subplots(2, 2, figsize=(11, 8))
+    plots = [
+        ("delta_qk_separation_mean", "delta_attention_separation_mean", "QK -> attention"),
+        ("delta_attention_separation_mean", "delta_head_margin_dla_mean", "attention -> head DLA"),
+        ("delta_head_margin_dla_mean", "delta_answer_margin_mean", "head DLA -> margin"),
+        ("delta_answer_margin_mean", "negative_delta_answer_loss_mean", "margin -> loss reduction"),
+    ]
+    for axis, (x_field, y_field, title) in zip(axes.flatten(), plots, strict=True):
+        axis.scatter([float(row[x_field]) for row in rows], [float(row[y_field]) for row in rows])
+        for row in rows:
+            axis.annotate(
+                f"{row['source_step']}->{row['target_step']}",
+                (float(row[x_field]), float(row[y_field])),
+                fontsize=7,
+                alpha=0.75,
+            )
+        axis.axhline(0.0, color="#777777", linewidth=0.8, linestyle="--")
+        axis.axvline(0.0, color="#777777", linewidth=0.8, linestyle="--")
+        axis.set_xlabel(x_field)
+        axis.set_ylabel(y_field)
+        axis.set_title(title)
+        axis.grid(alpha=0.25)
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, format="svg")
+    plt.close(fig)
+    return output_path
+
+
+def _write_attention_retrieval_chain_markdown(
+    *,
+    path: Path,
+    report: dict[str, Any],
+    plot_paths: dict[str, Path],
+) -> None:
+    summary = report["summary"]
+    final_row = summary["final_primary_row"]
+    lines = [
+        "# Attention Retrieval Chain Report",
+        "",
+        "## Question",
+        "",
+        "This report checks whether the measured QK retrieval geometry is connected to the model's answer behavior on the same causal pairs.",
+        "",
+        "## Calculation",
+        "",
+        "`QK separation = mean score(prediction, support) - mean score(prediction, distractors)`",
+        "",
+        "`attention separation = mean attention(prediction, support) - mean attention(prediction, distractors)`",
+        "",
+        "`head margin DLA = L2H1 output at the prediction position dotted with the final answer-margin gradient`",
+        "",
+        "`answer margin = correct value logit - best wrong value logit`",
+        "",
+        "The expected chain is:",
+        "",
+        "`Delta QK separation -> Delta attention separation -> Delta head DLA -> Delta answer margin -> -Delta loss`",
+        "",
+        "## Run",
+        "",
+        f"- head: `{report['head_label']}`",
+        f"- query role: `{report['score_query_role']}`",
+        f"- support role: `{report['support_key_role']}`",
+        f"- distractor role: `{report['distractor_key_role']}`",
+        f"- record sides: `{report['record_sides']}`",
+        f"- checkpoints: `{summary['steps']}`",
+        "",
+        "## Final Primary Row",
+        "",
+        "| metric | value |",
+        "|---|---:|",
+        f"| QK separation | {float(final_row['qk_separation_mean']):.6f} |",
+        f"| attention separation | {float(final_row['attention_separation_mean']):.6f} |",
+        f"| head margin DLA | {float(final_row['head_margin_dla_mean']):.6f} |",
+        f"| answer margin | {float(final_row['answer_margin_mean']):.6f} |",
+        f"| answer loss | {float(final_row['answer_loss_mean']):.6f} |",
+        f"| answer accuracy | {float(final_row['answer_accuracy']):.6f} |",
+        "",
+        "## Primary Interval Deltas",
+        "",
+        "| interval | d QK sep | d attention sep | d head DLA | d answer margin | -d loss |",
+        "|---|---:|---:|---:|---:|---:|",
+    ]
+    for row in summary["primary_delta_rows"]:
+        lines.append(
+            "| {source}->{target} | {qk:.6f} | {attn:.6f} | {dla:.6f} | {margin:.6f} | {loss:.6f} |".format(
+                source=int(row["source_step"]),
+                target=int(row["target_step"]),
+                qk=float(row["delta_qk_separation_mean"]),
+                attn=float(row["delta_attention_separation_mean"]),
+                dla=float(row["delta_head_margin_dla_mean"]),
+                margin=float(row["delta_answer_margin_mean"]),
+                loss=float(row["negative_delta_answer_loss_mean"]),
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "## Raw Outputs",
+            "",
+            f"- checkpoint rows: `{report['checkpoint_rows_path']}`",
+            f"- delta rows: `{report['delta_rows_path']}`",
+            f"- pair metric rows: `{report['pair_metric_rows_path']}`",
+            f"- pair metadata: `{report['pair_rows_path']}`",
+        ]
+    )
+    if plot_paths:
+        lines.extend(["", "## Plots", ""])
+        for label, plot_path in plot_paths.items():
+            lines.append(f"- {label}: `{plot_path}`")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def run_attention_retrieval_chain_report(
+    *,
+    config_path: Path,
+    probe_set_path: Path,
+    checkpoint_dir: Path,
+    output_dir: Path,
+    head_layer: int,
+    head: int,
+    score_query_role: str,
+    support_key_role: str,
+    distractor_key_role: str,
+    pair_types: list[str],
+    device_name: str = "mps",
+    checkpoint_paths: list[Path] | None = None,
+    record_sides: list[str] | None = None,
+    max_pairs_per_type: int = 64,
+    min_pairs_per_type: int = 1,
+    split_filter: list[str] | None = None,
+) -> tuple[Path, Path, Path, Path, Path, Path, dict[str, Path]]:
+    unsupported_roles = [
+        role
+        for role in [score_query_role, support_key_role, distractor_key_role]
+        if role not in GEOMETRY_POSITION_ROLES
+    ]
+    if unsupported_roles:
+        raise ValueError(f"Unsupported attention roles {unsupported_roles}; expected one of {GEOMETRY_POSITION_ROLES}.")
+    if support_key_role == distractor_key_role:
+        raise ValueError("support_key_role and distractor_key_role must be different.")
+
+    resolved_record_sides = _resolve_attention_score_record_sides(record_sides)
+    spec = TrainSpec.from_path(config_path)
+    probe_records, probe_metadata = load_probe_set(probe_set_path)
+    if str(probe_metadata["benchmark_dir"]) != str(spec.benchmark_dir):
+        raise ValueError(
+            f"Probe set benchmark mismatch: probe={probe_metadata['benchmark_dir']} config={spec.benchmark_dir}"
+        )
+    metadata = read_symbolic_kv_stream_metadata(spec.benchmark_dir)
+    vocab = Vocabulary.from_metadata(metadata["vocabulary"])
+    holdout_pairs = _holdout_pair_set(metadata)
+    device = require_device(device_name)
+    checkpoints = _resolve_checkpoint_paths(checkpoint_dir=checkpoint_dir, checkpoint_paths=checkpoint_paths)
+    if len(checkpoints) < 2:
+        raise ValueError("attention-retrieval-chain-report requires at least two checkpoints.")
+    model = build_model(spec.model, len(vocab.tokens), device)
+    if head_layer < 0 or head_layer >= len(model.blocks):
+        raise ValueError(f"head_layer {head_layer} outside model range 0..{len(model.blocks) - 1}.")
+    if head < 0 or head >= model.blocks[head_layer].attn.n_heads:
+        raise ValueError(
+            f"head {head} outside model range 0..{model.blocks[head_layer].attn.n_heads - 1} for layer {head_layer}."
+        )
+    pair_types = sorted(set(pair_types), key=pair_types.index)
+    pairs, pair_construction = _build_causal_patch_pairs(
+        probe_records=probe_records,
+        vocab=vocab,
+        holdout_pairs=holdout_pairs,
+        pair_types=pair_types,
+        max_pairs_per_type=max_pairs_per_type,
+        min_pairs_per_type=min_pairs_per_type,
+        split_filter=split_filter,
+    )
+    if not pairs:
+        raise RuntimeError("Attention retrieval chain report constructed no pairs.")
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_rows_path = output_dir / "attention_retrieval_chain_checkpoint_rows.jsonl"
+    delta_rows_path = output_dir / "attention_retrieval_chain_delta_rows.jsonl"
+    pair_metric_rows_path = output_dir / "attention_retrieval_chain_pair_rows.jsonl"
+    pair_rows_path = output_dir / "attention_retrieval_chain_pairs.jsonl"
+    progress_path = output_dir / "attention_retrieval_chain_progress.json"
+    for partial_path in (checkpoint_rows_path, delta_rows_path, pair_metric_rows_path, pair_rows_path, progress_path):
+        if partial_path.exists():
+            partial_path.unlink()
+    write_jsonl(pair_rows_path, [_pair_metadata(pair) for pair in pairs])
+
+    print(
+        "[attention-retrieval-chain-report] "
+        f"checkpoints={len(checkpoints)} pairs={len(pairs)} pair_types={pair_types} device={device_name} "
+        f"head={_head_label(head_layer, head)} query_role={score_query_role} support={support_key_role} "
+        f"distractor={distractor_key_role} record_sides={resolved_record_sides}",
+        flush=True,
+    )
+    all_pair_metric_rows: list[dict[str, Any]] = []
+    for checkpoint_index, checkpoint_path in enumerate(checkpoints, start=1):
+        step = _checkpoint_step_from_path(checkpoint_path)
+        print(
+            "[attention-retrieval-chain-report] starting "
+            f"{checkpoint_index}/{len(checkpoints)} {checkpoint_path.name}",
+            flush=True,
+        )
+        pair_metric_rows = _compute_attention_retrieval_chain_checkpoint(
+            model=model,
+            checkpoint_path=checkpoint_path,
+            pairs=pairs,
+            vocab=vocab,
+            head_layer=head_layer,
+            head=head,
+            score_query_role=score_query_role,
+            support_key_role=support_key_role,
+            distractor_key_role=distractor_key_role,
+            record_sides=resolved_record_sides,
+            batch_size=spec.evaluation.batch_size,
+            pad_token_id=vocab.pad_token_id,
+            device=device,
+        )
+        for row in pair_metric_rows:
+            append_jsonl(pair_metric_rows_path, row)
+        all_pair_metric_rows.extend(pair_metric_rows)
+        checkpoint_metric_rows = _aggregate_attention_retrieval_chain_checkpoint_rows(pair_metric_rows)
+        primary = next(
+            row
+            for row in checkpoint_metric_rows
+            if row["split"] == "__all__"
+            and row["pair_type"] == "__all__"
+            and row["record_side"] == resolved_record_sides[0]
+        )
+        print(
+            "[attention-retrieval-chain-report] finished "
+            f"step={step} qk_sep={float(primary['qk_separation_mean']):.6g} "
+            f"attention_sep={float(primary['attention_separation_mean']):.6g} "
+            f"head_dla={float(primary['head_margin_dla_mean']):.6g} "
+            f"margin={float(primary['answer_margin_mean']):.6g} "
+            f"loss={float(primary['answer_loss_mean']):.6g}",
+            flush=True,
+        )
+        write_json(
+            progress_path,
+            {
+                "status": "running",
+                "completed_checkpoints": checkpoint_index,
+                "total_checkpoints": len(checkpoints),
+                "last_step": step,
+                "pair_metric_rows_path": str(pair_metric_rows_path),
+            },
+        )
+
+    checkpoint_rows = _aggregate_attention_retrieval_chain_checkpoint_rows(all_pair_metric_rows)
+    delta_rows = _build_attention_retrieval_chain_delta_rows(checkpoint_rows)
+    write_jsonl(checkpoint_rows_path, checkpoint_rows)
+    write_jsonl(delta_rows_path, delta_rows)
+    summary = _summarize_attention_retrieval_chain(
+        checkpoint_rows=checkpoint_rows,
+        delta_rows=delta_rows,
+        record_sides=resolved_record_sides,
+    )
+
+    plot_paths: dict[str, Path] = {}
+    trajectory_plot = _plot_attention_retrieval_chain_trajectory(
+        checkpoint_rows=checkpoint_rows,
+        record_side=resolved_record_sides[0],
+        output_path=output_dir / "attention_retrieval_chain_trajectory.svg",
+    )
+    if trajectory_plot is not None:
+        plot_paths["trajectory"] = trajectory_plot
+    delta_plot = _plot_attention_retrieval_chain_deltas(
+        delta_rows=delta_rows,
+        record_side=resolved_record_sides[0],
+        output_path=output_dir / "attention_retrieval_chain_deltas.svg",
+    )
+    if delta_plot is not None:
+        plot_paths["deltas"] = delta_plot
+
+    report_path = output_dir / "attention_retrieval_chain_report.json"
+    markdown_path = output_dir / "attention_retrieval_chain_report.md"
+    report = {
+        "schema_version": ATTENTION_RETRIEVAL_CHAIN_REPORT_SCHEMA_VERSION,
+        "config_path": str(config_path),
+        "probe_set_path": str(probe_set_path),
+        "checkpoint_dir": str(checkpoint_dir),
+        "device": device_name,
+        "head_layer": head_layer,
+        "head": head,
+        "head_label": _head_label(head_layer, head),
+        "score_query_role": score_query_role,
+        "support_key_role": support_key_role,
+        "distractor_key_role": distractor_key_role,
+        "record_sides": resolved_record_sides,
+        "pair_types": pair_types,
+        "max_pairs_per_type": max_pairs_per_type,
+        "min_pairs_per_type": min_pairs_per_type,
+        "split_filter": split_filter,
+        "calculation": {
+            "qk_separation": "mean score(query, support) - mean score(query, distractors)",
+            "attention_separation": "mean attention(query, support) - mean attention(query, distractors)",
+            "head_margin_dla": "head output at query position dotted with final answer-margin gradient",
+            "answer_margin": "correct value logit minus best wrong value logit",
+            "chain": "Delta QK separation -> Delta attention separation -> Delta head DLA -> Delta answer margin -> -Delta loss",
+        },
+        "pair_construction": pair_construction,
+        "checkpoint_rows_path": str(checkpoint_rows_path),
+        "delta_rows_path": str(delta_rows_path),
+        "pair_metric_rows_path": str(pair_metric_rows_path),
+        "pair_rows_path": str(pair_rows_path),
+        "summary": summary,
+    }
+    write_json(report_path, report)
+    _write_attention_retrieval_chain_markdown(path=markdown_path, report=report, plot_paths=plot_paths)
+    write_json(
+        progress_path,
+        {
+            "status": "complete",
+            "completed_checkpoints": len(checkpoints),
+            "total_checkpoints": len(checkpoints),
+            "report_path": str(report_path),
+            "markdown_path": str(markdown_path),
+            "checkpoint_rows_path": str(checkpoint_rows_path),
+            "delta_rows_path": str(delta_rows_path),
+            "pair_metric_rows_path": str(pair_metric_rows_path),
+            "pair_rows_path": str(pair_rows_path),
+        },
+    )
+    print(
+        f"[attention-retrieval-chain-report] complete report={report_path} rows={checkpoint_rows_path}",
+        flush=True,
+    )
+    return report_path, markdown_path, checkpoint_rows_path, delta_rows_path, pair_metric_rows_path, pair_rows_path, plot_paths
+
+
+def _resolve_attention_downstream_update_scalars(scalars: list[str] | None) -> list[str]:
+    if scalars is None:
+        return list(ATTENTION_DOWNSTREAM_UPDATE_SCALARS)
+    if not scalars:
+        raise ValueError("attention downstream scalars must not be empty when provided.")
+    unsupported = [scalar for scalar in scalars if scalar not in ATTENTION_DOWNSTREAM_UPDATE_SCALARS]
+    if unsupported:
+        raise ValueError(
+            f"Unsupported attention downstream scalar(s) {unsupported}; "
+            f"expected one of {ATTENTION_DOWNSTREAM_UPDATE_SCALARS}."
+        )
+    return sorted(set(scalars), key=scalars.index)
+
+
+def _attention_downstream_payload_for_records(
+    *,
+    model: torch.nn.Module,
+    records: list[dict[str, Any]],
+    head_layer: int,
+    head: int,
+    vocab: Vocabulary,
+    pad_token_id: int,
+    device: torch.device,
+    track_grad: bool,
+) -> dict[str, Any]:
+    if not records:
+        raise ValueError("records must not be empty for attention downstream update attribution.")
+    if head_layer < 0 or head_layer >= len(model.blocks):
+        raise ValueError(f"head_layer {head_layer} outside model range 0..{len(model.blocks) - 1}.")
+    block = model.blocks[head_layer]
+    if head < 0 or head >= block.attn.n_heads:
+        raise ValueError(f"head {head} outside model range 0..{block.attn.n_heads - 1} for layer {head_layer}.")
+
+    batch = move_batch_to_device(collate_symbolic_kv(records, pad_token_id), device)
+    if track_grad:
+        outputs = model(
+            batch["input_ids"],
+            attention_mask=batch["attention_mask"],
+            return_attentions=True,
+            return_residual_streams=True,
+        )
+    else:
+        with torch.no_grad():
+            outputs = model(
+                batch["input_ids"],
+                attention_mask=batch["attention_mask"],
+                return_attentions=True,
+                return_residual_streams=True,
+            )
+    if outputs.attentions is None:
+        raise RuntimeError("Attention downstream update attribution requires attention probabilities.")
+    if outputs.residual_streams is None:
+        raise RuntimeError("Attention downstream update attribution requires residual streams.")
+
+    answer_logits, answer_targets, metadata = extract_answer_logits(outputs.logits, batch)
+    _validate_single_query_batch(batch=batch, metadata=metadata, label="attention downstream update attribution")
+    value_token_ids = torch.tensor(vocab.value_token_ids, device=device, dtype=torch.long)
+    answer_margins = _value_margin(answer_logits, answer_targets, value_token_ids)
+    answer_losses = torch.nn.functional.cross_entropy(answer_logits, answer_targets, reduction="none")
+    wrong_token_ids = _best_wrong_value_token_ids(
+        logits=answer_logits,
+        answer_targets=answer_targets,
+        value_token_ids=value_token_ids,
+    )
+    final_pre_stage = f"layer_{len(model.blocks) - 1}_post_mlp"
+    final_pre_vectors = outputs.residual_streams[final_pre_stage][
+        metadata["rows"],
+        metadata["prediction_positions"],
+        :,
+    ]
+    margin_gradients, recomputed_margins = _margin_gradient_vectors(
+        model=model,
+        final_residual_vectors=final_pre_vectors,
+        correct_token_ids=answer_targets,
+        wrong_token_ids=wrong_token_ids,
+    )
+    if not torch.allclose(recomputed_margins, answer_margins.detach(), atol=1.0e-4, rtol=1.0e-4):
+        max_delta = (recomputed_margins - answer_margins.detach()).abs().max().item()
+        raise RuntimeError(f"Attention downstream margin-gradient check failed: max_delta={max_delta:.6g}")
+
+    if head_layer == 0:
+        pre_state = outputs.residual_streams["embedding"]
+    else:
+        pre_state = outputs.residual_streams[f"layer_{head_layer - 1}_post_mlp"]
+    attention_input = block.ln_1(pre_state)
+    batch_size, seq_len, _ = attention_input.shape
+    head_dim = block.attn.head_dim
+    q_all = block.attn.q_proj(attention_input).view(batch_size, seq_len, block.attn.n_heads, head_dim)
+    k_all = block.attn.k_proj(attention_input).view(batch_size, seq_len, block.attn.n_heads, head_dim)
+    v_all = block.attn.v_proj(attention_input).view(batch_size, seq_len, block.attn.n_heads, head_dim)
+    q_head = q_all[:, :, head, :]
+    k_head = k_all[:, :, head, :]
+    v_head = v_all[:, :, head, :]
+    scores = torch.matmul(q_head, k_head.transpose(-2, -1)) / math.sqrt(head_dim)
+    attention = outputs.attentions[head_layer][:, head, :, :]
+    head_slice = slice(head * head_dim, (head + 1) * head_dim)
+    out_head = block.attn.out_proj.weight[:, head_slice]
+
+    return {
+        "batch": batch,
+        "metadata": metadata,
+        "answer_logits": answer_logits,
+        "answer_targets": answer_targets,
+        "answer_margins": answer_margins,
+        "answer_losses": answer_losses,
+        "answer_correct": answer_logits.argmax(dim=-1) == answer_targets,
+        "margin_gradients": margin_gradients,
+        "value_token_ids": value_token_ids,
+        "scores": scores,
+        "attention": attention,
+        "v": v_head,
+        "out_head": out_head,
+        "unembed": model.lm_head.weight,
+    }
+
+
+def _attention_downstream_scalar_entries_for_payload(
+    *,
+    payload: dict[str, Any],
+    pairs: list[dict[str, Any]],
+    record_side: str,
+    scalar_names: list[str],
+    score_query_role: str,
+    support_key_role: str,
+    distractor_key_role: str,
+    fixed_margin_gradients: torch.Tensor | None = None,
+) -> list[dict[str, Any]]:
+    unsupported = [scalar for scalar in scalar_names if scalar not in ATTENTION_DOWNSTREAM_UPDATE_SCALARS]
+    if unsupported:
+        raise ValueError(
+            f"Unsupported attention downstream scalar(s) {unsupported}; "
+            f"expected one of {ATTENTION_DOWNSTREAM_UPDATE_SCALARS}."
+        )
+    if fixed_margin_gradients is not None and fixed_margin_gradients.shape != payload["margin_gradients"].shape:
+        raise ValueError(
+            "fixed_margin_gradients shape mismatch: "
+            f"{tuple(fixed_margin_gradients.shape)} vs {tuple(payload['margin_gradients'].shape)}"
+        )
+
+    entries: list[dict[str, Any]] = []
+    device = payload["answer_targets"].device
+    for pair_index, pair in enumerate(pairs):
+        batch_row, query_position = _single_attention_position(
+            batch=payload["batch"],
+            metadata=payload["metadata"],
+            flat_index=pair_index,
+            position_role=score_query_role,
+            label="attention downstream query",
+        )
+        support_batch_row, support_positions = _attention_key_positions(
+            batch=payload["batch"],
+            metadata=payload["metadata"],
+            flat_index=pair_index,
+            position_role=support_key_role,
+            max_position=query_position,
+        )
+        distractor_batch_row, distractor_positions = _attention_key_positions(
+            batch=payload["batch"],
+            metadata=payload["metadata"],
+            flat_index=pair_index,
+            position_role=distractor_key_role,
+            max_position=query_position,
+        )
+        if support_batch_row != batch_row:
+            raise RuntimeError(
+                f"Support role {support_key_role!r} selected batch row {support_batch_row}, "
+                f"but query role {score_query_role!r} selected row {batch_row} for pair {pair['pair_id']}."
+            )
+        if distractor_batch_row != batch_row:
+            raise RuntimeError(
+                f"Distractor role {distractor_key_role!r} selected batch row {distractor_batch_row}, "
+                f"but query role {score_query_role!r} selected row {batch_row} for pair {pair['pair_id']}."
+            )
+        support_position_tensor = torch.tensor(support_positions, device=device, dtype=torch.long)
+        distractor_position_tensor = torch.tensor(distractor_positions, device=device, dtype=torch.long)
+        attention_row = payload["attention"][batch_row, query_position, :]
+        support_attention = attention_row.index_select(0, support_position_tensor)
+        distractor_attention = attention_row.index_select(0, distractor_position_tensor)
+        support_attention_mean = support_attention.mean()
+        distractor_attention_mean = distractor_attention.mean()
+        attention_separation = support_attention_mean - distractor_attention_mean
+        attention_mass_separation = support_attention.sum() - distractor_attention.sum()
+
+        head_output = torch.matmul(attention_row, payload["v"][batch_row])
+        head_write = torch.matmul(head_output, payload["out_head"].T)
+        support_v = payload["v"][batch_row].index_select(0, support_position_tensor).mean(dim=0)
+        support_head_write = torch.matmul(support_v, payload["out_head"].T)
+
+        answer_token_id = int(payload["answer_targets"][pair_index].item())
+        support_ov_value_margin = _single_vector_value_margin(
+            residual_vector=support_head_write,
+            correct_token_id=answer_token_id,
+            value_token_ids=payload["value_token_ids"],
+            unembed=payload["unembed"],
+        )
+        head_answer_logit_dla = torch.dot(head_write, payload["unembed"][answer_token_id])
+        head_value_margin_dla = _single_vector_value_margin(
+            residual_vector=head_write,
+            correct_token_id=answer_token_id,
+            value_token_ids=payload["value_token_ids"],
+            unembed=payload["unembed"],
+        )
+        margin_readout = (
+            fixed_margin_gradients[pair_index]
+            if fixed_margin_gradients is not None
+            else payload["margin_gradients"][pair_index]
+        )
+        head_margin_dla_fixed_readout = torch.dot(head_write, margin_readout.detach())
+        scalar_tensors = {
+            "attention_separation": attention_separation,
+            "attention_mass_separation": attention_mass_separation,
+            "head_answer_logit_dla": head_answer_logit_dla,
+            "head_value_margin_dla": head_value_margin_dla,
+            "support_ov_value_margin": support_ov_value_margin,
+            "attended_support_ov_value_margin": support_attention_mean * support_ov_value_margin,
+            "head_margin_dla_fixed_readout": head_margin_dla_fixed_readout,
+            "answer_margin": payload["answer_margins"][pair_index],
+            "negative_answer_loss": -payload["answer_losses"][pair_index],
+        }
+        for scalar_name in scalar_names:
+            entries.append(
+                {
+                    "pair_id": str(pair["pair_id"]),
+                    "split": str(pair["split"]),
+                    "pair_type": str(pair["pair_type"]),
+                    "record_side": record_side,
+                    "source_sample_id": str(pair["source_sample_id"]),
+                    "source_query_index": int(pair["source_query_index"]),
+                    "query_position": int(query_position),
+                    "support_positions": [int(position) for position in support_positions],
+                    "distractor_positions": [int(position) for position in distractor_positions],
+                    "num_support_positions": int(len(support_positions)),
+                    "num_distractor_positions": int(len(distractor_positions)),
+                    "answer_token_id": answer_token_id,
+                    "answer_correct": bool(payload["answer_correct"][pair_index].detach().cpu().item()),
+                    "scalar_name": scalar_name,
+                    "value_tensor": scalar_tensors[scalar_name],
+                }
+            )
+    return entries
+
+
+def _attention_downstream_entries_to_rows(
+    *,
+    entries: list[dict[str, Any]],
+    step: int,
+    checkpoint_path: Path,
+    head_layer: int,
+    head: int,
+    head_label: str,
+    score_query_role: str,
+    support_key_role: str,
+    distractor_key_role: str,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for entry in entries:
+        value_tensor = entry["value_tensor"]
+        if not isinstance(value_tensor, torch.Tensor):
+            raise TypeError(f"Downstream scalar entry must contain a tensor value: {entry['scalar_name']}")
+        rows.append(
+            {
+                "step": step,
+                "checkpoint": str(checkpoint_path),
+                "split": entry["split"],
+                "pair_type": entry["pair_type"],
+                "record_side": entry["record_side"],
+                "pair_id": entry["pair_id"],
+                "source_sample_id": entry["source_sample_id"],
+                "source_query_index": int(entry["source_query_index"]),
+                "head_layer": head_layer,
+                "head": head,
+                "head_label": head_label,
+                "score_query_role": score_query_role,
+                "support_key_role": support_key_role,
+                "distractor_key_role": distractor_key_role,
+                "query_position": int(entry["query_position"]),
+                "support_positions": entry["support_positions"],
+                "distractor_positions": entry["distractor_positions"],
+                "num_support_positions": int(entry["num_support_positions"]),
+                "num_distractor_positions": int(entry["num_distractor_positions"]),
+                "answer_token_id": int(entry["answer_token_id"]),
+                "answer_correct": bool(entry["answer_correct"]),
+                "scalar_name": entry["scalar_name"],
+                "value": float(value_tensor.detach().float().cpu().item()),
+            }
+        )
+    return rows
+
+
+def _compute_attention_downstream_actual_rows(
+    *,
+    source_model: torch.nn.Module,
+    target_model: torch.nn.Module,
+    source_checkpoint_path: Path,
+    target_checkpoint_path: Path,
+    pairs: list[dict[str, Any]],
+    vocab: Vocabulary,
+    head_layer: int,
+    head: int,
+    score_query_role: str,
+    support_key_role: str,
+    distractor_key_role: str,
+    record_sides: list[str],
+    scalar_names: list[str],
+    batch_size: int,
+    pad_token_id: int,
+    device: torch.device,
+) -> list[dict[str, Any]]:
+    source_checkpoint = load_checkpoint(source_checkpoint_path, device)
+    target_checkpoint = load_checkpoint(target_checkpoint_path, device)
+    load_model_state(source_model, source_checkpoint["model_state"])
+    load_model_state(target_model, target_checkpoint["model_state"])
+    source_step = int(source_checkpoint["step"])
+    target_step = int(target_checkpoint["step"])
+    if source_step != _checkpoint_step_from_path(source_checkpoint_path):
+        raise RuntimeError(f"Source checkpoint step mismatch: payload={source_step} path={source_checkpoint_path}")
+    if target_step != _checkpoint_step_from_path(target_checkpoint_path):
+        raise RuntimeError(f"Target checkpoint step mismatch: payload={target_step} path={target_checkpoint_path}")
+
+    source_model.eval()
+    target_model.eval()
+    actual_rows: list[dict[str, Any]] = []
+    head_label = _head_label(head_layer, head)
+    for start_index in range(0, len(pairs), batch_size):
+        pair_batch = pairs[start_index : start_index + batch_size]
+        for record_side in record_sides:
+            side_key = f"{record_side}_record"
+            records = [pair[side_key] for pair in pair_batch]
+            source_payload = _attention_downstream_payload_for_records(
+                model=source_model,
+                records=records,
+                head_layer=head_layer,
+                head=head,
+                vocab=vocab,
+                pad_token_id=pad_token_id,
+                device=device,
+                track_grad=False,
+            )
+            target_payload = _attention_downstream_payload_for_records(
+                model=target_model,
+                records=records,
+                head_layer=head_layer,
+                head=head,
+                vocab=vocab,
+                pad_token_id=pad_token_id,
+                device=device,
+                track_grad=False,
+            )
+            source_entries = _attention_downstream_scalar_entries_for_payload(
+                payload=source_payload,
+                pairs=pair_batch,
+                record_side=record_side,
+                scalar_names=scalar_names,
+                score_query_role=score_query_role,
+                support_key_role=support_key_role,
+                distractor_key_role=distractor_key_role,
+                fixed_margin_gradients=source_payload["margin_gradients"],
+            )
+            target_entries = _attention_downstream_scalar_entries_for_payload(
+                payload=target_payload,
+                pairs=pair_batch,
+                record_side=record_side,
+                scalar_names=scalar_names,
+                score_query_role=score_query_role,
+                support_key_role=support_key_role,
+                distractor_key_role=distractor_key_role,
+                fixed_margin_gradients=source_payload["margin_gradients"],
+            )
+            source_rows = _attention_downstream_entries_to_rows(
+                entries=source_entries,
+                step=source_step,
+                checkpoint_path=source_checkpoint_path,
+                head_layer=head_layer,
+                head=head,
+                head_label=head_label,
+                score_query_role=score_query_role,
+                support_key_role=support_key_role,
+                distractor_key_role=distractor_key_role,
+            )
+            target_rows = _attention_downstream_entries_to_rows(
+                entries=target_entries,
+                step=target_step,
+                checkpoint_path=target_checkpoint_path,
+                head_layer=head_layer,
+                head=head,
+                head_label=head_label,
+                score_query_role=score_query_role,
+                support_key_role=support_key_role,
+                distractor_key_role=distractor_key_role,
+            )
+            source_by_key = {
+                (row["pair_id"], row["record_side"], row["scalar_name"]): row
+                for row in source_rows
+            }
+            target_by_key = {
+                (row["pair_id"], row["record_side"], row["scalar_name"]): row
+                for row in target_rows
+            }
+            if set(source_by_key) != set(target_by_key):
+                missing_target = sorted(set(source_by_key) - set(target_by_key))
+                extra_target = sorted(set(target_by_key) - set(source_by_key))
+                raise RuntimeError(
+                    "Source/target downstream scalar row keys differ: "
+                    f"missing_target={missing_target} extra_target={extra_target}"
+                )
+            for key in sorted(source_by_key):
+                source_row = source_by_key[key]
+                target_row = target_by_key[key]
+                actual_rows.append(
+                    {
+                        "source_step": source_step,
+                        "target_step": target_step,
+                        "step_gap": target_step - source_step,
+                        "source_checkpoint": str(source_checkpoint_path),
+                        "target_checkpoint": str(target_checkpoint_path),
+                        "split": source_row["split"],
+                        "pair_type": source_row["pair_type"],
+                        "record_side": source_row["record_side"],
+                        "pair_id": source_row["pair_id"],
+                        "source_sample_id": source_row["source_sample_id"],
+                        "source_query_index": int(source_row["source_query_index"]),
+                        "head_layer": head_layer,
+                        "head": head,
+                        "head_label": head_label,
+                        "score_query_role": score_query_role,
+                        "support_key_role": support_key_role,
+                        "distractor_key_role": distractor_key_role,
+                        "query_position": int(source_row["query_position"]),
+                        "support_positions": source_row["support_positions"],
+                        "distractor_positions": source_row["distractor_positions"],
+                        "num_support_positions": int(source_row["num_support_positions"]),
+                        "num_distractor_positions": int(source_row["num_distractor_positions"]),
+                        "answer_token_id": int(source_row["answer_token_id"]),
+                        "source_answer_correct": bool(source_row["answer_correct"]),
+                        "target_answer_correct": bool(target_row["answer_correct"]),
+                        "scalar_name": source_row["scalar_name"],
+                        "source_value": float(source_row["value"]),
+                        "target_value": float(target_row["value"]),
+                        "actual_delta": float(target_row["value"]) - float(source_row["value"]),
+                    }
+                )
+    if not actual_rows:
+        raise RuntimeError("Attention downstream update attribution produced no actual scalar rows.")
+    return actual_rows
+
+
+def _attention_downstream_actual_summary(
+    *,
+    actual_rows: list[dict[str, Any]],
+    split: str,
+    pair_type: str,
+    record_side: str,
+    scalar_name: str,
+) -> dict[str, Any]:
+    rows = [
+        row
+        for row in actual_rows
+        if (split == "__all__" or str(row["split"]) == split)
+        and (pair_type == "__all__" or str(row["pair_type"]) == pair_type)
+        and str(row["record_side"]) == record_side
+        and str(row["scalar_name"]) == scalar_name
+    ]
+    if not rows:
+        raise RuntimeError(
+            f"No downstream actual rows for split={split!r} pair_type={pair_type!r} "
+            f"record_side={record_side!r} scalar={scalar_name!r}."
+        )
+    source_values = [float(row["source_value"]) for row in rows]
+    target_values = [float(row["target_value"]) for row in rows]
+    actual_delta_values = [float(row["actual_delta"]) for row in rows]
+    return {
+        "num_entries": len(rows),
+        "num_unique_pairs": len({str(row["pair_id"]) for row in rows}),
+        "source_value": _mean(source_values),
+        "source_value_std": _std(source_values),
+        "target_value": _mean(target_values),
+        "target_value_std": _std(target_values),
+        "actual_delta": _mean(actual_delta_values),
+        "actual_delta_abs_mean": _mean([abs(value) for value in actual_delta_values]),
+        "actual_delta_std": _std(actual_delta_values),
+        "source_accuracy": _fraction(
+            sum(1 for row in rows if bool(row["source_answer_correct"])),
+            len(rows),
+            "downstream source accuracy",
+        ),
+        "target_accuracy": _fraction(
+            sum(1 for row in rows if bool(row["target_answer_correct"])),
+            len(rows),
+            "downstream target accuracy",
+        ),
+    }
+
+
+def _compute_attention_downstream_scalar_gradients_for_pairs(
+    *,
+    model: torch.nn.Module,
+    pairs: list[dict[str, Any]],
+    vocab: Vocabulary,
+    head_layer: int,
+    head: int,
+    score_query_role: str,
+    support_key_role: str,
+    distractor_key_role: str,
+    record_side: str,
+    scalar_names: list[str],
+    batch_size: int,
+    pad_token_id: int,
+    device: torch.device,
+) -> dict[str, dict[str, Any]]:
+    if not pairs:
+        raise ValueError("pairs must not be empty for downstream scalar gradient computation.")
+    if record_side not in ATTENTION_SCORE_RECORD_SIDES:
+        raise ValueError(f"Unsupported record side {record_side!r}; expected one of {ATTENTION_SCORE_RECORD_SIDES}.")
+    model.eval()
+    model.zero_grad(set_to_none=True)
+    scalar_sums: dict[str, torch.Tensor | None] = {scalar_name: None for scalar_name in scalar_names}
+    scalar_values: dict[str, list[float]] = {scalar_name: [] for scalar_name in scalar_names}
+    scalar_entry_counts: dict[str, int] = {scalar_name: 0 for scalar_name in scalar_names}
+    side_key = f"{record_side}_record"
+    num_batches = 0
+
+    for start_index in range(0, len(pairs), batch_size):
+        pair_batch = pairs[start_index : start_index + batch_size]
+        records = [pair[side_key] for pair in pair_batch]
+        payload = _attention_downstream_payload_for_records(
+            model=model,
+            records=records,
+            head_layer=head_layer,
+            head=head,
+            vocab=vocab,
+            pad_token_id=pad_token_id,
+            device=device,
+            track_grad=True,
+        )
+        entries = _attention_downstream_scalar_entries_for_payload(
+            payload=payload,
+            pairs=pair_batch,
+            record_side=record_side,
+            scalar_names=scalar_names,
+            score_query_role=score_query_role,
+            support_key_role=support_key_role,
+            distractor_key_role=distractor_key_role,
+            fixed_margin_gradients=payload["margin_gradients"],
+        )
+        for entry in entries:
+            scalar_name = str(entry["scalar_name"])
+            value_tensor = entry["value_tensor"]
+            if not isinstance(value_tensor, torch.Tensor):
+                raise TypeError(f"Downstream scalar value must be a tensor for {scalar_name}.")
+            scalar_sums[scalar_name] = (
+                value_tensor if scalar_sums[scalar_name] is None else scalar_sums[scalar_name] + value_tensor
+            )
+            scalar_values[scalar_name].append(float(value_tensor.detach().float().cpu().item()))
+            scalar_entry_counts[scalar_name] += 1
+        num_batches += 1
+
+    payloads: dict[str, dict[str, Any]] = {}
+    for scalar_index, scalar_name in enumerate(scalar_names):
+        total_scalar = scalar_sums[scalar_name]
+        entry_count = scalar_entry_counts[scalar_name]
+        if total_scalar is None or entry_count <= 0:
+            raise RuntimeError(f"Downstream scalar gradient produced no values for scalar={scalar_name!r}.")
+        mean_scalar = total_scalar / float(entry_count)
+        if not mean_scalar.requires_grad:
+            raise RuntimeError(f"Downstream scalar {scalar_name!r} does not require grad.")
+        model.zero_grad(set_to_none=True)
+        mean_scalar.backward(retain_graph=scalar_index < len(scalar_names) - 1)
+        gradients, zero_gradient_parameter_names = _parameter_gradients(model=model, require_all=False)
+        model.zero_grad(set_to_none=True)
+        values = scalar_values[scalar_name]
+        payloads[scalar_name] = {
+            "scalar_value": float(mean_scalar.detach().float().cpu().item()),
+            "scalar_value_abs_mean": _mean([abs(value) for value in values]),
+            "scalar_value_std": _std(values),
+            "num_entries": entry_count,
+            "num_pairs": len(pairs),
+            "num_batches": num_batches,
+            "zero_gradient_parameter_names": zero_gradient_parameter_names,
+            "gradients": gradients,
+        }
+    return payloads
+
+
+def _attention_downstream_update_metric_row(
+    *,
+    source_step: int,
+    target_step: int,
+    source_checkpoint: Path,
+    target_checkpoint: Path,
+    learning_rate: float,
+    split: str,
+    pair_type: str,
+    head_layer: int,
+    head: int,
+    score_query_role: str,
+    support_key_role: str,
+    distractor_key_role: str,
+    record_side: str,
+    scalar_name: str,
+    actual_summary: dict[str, Any],
+    source_payload: dict[str, Any],
+    dot_summary: dict[str, float | int | None],
+    min_error_denominator: float,
+) -> dict[str, Any]:
+    actual_delta = float(actual_summary["actual_delta"])
+    predicted_delta = float(dot_summary["dot"])
+    residual = actual_delta - predicted_delta
+    relative_error_denominator = max(abs(actual_delta), min_error_denominator)
+    predicted_relative_error_denominator = max(abs(predicted_delta), min_error_denominator)
+    return {
+        "source_step": source_step,
+        "target_step": target_step,
+        "step_gap": target_step - source_step,
+        "source_checkpoint": str(source_checkpoint),
+        "target_checkpoint": str(target_checkpoint),
+        "learning_rate": learning_rate,
+        "split": split,
+        "pair_type": pair_type,
+        "head_layer": head_layer,
+        "head": head,
+        "head_label": _head_label(head_layer, head),
+        "score_query_role": score_query_role,
+        "support_key_role": support_key_role,
+        "distractor_key_role": distractor_key_role,
+        "record_side": record_side,
+        "scalar_name": scalar_name,
+        "num_pairs": int(source_payload["num_pairs"]),
+        "num_entries": int(actual_summary["num_entries"]),
+        "num_unique_pairs": int(actual_summary["num_unique_pairs"]),
+        "source_value": float(actual_summary["source_value"]),
+        "source_value_std": float(actual_summary["source_value_std"]),
+        "target_value": float(actual_summary["target_value"]),
+        "target_value_std": float(actual_summary["target_value_std"]),
+        "source_objective_value": float(source_payload["scalar_value"]),
+        "source_objective_value_abs_mean": float(source_payload["scalar_value_abs_mean"]),
+        "source_objective_value_std": float(source_payload["scalar_value_std"]),
+        "actual_delta": actual_delta,
+        "actual_delta_abs_mean": float(actual_summary["actual_delta_abs_mean"]),
+        "actual_delta_std": float(actual_summary["actual_delta_std"]),
+        "predicted_delta": predicted_delta,
+        "residual": residual,
+        "absolute_error": abs(residual),
+        "relative_error": abs(residual) / relative_error_denominator,
+        "relative_error_denominator": relative_error_denominator,
+        "predicted_relative_error": abs(residual) / predicted_relative_error_denominator,
+        "predicted_relative_error_denominator": predicted_relative_error_denominator,
+        "sign_match": _sign_match(actual=actual_delta, predicted=predicted_delta),
+        "source_accuracy": float(actual_summary["source_accuracy"]),
+        "target_accuracy": float(actual_summary["target_accuracy"]),
+        "parameter_delta_l2_norm": float(dot_summary["left_l2_norm"]),
+        "scalar_gradient_l2_norm": float(dot_summary["right_l2_norm"]),
+        "update_scalar_gradient_cosine": dot_summary["cosine"],
+        "num_parameters": int(dot_summary["num_parameters"]),
+        "zero_scalar_gradient_parameter_count": len(source_payload["zero_gradient_parameter_names"]),
+        "zero_scalar_gradient_parameter_names": source_payload["zero_gradient_parameter_names"],
+    }
+
+
+def _attention_downstream_update_decomposition_row(
+    *,
+    metric_row: dict[str, Any],
+    group: _RouteGradientDecompositionGroup,
+    dot_summary: dict[str, float | int | None],
+) -> dict[str, Any]:
+    predicted_delta = float(dot_summary["dot"])
+    scalar_gradient_l2_norm = float(dot_summary["right_l2_norm"])
+    parameter_delta_l2_norm = float(dot_summary["left_l2_norm"])
+    num_selected_parameters = int(dot_summary["num_parameters"])
+    return {
+        "source_step": int(metric_row["source_step"]),
+        "target_step": int(metric_row["target_step"]),
+        "step_gap": int(metric_row["step_gap"]),
+        "source_checkpoint": metric_row["source_checkpoint"],
+        "target_checkpoint": metric_row["target_checkpoint"],
+        "learning_rate": float(metric_row["learning_rate"]),
+        "split": metric_row["split"],
+        "pair_type": metric_row["pair_type"],
+        "head_label": metric_row["head_label"],
+        "head_layer": int(metric_row["head_layer"]),
+        "head": int(metric_row["head"]),
+        "score_query_role": metric_row["score_query_role"],
+        "support_key_role": metric_row["support_key_role"],
+        "distractor_key_role": metric_row["distractor_key_role"],
+        "record_side": metric_row["record_side"],
+        "scalar_name": metric_row["scalar_name"],
+        "num_pairs": int(metric_row["num_pairs"]),
+        "num_entries": int(metric_row["num_entries"]),
+        "source_value": float(metric_row["source_value"]),
+        "target_value": float(metric_row["target_value"]),
+        "actual_delta": float(metric_row["actual_delta"]),
+        "global_predicted_delta": float(metric_row["predicted_delta"]),
+        "global_residual": float(metric_row["residual"]),
+        "global_relative_error": float(metric_row["relative_error"]),
+        "group_id": group.group_id,
+        "group_kind": group.group_kind,
+        "component_type": group.component_type,
+        "partition_name": group.partition_name,
+        "group_layer": group.layer,
+        "group_head": group.head,
+        "group_projection": group.projection,
+        "group_neuron": group.neuron,
+        "selection_count": len(group.selections),
+        "num_selected_parameters": num_selected_parameters,
+        "predicted_delta_contribution": predicted_delta,
+        "parameter_delta_l2_norm": parameter_delta_l2_norm,
+        "scalar_gradient_l2_norm": scalar_gradient_l2_norm,
+        "update_scalar_gradient_cosine": dot_summary["cosine"],
+        "contribution_per_parameter": predicted_delta / num_selected_parameters,
+        "notes": list(group.notes),
+    }
+
+
+def _compute_attention_downstream_update_attribution_interval(
+    *,
+    source_model: torch.nn.Module,
+    target_model: torch.nn.Module,
+    source_checkpoint_path: Path,
+    target_checkpoint_path: Path,
+    pairs: list[dict[str, Any]],
+    vocab: Vocabulary,
+    learning_rate: float,
+    head_layer: int,
+    head: int,
+    score_query_role: str,
+    support_key_role: str,
+    distractor_key_role: str,
+    record_sides: list[str],
+    scalar_names: list[str],
+    batch_size: int,
+    pad_token_id: int,
+    device: torch.device,
+    groups: list[_RouteGradientDecompositionGroup],
+    min_error_denominator: float,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    if not groups:
+        raise ValueError("Attention downstream update attribution requires at least one decomposition group.")
+    actual_rows = _compute_attention_downstream_actual_rows(
+        source_model=source_model,
+        target_model=target_model,
+        source_checkpoint_path=source_checkpoint_path,
+        target_checkpoint_path=target_checkpoint_path,
+        pairs=pairs,
+        vocab=vocab,
+        head_layer=head_layer,
+        head=head,
+        score_query_role=score_query_role,
+        support_key_role=support_key_role,
+        distractor_key_role=distractor_key_role,
+        record_sides=record_sides,
+        scalar_names=scalar_names,
+        batch_size=batch_size,
+        pad_token_id=pad_token_id,
+        device=device,
+    )
+    source_step = _checkpoint_step_from_path(source_checkpoint_path)
+    target_step = _checkpoint_step_from_path(target_checkpoint_path)
+    source_parameters = _model_parameter_snapshot(source_model)
+    target_parameters = _model_parameter_snapshot(target_model)
+    delta_parameters = _parameter_delta(
+        source_parameters=source_parameters,
+        target_parameters=target_parameters,
+        label=f"attention downstream update {source_step}->{target_step}",
+    )
+
+    pair_groups = _route_gradient_groups(pairs)
+    metric_rows: list[dict[str, Any]] = []
+    decomposition_rows: list[dict[str, Any]] = []
+    for (split, pair_type), group_pairs in sorted(pair_groups.items()):
+        for record_side in record_sides:
+            gradient_payloads = _compute_attention_downstream_scalar_gradients_for_pairs(
+                model=source_model,
+                pairs=group_pairs,
+                vocab=vocab,
+                head_layer=head_layer,
+                head=head,
+                score_query_role=score_query_role,
+                support_key_role=support_key_role,
+                distractor_key_role=distractor_key_role,
+                record_side=record_side,
+                scalar_names=scalar_names,
+                batch_size=batch_size,
+                pad_token_id=pad_token_id,
+                device=device,
+            )
+            for scalar_name in scalar_names:
+                actual_summary = _attention_downstream_actual_summary(
+                    actual_rows=actual_rows,
+                    split=split,
+                    pair_type=pair_type,
+                    record_side=record_side,
+                    scalar_name=scalar_name,
+                )
+                source_payload = gradient_payloads[scalar_name]
+                scalar_gradients = source_payload["gradients"]
+                if not isinstance(scalar_gradients, dict):
+                    raise TypeError("Attention downstream gradient payload must contain a gradients dictionary.")
+                dot_summary = _gradient_dot_summary(
+                    left_gradients=delta_parameters,
+                    right_gradients=scalar_gradients,
+                    label=(
+                        f"attention downstream update {source_step}->{target_step} "
+                        f"{split}/{pair_type}/{record_side}/{scalar_name}"
+                    ),
+                )
+                metric_row = _attention_downstream_update_metric_row(
+                    source_step=source_step,
+                    target_step=target_step,
+                    source_checkpoint=source_checkpoint_path,
+                    target_checkpoint=target_checkpoint_path,
+                    learning_rate=learning_rate,
+                    split=split,
+                    pair_type=pair_type,
+                    head_layer=head_layer,
+                    head=head,
+                    score_query_role=score_query_role,
+                    support_key_role=support_key_role,
+                    distractor_key_role=distractor_key_role,
+                    record_side=record_side,
+                    scalar_name=scalar_name,
+                    actual_summary=actual_summary,
+                    source_payload=source_payload,
+                    dot_summary=dot_summary,
+                    min_error_denominator=min_error_denominator,
+                )
+                metric_rows.append(metric_row)
+                for group in groups:
+                    group_dot_summary = _gradient_dot_summary_for_group(
+                        left_gradients=delta_parameters,
+                        right_gradients=scalar_gradients,
+                        group=group,
+                        label=(
+                            f"attention downstream update {source_step}->{target_step} "
+                            f"{split}/{pair_type}/{record_side}/{scalar_name}/{group.group_id}"
+                        ),
+                    )
+                    decomposition_rows.append(
+                        _attention_downstream_update_decomposition_row(
+                            metric_row=metric_row,
+                            group=group,
+                            dot_summary=group_dot_summary,
+                        )
+                    )
+    return metric_rows, decomposition_rows, actual_rows
+
+
+def _summarize_attention_downstream_update_attribution(
+    *,
+    metric_rows: list[dict[str, Any]],
+    decomposition_rows: list[dict[str, Any]],
+    top_k_groups: int,
+) -> dict[str, Any]:
+    if top_k_groups <= 0:
+        raise ValueError("top_k_groups must be positive.")
+    if not metric_rows:
+        raise ValueError("Cannot summarize attention downstream update attribution without metric rows.")
+    if not decomposition_rows:
+        raise ValueError("Cannot summarize attention downstream update attribution without decomposition rows.")
+    all_rows = [
+        row
+        for row in metric_rows
+        if str(row["split"]) == "__all__" and str(row["pair_type"]) == "__all__"
+    ]
+    if not all_rows:
+        raise RuntimeError("Attention downstream update attribution has no __all__/__all__ metric rows.")
+    final_target_step = max(int(row["target_step"]) for row in metric_rows)
+    final_rows = [row for row in all_rows if int(row["target_step"]) == final_target_step]
+    final_decomposition_rows = [
+        row
+        for row in decomposition_rows
+        if int(row["target_step"]) == final_target_step
+        and str(row["split"]) == "__all__"
+        and str(row["pair_type"]) == "__all__"
+        and str(row["group_kind"]) not in {"global_all", "parameter_tensor"}
+    ]
+    return {
+        "num_intervals": len({(int(row["source_step"]), int(row["target_step"])) for row in metric_rows}),
+        "intervals": sorted({f"{int(row['source_step'])}->{int(row['target_step'])}" for row in all_rows}),
+        "target_steps": sorted({int(row["target_step"]) for row in metric_rows}),
+        "final_target_step": final_target_step,
+        "final_metric_rows": sorted(
+            final_rows,
+            key=lambda row: (str(row["record_side"]), str(row["scalar_name"])),
+        ),
+        "all_all_sign_match_fraction": _fraction(
+            sum(1 for row in all_rows if bool(row["sign_match"])),
+            len(all_rows),
+            "attention downstream update sign_match_fraction",
+        ),
+        "all_all_mean_absolute_error": _mean([float(row["absolute_error"]) for row in all_rows]),
+        "all_all_mean_relative_error": _mean([float(row["relative_error"]) for row in all_rows]),
+        "all_all_worst_relative_error": max(all_rows, key=lambda row: float(row["relative_error"])),
+        "final_top_positive_contributions": sorted(
+            final_decomposition_rows,
+            key=lambda row: float(row["predicted_delta_contribution"]),
+            reverse=True,
+        )[:top_k_groups],
+        "final_top_negative_contributions": sorted(
+            final_decomposition_rows,
+            key=lambda row: float(row["predicted_delta_contribution"]),
+        )[:top_k_groups],
+        "final_top_abs_contributions": sorted(
+            final_decomposition_rows,
+            key=lambda row: abs(float(row["predicted_delta_contribution"])),
+            reverse=True,
+        )[:top_k_groups],
+    }
+
+
+def _plot_attention_downstream_update_actual_vs_predicted(
+    *,
+    metric_rows: list[dict[str, Any]],
+    output_path: Path,
+) -> Path | None:
+    rows = [
+        row
+        for row in metric_rows
+        if str(row["split"]) == "__all__" and str(row["pair_type"]) == "__all__"
+    ]
+    if not rows:
+        return None
+    _, plt = _import_matplotlib()
+    fig, ax = plt.subplots(figsize=(7, 7))
+    actual = [float(row["actual_delta"]) for row in rows]
+    predicted = [float(row["predicted_delta"]) for row in rows]
+    ax.scatter(predicted, actual, color="#376f8f")
+    for row in rows:
+        ax.annotate(
+            str(row["scalar_name"]),
+            (float(row["predicted_delta"]), float(row["actual_delta"])),
+            fontsize=7,
+            alpha=0.7,
+        )
+    min_value = min(actual + predicted)
+    max_value = max(actual + predicted)
+    if min_value == max_value:
+        min_value -= 1.0
+        max_value += 1.0
+    ax.plot([min_value, max_value], [min_value, max_value], color="#777777", linestyle="--", linewidth=1.0)
+    ax.axhline(0.0, color="#999999", linewidth=0.8)
+    ax.axvline(0.0, color="#999999", linewidth=0.8)
+    ax.set_title("Attention downstream update attribution: actual vs predicted")
+    ax.set_xlabel("grad(scalar) . Delta theta")
+    ax.set_ylabel("scalar(theta_target) - scalar(theta_source)")
+    ax.grid(alpha=0.25)
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, format="svg")
+    plt.close(fig)
+    return output_path
+
+
+def _plot_attention_downstream_update_top_contributions(
+    *,
+    decomposition_rows: list[dict[str, Any]],
+    top_k_groups: int,
+    output_path: Path,
+) -> Path | None:
+    if not decomposition_rows:
+        return None
+    final_target_step = max(int(row["target_step"]) for row in decomposition_rows)
+    rows = [
+        row
+        for row in decomposition_rows
+        if int(row["target_step"]) == final_target_step
+        and str(row["split"]) == "__all__"
+        and str(row["pair_type"]) == "__all__"
+        and str(row["group_kind"]) not in {"global_all", "parameter_tensor"}
+    ]
+    if not rows:
+        return None
+    top_rows = sorted(rows, key=lambda row: abs(float(row["predicted_delta_contribution"])), reverse=True)[:top_k_groups]
+    _, plt = _import_matplotlib()
+    fig, ax = plt.subplots(figsize=(13, max(5, 0.38 * len(top_rows))))
+    y_positions = list(range(len(top_rows)))
+    values = [float(row["predicted_delta_contribution"]) for row in top_rows]
+    labels = [f"{row['scalar_name']} {row['record_side']} {row['group_id']}" for row in top_rows]
+    colors = ["#376f8f" if value >= 0.0 else "#8f374a" for value in values]
+    ax.barh(y_positions, values, color=colors)
+    ax.axvline(0.0, color="#777777", linewidth=1.0, linestyle="--")
+    ax.set_yticks(y_positions)
+    ax.set_yticklabels(labels, fontsize=8)
+    ax.invert_yaxis()
+    ax.set_title(f"Top downstream scalar update contributions ending at step {final_target_step}")
+    ax.set_xlabel("grad(scalar) . Delta theta contribution")
+    ax.grid(axis="x", alpha=0.25)
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, format="svg")
+    plt.close(fig)
+    return output_path
+
+
+def _write_attention_downstream_update_attribution_markdown(
+    *,
+    path: Path,
+    report: dict[str, Any],
+    plot_paths: dict[str, Path],
+) -> None:
+    summary = report["summary"]
+    lines = [
+        "# Attention Downstream Update Attribution",
+        "",
+        "## Calculation",
+        "",
+        "This report tests whether actual checkpoint-to-checkpoint parameter movement explains downstream answer-write scalars.",
+        "",
+        "```text",
+        "actual_delta = scalar(theta_target) - scalar(theta_source)",
+        "predicted_delta = grad_theta scalar(theta_source) . (theta_target - theta_source)",
+        "residual = actual_delta - predicted_delta",
+        "```",
+        "",
+        "`head_margin_dla_fixed_readout` uses the source checkpoint answer-margin readout vector for both source and target.",
+        "That makes it a fixed-readout first-order scalar, not a moving-readout DLA claim.",
+        "",
+        "## Run",
+        "",
+        f"- head: `{report['head_label']}`",
+        f"- query role: `{report['score_query_role']}`",
+        f"- support role: `{report['support_key_role']}`",
+        f"- distractor role: `{report['distractor_key_role']}`",
+        f"- record sides: `{report['record_sides']}`",
+        f"- scalars: `{report['scalar_names']}`",
+        f"- intervals: `{summary['intervals']}`",
+        "",
+        "## Final Metrics",
+        "",
+        "| record side | scalar | actual delta | predicted delta | residual | relative error | sign match |",
+        "|---|---|---:|---:|---:|---:|---|",
+    ]
+    for row in summary["final_metric_rows"]:
+        lines.append(
+            "| `{side}` | `{scalar}` | {actual:.6g} | {predicted:.6g} | {residual:.6g} | {error:.6g} | `{sign}` |".format(
+                side=row["record_side"],
+                scalar=row["scalar_name"],
+                actual=float(row["actual_delta"]),
+                predicted=float(row["predicted_delta"]),
+                residual=float(row["residual"]),
+                error=float(row["relative_error"]),
+                sign=bool(row["sign_match"]),
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "## Top Positive Contributions",
+            "",
+            "| group | scalar | kind | contribution | cosine |",
+            "|---|---|---|---:|---:|",
+        ]
+    )
+    for row in summary["final_top_positive_contributions"]:
+        cosine = row["update_scalar_gradient_cosine"]
+        cosine_text = "" if cosine is None else f"{float(cosine):.6f}"
+        lines.append(
+            "| `{group}` | `{scalar}` | `{kind}` | {contribution:.6g} | {cosine} |".format(
+                group=row["group_id"],
+                scalar=row["scalar_name"],
+                kind=row["group_kind"],
+                contribution=float(row["predicted_delta_contribution"]),
+                cosine=cosine_text,
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "## Top Negative Contributions",
+            "",
+            "| group | scalar | kind | contribution | cosine |",
+            "|---|---|---|---:|---:|",
+        ]
+    )
+    for row in summary["final_top_negative_contributions"]:
+        cosine = row["update_scalar_gradient_cosine"]
+        cosine_text = "" if cosine is None else f"{float(cosine):.6f}"
+        lines.append(
+            "| `{group}` | `{scalar}` | `{kind}` | {contribution:.6g} | {cosine} |".format(
+                group=row["group_id"],
+                scalar=row["scalar_name"],
+                kind=row["group_kind"],
+                contribution=float(row["predicted_delta_contribution"]),
+                cosine=cosine_text,
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "## Raw Outputs",
+            "",
+            f"- metric rows: `{report['metric_rows_path']}`",
+            f"- decomposition rows: `{report['decomposition_rows_path']}`",
+            f"- group rows: `{report['group_rows_path']}`",
+            f"- scalar rows: `{report['scalar_rows_path']}`",
+            f"- pair rows: `{report['pair_rows_path']}`",
+        ]
+    )
+    if plot_paths:
+        lines.extend(["", "## Plots", ""])
+        for label, plot_path in plot_paths.items():
+            lines.append(f"- {label}: `{plot_path}`")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def run_attention_downstream_update_attribution(
+    *,
+    config_path: Path,
+    probe_set_path: Path,
+    checkpoint_dir: Path,
+    output_dir: Path,
+    head_layer: int,
+    head: int,
+    score_query_role: str,
+    support_key_role: str,
+    distractor_key_role: str,
+    pair_types: list[str],
+    device_name: str = "mps",
+    checkpoint_paths: list[Path] | None = None,
+    record_sides: list[str] | None = None,
+    scalar_names: list[str] | None = None,
+    max_pairs_per_type: int = 64,
+    min_pairs_per_type: int = 1,
+    split_filter: list[str] | None = None,
+    decomposition_modes: list[str] | None = None,
+    top_k_groups: int = 24,
+    min_error_denominator: float = 1.0e-9,
+) -> tuple[Path, Path, Path, Path, Path, Path, Path, dict[str, Path]]:
+    unsupported_roles = [
+        role
+        for role in [score_query_role, support_key_role, distractor_key_role]
+        if role not in GEOMETRY_POSITION_ROLES
+    ]
+    if unsupported_roles:
+        raise ValueError(f"Unsupported attention roles {unsupported_roles}; expected one of {GEOMETRY_POSITION_ROLES}.")
+    if support_key_role == distractor_key_role:
+        raise ValueError("support_key_role and distractor_key_role must be different.")
+    if top_k_groups <= 0:
+        raise ValueError("top_k_groups must be positive.")
+    if min_error_denominator <= 0.0:
+        raise ValueError("min_error_denominator must be positive.")
+
+    resolved_record_sides = _resolve_attention_score_record_sides(record_sides)
+    resolved_scalar_names = _resolve_attention_downstream_update_scalars(scalar_names)
+    resolved_decomposition_modes = _resolve_route_gradient_decomposition_modes(decomposition_modes)
+    spec = TrainSpec.from_path(config_path)
+    probe_records, probe_metadata = load_probe_set(probe_set_path)
+    if str(probe_metadata["benchmark_dir"]) != str(spec.benchmark_dir):
+        raise ValueError(
+            f"Probe set benchmark mismatch: probe={probe_metadata['benchmark_dir']} config={spec.benchmark_dir}"
+        )
+    metadata = read_symbolic_kv_stream_metadata(spec.benchmark_dir)
+    vocab = Vocabulary.from_metadata(metadata["vocabulary"])
+    holdout_pairs = _holdout_pair_set(metadata)
+    device = require_device(device_name)
+    checkpoints = _resolve_checkpoint_paths(checkpoint_dir=checkpoint_dir, checkpoint_paths=checkpoint_paths)
+    if len(checkpoints) < 2:
+        raise ValueError("attention-downstream-update-attribution requires at least two checkpoints.")
+    source_model = build_model(spec.model, len(vocab.tokens), device)
+    target_model = build_model(spec.model, len(vocab.tokens), device)
+    if head_layer < 0 or head_layer >= len(source_model.blocks):
+        raise ValueError(f"head_layer {head_layer} outside model range 0..{len(source_model.blocks) - 1}.")
+    if head < 0 or head >= source_model.blocks[head_layer].attn.n_heads:
+        raise ValueError(
+            f"head {head} outside model range 0..{source_model.blocks[head_layer].attn.n_heads - 1} for layer {head_layer}."
+        )
+    pair_types = sorted(set(pair_types), key=pair_types.index)
+    pairs, pair_construction = _build_causal_patch_pairs(
+        probe_records=probe_records,
+        vocab=vocab,
+        holdout_pairs=holdout_pairs,
+        pair_types=pair_types,
+        max_pairs_per_type=max_pairs_per_type,
+        min_pairs_per_type=min_pairs_per_type,
+        split_filter=split_filter,
+    )
+    if not pairs:
+        raise RuntimeError("Attention downstream update attribution constructed no pairs.")
+
+    groups, decomposition_summary = _build_route_gradient_decomposition_groups(
+        model=source_model,
+        decomposition_modes=resolved_decomposition_modes,
+    )
+    group_rows = [
+        _group_metadata(
+            model_parameters=dict(source_model.named_parameters(remove_duplicate=False)),
+            group=group,
+        )
+        for group in groups
+    ]
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    metric_rows_path = output_dir / "attention_downstream_update_attribution_rows.jsonl"
+    decomposition_rows_path = output_dir / "attention_downstream_update_attribution_decomposition_rows.jsonl"
+    group_rows_path = output_dir / "attention_downstream_update_attribution_groups.jsonl"
+    scalar_rows_path = output_dir / "attention_downstream_update_attribution_scalar_rows.jsonl"
+    pair_rows_path = output_dir / "attention_downstream_update_attribution_pairs.jsonl"
+    progress_path = output_dir / "attention_downstream_update_attribution_progress.json"
+    for partial_path in (
+        metric_rows_path,
+        decomposition_rows_path,
+        group_rows_path,
+        scalar_rows_path,
+        pair_rows_path,
+        progress_path,
+    ):
+        if partial_path.exists():
+            partial_path.unlink()
+    write_jsonl(pair_rows_path, [_pair_metadata(pair) for pair in pairs])
+    write_jsonl(group_rows_path, group_rows)
+
+    intervals = list(zip(checkpoints[:-1], checkpoints[1:], strict=True))
+    print(
+        "[attention-downstream-update-attribution] "
+        f"intervals={len(intervals)} checkpoints={len(checkpoints)} pairs={len(pairs)} "
+        f"pair_types={pair_types} device={device_name} head={_head_label(head_layer, head)} "
+        f"query_role={score_query_role} support={support_key_role} distractor={distractor_key_role} "
+        f"record_sides={resolved_record_sides} scalars={resolved_scalar_names} groups={len(groups)}",
+        flush=True,
+    )
+
+    all_metric_rows: list[dict[str, Any]] = []
+    all_decomposition_rows: list[dict[str, Any]] = []
+    all_scalar_rows: list[dict[str, Any]] = []
+    for interval_index, (source_checkpoint_path, target_checkpoint_path) in enumerate(intervals, start=1):
+        source_step = _checkpoint_step_from_path(source_checkpoint_path)
+        target_step = _checkpoint_step_from_path(target_checkpoint_path)
+        learning_rate = _compute_learning_rate(spec.optimization, source_step)
+        print(
+            "[attention-downstream-update-attribution] starting "
+            f"{interval_index}/{len(intervals)} {source_checkpoint_path.name}->{target_checkpoint_path.name}",
+            flush=True,
+        )
+        metric_rows, decomposition_rows, scalar_rows = _compute_attention_downstream_update_attribution_interval(
+            source_model=source_model,
+            target_model=target_model,
+            source_checkpoint_path=source_checkpoint_path,
+            target_checkpoint_path=target_checkpoint_path,
+            pairs=pairs,
+            vocab=vocab,
+            learning_rate=learning_rate,
+            head_layer=head_layer,
+            head=head,
+            score_query_role=score_query_role,
+            support_key_role=support_key_role,
+            distractor_key_role=distractor_key_role,
+            record_sides=resolved_record_sides,
+            scalar_names=resolved_scalar_names,
+            batch_size=spec.evaluation.batch_size,
+            pad_token_id=vocab.pad_token_id,
+            device=device,
+            groups=groups,
+            min_error_denominator=min_error_denominator,
+        )
+        for row in metric_rows:
+            append_jsonl(metric_rows_path, row)
+        for row in decomposition_rows:
+            append_jsonl(decomposition_rows_path, row)
+        for row in scalar_rows:
+            append_jsonl(scalar_rows_path, row)
+        all_metric_rows.extend(metric_rows)
+        all_decomposition_rows.extend(decomposition_rows)
+        all_scalar_rows.extend(scalar_rows)
+        all_row = next(
+            row
+            for row in metric_rows
+            if str(row["split"]) == "__all__"
+            and str(row["pair_type"]) == "__all__"
+            and str(row["record_side"]) == resolved_record_sides[0]
+            and str(row["scalar_name"]) == resolved_scalar_names[0]
+        )
+        print(
+            "[attention-downstream-update-attribution] finished "
+            f"{source_step}->{target_step} scalar={all_row['scalar_name']} "
+            f"actual_delta={float(all_row['actual_delta']):.6g} "
+            f"predicted_delta={float(all_row['predicted_delta']):.6g} "
+            f"relative_error={float(all_row['relative_error']):.6g} "
+            f"sign_match={all_row['sign_match']}",
+            flush=True,
+        )
+        write_json(
+            progress_path,
+            {
+                "status": "running",
+                "completed_intervals": interval_index,
+                "total_intervals": len(intervals),
+                "last_source_step": source_step,
+                "last_target_step": target_step,
+                "metric_rows_path": str(metric_rows_path),
+                "decomposition_rows_path": str(decomposition_rows_path),
+                "scalar_rows_path": str(scalar_rows_path),
+            },
+        )
+
+    summary = _summarize_attention_downstream_update_attribution(
+        metric_rows=all_metric_rows,
+        decomposition_rows=all_decomposition_rows,
+        top_k_groups=top_k_groups,
+    )
+    plot_paths: dict[str, Path] = {}
+    actual_vs_predicted_plot = _plot_attention_downstream_update_actual_vs_predicted(
+        metric_rows=all_metric_rows,
+        output_path=output_dir / "attention_downstream_update_actual_vs_predicted.svg",
+    )
+    if actual_vs_predicted_plot is not None:
+        plot_paths["actual_vs_predicted"] = actual_vs_predicted_plot
+    top_contributions_plot = _plot_attention_downstream_update_top_contributions(
+        decomposition_rows=all_decomposition_rows,
+        top_k_groups=top_k_groups,
+        output_path=output_dir / "attention_downstream_update_top_contributions.svg",
+    )
+    if top_contributions_plot is not None:
+        plot_paths["top_contributions"] = top_contributions_plot
+
+    report_path = output_dir / "attention_downstream_update_attribution_report.json"
+    markdown_path = output_dir / "attention_downstream_update_attribution_report.md"
+    report = {
+        "schema_version": ATTENTION_DOWNSTREAM_UPDATE_ATTRIBUTION_SCHEMA_VERSION,
+        "config_path": str(config_path),
+        "probe_set_path": str(probe_set_path),
+        "checkpoint_dir": str(checkpoint_dir),
+        "device": device_name,
+        "head_layer": head_layer,
+        "head": head,
+        "head_label": _head_label(head_layer, head),
+        "score_query_role": score_query_role,
+        "support_key_role": support_key_role,
+        "distractor_key_role": distractor_key_role,
+        "record_sides": resolved_record_sides,
+        "scalar_names": resolved_scalar_names,
+        "pair_types": pair_types,
+        "max_pairs_per_type": max_pairs_per_type,
+        "min_pairs_per_type": min_pairs_per_type,
+        "split_filter": split_filter,
+        "decomposition": decomposition_summary,
+        "top_k_groups": top_k_groups,
+        "min_error_denominator": min_error_denominator,
+        "calculation": {
+            "actual_delta": "scalar(theta_target) - scalar(theta_source)",
+            "predicted_delta": "grad_theta scalar(theta_source) . (theta_target - theta_source)",
+            "head_margin_dla_fixed_readout": (
+                "head output at the query role dotted with the source checkpoint answer-margin readout vector"
+            ),
+            "negative_answer_loss": "-cross_entropy(answer_logits, answer_target)",
+            "group_contribution": "grad_group scalar(theta_source) . Delta theta_group",
+        },
+        "pair_construction": pair_construction,
+        "metric_rows_path": str(metric_rows_path),
+        "decomposition_rows_path": str(decomposition_rows_path),
+        "group_rows_path": str(group_rows_path),
+        "scalar_rows_path": str(scalar_rows_path),
+        "pair_rows_path": str(pair_rows_path),
+        "summary": summary,
+    }
+    write_json(report_path, report)
+    _write_attention_downstream_update_attribution_markdown(path=markdown_path, report=report, plot_paths=plot_paths)
+    write_json(
+        progress_path,
+        {
+            "status": "complete",
+            "completed_intervals": len(intervals),
+            "total_intervals": len(intervals),
+            "last_target_step": int(summary["final_target_step"]),
+            "report_path": str(report_path),
+            "markdown_path": str(markdown_path),
+            "metric_rows_path": str(metric_rows_path),
+            "decomposition_rows_path": str(decomposition_rows_path),
+            "group_rows_path": str(group_rows_path),
+            "scalar_rows_path": str(scalar_rows_path),
+            "pair_rows_path": str(pair_rows_path),
+        },
+    )
+    print(
+        f"[attention-downstream-update-attribution] complete report={report_path} rows={metric_rows_path}",
+        flush=True,
+    )
+    return (
+        report_path,
+        markdown_path,
+        metric_rows_path,
+        decomposition_rows_path,
+        group_rows_path,
+        scalar_rows_path,
+        pair_rows_path,
+        plot_paths,
+    )
+
+
+def run_checkpoint_update_attribution(
+    *,
+    config_path: Path,
+    probe_set_path: Path,
+    checkpoint_dir: Path,
+    output_dir: Path,
+    stage_name: str,
+    subspace_name: str,
+    position_role: str,
+    pair_types: list[str],
+    rank: int | None = None,
+    device_name: str = "mps",
+    checkpoint_paths: list[Path] | None = None,
+    head_layer: int | None = None,
+    head: int | None = None,
+    max_pairs_per_type: int = 64,
+    min_pairs_per_type: int = 1,
+    split_filter: list[str] | None = None,
+    decomposition_modes: list[str] | None = None,
+    top_k_groups: int = 24,
+    min_error_denominator: float = 1.0e-9,
+) -> tuple[Path, Path, Path, Path, Path, Path, dict[str, Path]]:
+    if top_k_groups <= 0:
+        raise ValueError("top_k_groups must be positive.")
+    if min_error_denominator <= 0.0:
+        raise ValueError("min_error_denominator must be positive.")
+    resolved_decomposition_modes = _resolve_route_gradient_decomposition_modes(decomposition_modes)
+    spec = TrainSpec.from_path(config_path)
+    probe_records, probe_metadata = load_probe_set(probe_set_path)
+    if str(probe_metadata["benchmark_dir"]) != str(spec.benchmark_dir):
+        raise ValueError(
+            f"Probe set benchmark mismatch: probe={probe_metadata['benchmark_dir']} config={spec.benchmark_dir}"
+        )
+    metadata = read_symbolic_kv_stream_metadata(spec.benchmark_dir)
+    vocab = Vocabulary.from_metadata(metadata["vocabulary"])
+    holdout_pairs = _holdout_pair_set(metadata)
+    device = require_device(device_name)
+    checkpoints = _resolve_checkpoint_paths(checkpoint_dir=checkpoint_dir, checkpoint_paths=checkpoint_paths)
+    if len(checkpoints) < 2:
+        raise ValueError("checkpoint-update-attribution requires at least two checkpoints.")
+    model = build_model(spec.model, len(vocab.tokens), device)
+    _validate_geometry_stage(model=model, stage_name=stage_name)
+    if position_role not in GEOMETRY_POSITION_ROLES:
+        raise ValueError(f"Unsupported position role {position_role!r}; expected one of {GEOMETRY_POSITION_ROLES}.")
+    pair_types = sorted(set(pair_types), key=pair_types.index)
+    pairs, pair_construction = _build_causal_patch_pairs(
+        probe_records=probe_records,
+        vocab=vocab,
+        holdout_pairs=holdout_pairs,
+        pair_types=pair_types,
+        max_pairs_per_type=max_pairs_per_type,
+        min_pairs_per_type=min_pairs_per_type,
+        split_filter=split_filter,
+    )
+    if not pairs:
+        raise RuntimeError("Checkpoint update attribution constructed no pairs.")
+
+    groups, decomposition_summary = _build_route_gradient_decomposition_groups(
+        model=model,
+        decomposition_modes=resolved_decomposition_modes,
+    )
+    group_rows = [
+        _group_metadata(
+            model_parameters=dict(model.named_parameters(remove_duplicate=False)),
+            group=group,
+        )
+        for group in groups
+    ]
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    metric_rows_path = output_dir / "checkpoint_update_attribution_rows.jsonl"
+    decomposition_rows_path = output_dir / "checkpoint_update_attribution_decomposition_rows.jsonl"
+    group_rows_path = output_dir / "checkpoint_update_attribution_groups.jsonl"
+    pair_rows_path = output_dir / "checkpoint_update_attribution_pairs.jsonl"
+    progress_path = output_dir / "checkpoint_update_attribution_progress.json"
+    for partial_path in (metric_rows_path, decomposition_rows_path, group_rows_path, pair_rows_path, progress_path):
+        if partial_path.exists():
+            partial_path.unlink()
+    write_jsonl(pair_rows_path, [_pair_metadata(pair) for pair in pairs])
+    write_jsonl(group_rows_path, group_rows)
+
+    intervals = list(zip(checkpoints[:-1], checkpoints[1:], strict=True))
+    print(
+        "[checkpoint-update-attribution] "
+        f"intervals={len(intervals)} checkpoints={len(checkpoints)} pairs={len(pairs)} pair_types={pair_types} "
+        f"device={device_name} subspace={subspace_name} rank={rank} stage={stage_name} "
+        f"role={position_role} groups={len(groups)} basis_mode=source_checkpoint",
+        flush=True,
+    )
+
+    all_metric_rows: list[dict[str, Any]] = []
+    all_decomposition_rows: list[dict[str, Any]] = []
+    final_subspace_summary: dict[str, Any] | None = None
+    for interval_index, (source_checkpoint_path, target_checkpoint_path) in enumerate(intervals, start=1):
+        source_step = _checkpoint_step_from_path(source_checkpoint_path)
+        target_step = _checkpoint_step_from_path(target_checkpoint_path)
+        learning_rate = _compute_learning_rate(spec.optimization, source_step)
+        print(
+            "[checkpoint-update-attribution] starting "
+            f"{interval_index}/{len(intervals)} {source_checkpoint_path.name}->{target_checkpoint_path.name}",
+            flush=True,
+        )
+        metric_rows, decomposition_rows, subspace_summary = _compute_checkpoint_update_attribution_interval(
+            model=model,
+            source_checkpoint_path=source_checkpoint_path,
+            target_checkpoint_path=target_checkpoint_path,
+            pairs=pairs,
+            vocab=vocab,
+            learning_rate=learning_rate,
+            subspace_name=subspace_name,
+            rank=rank,
+            head_layer=head_layer,
+            head=head,
+            stage_name=stage_name,
+            position_role=position_role,
+            batch_size=spec.evaluation.batch_size,
+            pad_token_id=vocab.pad_token_id,
+            device=device,
+            groups=groups,
+            min_error_denominator=min_error_denominator,
+        )
+        final_subspace_summary = subspace_summary
+        for row in metric_rows:
+            append_jsonl(metric_rows_path, row)
+        for row in decomposition_rows:
+            append_jsonl(decomposition_rows_path, row)
+        all_metric_rows.extend(metric_rows)
+        all_decomposition_rows.extend(decomposition_rows)
+        write_json(
+            progress_path,
+            {
+                "status": "running",
+                "completed_intervals": interval_index,
+                "total_intervals": len(intervals),
+                "last_source_step": source_step,
+                "last_target_step": target_step,
+                "metric_rows_path": str(metric_rows_path),
+                "decomposition_rows_path": str(decomposition_rows_path),
+                "group_rows_path": str(group_rows_path),
+                "pair_rows_path": str(pair_rows_path),
+            },
+        )
+        all_row = next(
+            row
+            for row in metric_rows
+            if str(row["split"]) == "__all__" and str(row["pair_type"]) == "__all__"
+        )
+        print(
+            "[checkpoint-update-attribution] finished "
+            f"{source_step}->{target_step} actual_delta={float(all_row['actual_delta']):.6g} "
+            f"predicted_delta={float(all_row['predicted_delta']):.6g} "
+            f"relative_error={float(all_row['relative_error']):.6g} "
+            f"sign_match={all_row['sign_match']}",
+            flush=True,
+        )
+
+    if final_subspace_summary is None:
+        raise RuntimeError("No checkpoint intervals were processed for checkpoint update attribution.")
+    summary = _summarize_checkpoint_update_attribution(
+        metric_rows=all_metric_rows,
+        decomposition_rows=all_decomposition_rows,
+        top_k_groups=top_k_groups,
+    )
+    report_path = output_dir / "checkpoint_update_attribution_report.json"
+    markdown_path = output_dir / "checkpoint_update_attribution_report.md"
+    plot_paths: dict[str, Path] = {}
+    actual_vs_predicted_plot = _plot_checkpoint_update_actual_vs_predicted(
+        metric_rows=all_metric_rows,
+        output_path=output_dir / "checkpoint_update_actual_vs_predicted.svg",
+    )
+    if actual_vs_predicted_plot is not None:
+        plot_paths["actual_vs_predicted"] = actual_vs_predicted_plot
+    relative_error_plot = _plot_checkpoint_update_relative_error(
+        metric_rows=all_metric_rows,
+        output_path=output_dir / "checkpoint_update_relative_error.svg",
+    )
+    if relative_error_plot is not None:
+        plot_paths["relative_error"] = relative_error_plot
+    top_contributions_plot = _plot_checkpoint_update_top_contributions(
+        decomposition_rows=all_decomposition_rows,
+        top_k_groups=top_k_groups,
+        output_path=output_dir / "checkpoint_update_top_contributions.svg",
+    )
+    if top_contributions_plot is not None:
+        plot_paths["top_contributions"] = top_contributions_plot
+
+    report = {
+        "schema_version": CHECKPOINT_UPDATE_ATTRIBUTION_SCHEMA_VERSION,
+        "config_path": str(config_path),
+        "probe_set_path": str(probe_set_path),
+        "checkpoint_dir": str(checkpoint_dir),
+        "device": device_name,
+        "stage": stage_name,
+        "subspace": final_subspace_summary,
+        "subspace_name": subspace_name,
+        "rank": rank,
+        "position_role": position_role,
+        "pair_types": pair_types,
+        "max_pairs_per_type": max_pairs_per_type,
+        "min_pairs_per_type": min_pairs_per_type,
+        "split_filter": split_filter,
+        "basis_mode": "source_checkpoint_per_interval",
+        "decomposition": decomposition_summary,
+        "top_k_groups": top_k_groups,
+        "min_error_denominator": min_error_denominator,
+        "calculation": {
+            "route_score": "patched_transfer_margin - corrupted_transfer_margin",
+            "actual_delta": "route_score(theta_target; source_basis) - route_score(theta_source; source_basis)",
+            "predicted_delta": "grad_theta route_score(theta_source; source_basis) . (theta_target - theta_source)",
+            "residual": "actual_delta - predicted_delta",
+            "relative_error": "abs(residual) / max(abs(actual_delta), min_error_denominator)",
+            "basis_warning": "Head/embedding subspace basis is fixed from the source checkpoint for each interval.",
+            "group_contribution": "grad_group route_score(theta_source; source_basis) . Delta theta_group",
+        },
+        "pair_construction": pair_construction,
+        "metric_rows_path": str(metric_rows_path),
+        "decomposition_rows_path": str(decomposition_rows_path),
+        "group_rows_path": str(group_rows_path),
+        "pair_rows_path": str(pair_rows_path),
+        "summary": summary,
+    }
+    write_json(report_path, report)
+    _write_checkpoint_update_attribution_markdown(path=markdown_path, report=report, plot_paths=plot_paths)
+    write_json(
+        progress_path,
+        {
+            "status": "complete",
+            "completed_intervals": len(intervals),
+            "total_intervals": len(intervals),
+            "last_source_step": int(summary["final_all"]["source_step"]),
+            "last_target_step": int(summary["final_all"]["target_step"]),
+            "report_path": str(report_path),
+            "markdown_path": str(markdown_path),
+            "metric_rows_path": str(metric_rows_path),
+            "decomposition_rows_path": str(decomposition_rows_path),
+            "group_rows_path": str(group_rows_path),
+            "pair_rows_path": str(pair_rows_path),
+        },
+    )
+    print(
+        f"[checkpoint-update-attribution] complete report={report_path} rows={metric_rows_path}",
+        flush=True,
+    )
+    return report_path, markdown_path, metric_rows_path, decomposition_rows_path, group_rows_path, pair_rows_path, plot_paths
+
+
+def _data_update_group_value(*, pair: dict[str, Any], field_name: str) -> str:
+    if not field_name:
+        raise ValueError("Data update group field names must be non-empty.")
+    current: Any = _pair_metadata(pair)
+    traversed: list[str] = []
+    for part in field_name.split("."):
+        traversed.append(part)
+        if not isinstance(current, dict):
+            path = ".".join(traversed[:-1])
+            raise ValueError(
+                f"Cannot read data group field {field_name!r}: {path!r} is not an object."
+            )
+        if part not in current:
+            available = sorted(str(key) for key in current)
+            raise KeyError(
+                f"Data group field {field_name!r} is missing at {'.'.join(traversed)!r}; "
+                f"available keys: {available}"
+            )
+        current = current[part]
+    if isinstance(current, (dict, list, tuple)):
+        raise ValueError(
+            f"Data group field {field_name!r} resolved to a non-scalar value of type {type(current).__name__}."
+        )
+    if current is None:
+        raise ValueError(f"Data group field {field_name!r} resolved to None.")
+    return str(current)
+
+
+def _data_update_group_id(*, fields: list[str], values: tuple[str, ...]) -> str:
+    if len(fields) != len(values):
+        raise RuntimeError("Data update group fields and values have different lengths.")
+    return "|".join(f"{field}={value}" for field, value in zip(fields, values, strict=True))
+
+
+def _group_pairs_for_data_update(
+    *,
+    pairs: list[dict[str, Any]],
+    data_group_fields: list[str],
+) -> list[dict[str, Any]]:
+    if not pairs:
+        raise ValueError("Cannot build data update groups from no pairs.")
+    if not data_group_fields:
+        raise ValueError("At least one data group field is required.")
+    groups: dict[tuple[str, ...], list[dict[str, Any]]] = defaultdict(list)
+    for pair in pairs:
+        values = tuple(
+            _data_update_group_value(pair=pair, field_name=field_name)
+            for field_name in data_group_fields
+        )
+        groups[values].append(pair)
+    rows = [
+        {
+            "data_group_id": "__all__",
+            "data_group_values": {},
+            "pairs": list(pairs),
+        }
+    ]
+    for values, group_pairs in sorted(groups.items(), key=lambda item: item[0]):
+        rows.append(
+            {
+                "data_group_id": _data_update_group_id(fields=data_group_fields, values=values),
+                "data_group_values": dict(zip(data_group_fields, values, strict=True)),
+                "pairs": group_pairs,
+            }
+        )
+    return rows
+
+
+def _route_objective_pairs(
+    *,
+    pairs: list[dict[str, Any]],
+    route_split: str,
+    route_pair_type: str,
+) -> list[dict[str, Any]]:
+    if not pairs:
+        raise ValueError("Cannot select a route objective from no pairs.")
+    available_splits = sorted({str(pair["split"]) for pair in pairs})
+    available_pair_types = sorted({str(pair["pair_type"]) for pair in pairs})
+    if route_split != "__all__" and route_split not in available_splits:
+        raise ValueError(f"route_split {route_split!r} is not available; expected one of {available_splits} or '__all__'.")
+    if route_pair_type != "__all__" and route_pair_type not in available_pair_types:
+        raise ValueError(
+            f"route_pair_type {route_pair_type!r} is not available; expected one of {available_pair_types} or '__all__'."
+        )
+    selected = [
+        pair
+        for pair in pairs
+        if (route_split == "__all__" or str(pair["split"]) == route_split)
+        and (route_pair_type == "__all__" or str(pair["pair_type"]) == route_pair_type)
+    ]
+    if not selected:
+        raise RuntimeError(
+            f"Route objective selected no pairs for route_split={route_split!r} route_pair_type={route_pair_type!r}."
+        )
+    return selected
+
+
+def _data_update_route_metric_row(
+    *,
+    source_step: int,
+    target_step: int,
+    source_checkpoint: Path,
+    target_checkpoint: Path,
+    learning_rate: float,
+    route_split: str,
+    route_pair_type: str,
+    stage_name: str,
+    subspace_name: str,
+    subspace_summary: dict[str, Any],
+    rank: int | None,
+    position_role: str,
+    source_payload: dict[str, Any],
+    target_payload: dict[str, Any],
+    dot_summary: dict[str, float | int | None],
+    min_error_denominator: float,
+) -> dict[str, Any]:
+    return _checkpoint_update_metric_row(
+        source_step=source_step,
+        target_step=target_step,
+        source_checkpoint=source_checkpoint,
+        target_checkpoint=target_checkpoint,
+        learning_rate=learning_rate,
+        split=route_split,
+        pair_type=route_pair_type,
+        stage_name=stage_name,
+        subspace_name=subspace_name,
+        subspace_summary=subspace_summary,
+        rank=rank,
+        position_role=position_role,
+        source_payload=source_payload,
+        target_payload=target_payload,
+        dot_summary=dot_summary,
+        min_error_denominator=min_error_denominator,
+    )
+
+
+def _data_update_group_row(
+    *,
+    route_metric_row: dict[str, Any],
+    data_group_id: str,
+    data_group_values: dict[str, str],
+    loss_side: str,
+    loss_payload: dict[str, Any],
+    loss_route_dot_summary: dict[str, float | int | None],
+    loss_update_dot_summary: dict[str, float | int | None],
+) -> dict[str, Any]:
+    loss_dot_route = float(loss_route_dot_summary["dot"])
+    negative_loss_dot_route = -loss_dot_route
+    loss_dot_update = float(loss_update_dot_summary["dot"])
+    negative_loss_dot_update = -loss_dot_update
+    loss_gradient_l2_norm = float(loss_route_dot_summary["left_l2_norm"])
+    route_gradient_l2_norm = float(loss_route_dot_summary["right_l2_norm"])
+    parameter_delta_l2_norm = float(loss_update_dot_summary["right_l2_norm"])
+    return {
+        "source_step": int(route_metric_row["source_step"]),
+        "target_step": int(route_metric_row["target_step"]),
+        "step_gap": int(route_metric_row["step_gap"]),
+        "source_checkpoint": route_metric_row["source_checkpoint"],
+        "target_checkpoint": route_metric_row["target_checkpoint"],
+        "learning_rate": float(route_metric_row["learning_rate"]),
+        "route_split": route_metric_row["split"],
+        "route_pair_type": route_metric_row["pair_type"],
+        "stage": route_metric_row["stage"],
+        "subspace_name": route_metric_row["subspace_name"],
+        "subspace_type": route_metric_row["subspace_type"],
+        "head_label": route_metric_row["head_label"],
+        "rank": route_metric_row["rank"],
+        "position_role": route_metric_row["position_role"],
+        "data_group_id": data_group_id,
+        "data_group_values": data_group_values,
+        "loss_side": loss_side,
+        "loss": float(loss_payload["loss"]),
+        "loss_num_records": int(loss_payload["num_records"]),
+        "loss_num_tokens": int(loss_payload["num_tokens"]),
+        "source_route_score": float(route_metric_row["source_route_score"]),
+        "target_route_score": float(route_metric_row["target_route_score"]),
+        "actual_route_delta": float(route_metric_row["actual_delta"]),
+        "actual_update_predicted_route_delta": float(route_metric_row["predicted_delta"]),
+        "actual_update_route_residual": float(route_metric_row["residual"]),
+        "actual_update_route_relative_error": float(route_metric_row["relative_error"]),
+        "actual_update_route_sign_match": bool(route_metric_row["sign_match"]),
+        "loss_gradient_l2_norm": loss_gradient_l2_norm,
+        "route_gradient_l2_norm": route_gradient_l2_norm,
+        "parameter_delta_l2_norm": parameter_delta_l2_norm,
+        "loss_dot_route_gradient": loss_dot_route,
+        "negative_loss_dot_route_gradient": negative_loss_dot_route,
+        "loss_negative_route_gradient_cosine": _safe_ratio(
+            negative_loss_dot_route,
+            loss_gradient_l2_norm * route_gradient_l2_norm,
+        ),
+        "local_sgd_route_delta_linearized": float(route_metric_row["learning_rate"]) * negative_loss_dot_route,
+        "loss_dot_actual_update": loss_dot_update,
+        "negative_loss_dot_actual_update": negative_loss_dot_update,
+        "loss_delta_under_actual_update_linearized": loss_dot_update,
+        "loss_reduction_under_actual_update_linearized": negative_loss_dot_update,
+        "loss_negative_actual_update_cosine": _safe_ratio(
+            negative_loss_dot_update,
+            loss_gradient_l2_norm * parameter_delta_l2_norm,
+        ),
+        "loss_route_gradient_cosine": loss_route_dot_summary["cosine"],
+        "loss_actual_update_cosine": loss_update_dot_summary["cosine"],
+    }
+
+
+def _compute_data_update_attribution_interval(
+    *,
+    model: torch.nn.Module,
+    source_checkpoint_path: Path,
+    target_checkpoint_path: Path,
+    pairs: list[dict[str, Any]],
+    route_pairs: list[dict[str, Any]],
+    data_groups: list[dict[str, Any]],
+    vocab: Vocabulary,
+    learning_rate: float,
+    route_split: str,
+    route_pair_type: str,
+    subspace_name: str,
+    rank: int | None,
+    head_layer: int | None,
+    head: int | None,
+    stage_name: str,
+    position_role: str,
+    loss_side: str,
+    batch_size: int,
+    pad_token_id: int,
+    device: torch.device,
+    min_error_denominator: float,
+) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
+    if not pairs:
+        raise ValueError("Data update attribution requires at least one pair.")
+    if not route_pairs:
+        raise ValueError("Data update attribution requires at least one route pair.")
+    if not data_groups:
+        raise ValueError("Data update attribution requires at least one data group.")
+
+    source_checkpoint = load_checkpoint(source_checkpoint_path, device)
+    load_model_state(model, source_checkpoint["model_state"])
+    model.eval()
+    source_step = int(source_checkpoint["step"])
+    source_path_step = _checkpoint_step_from_path(source_checkpoint_path)
+    if source_step != source_path_step:
+        raise RuntimeError(
+            f"Source checkpoint step mismatch for {source_checkpoint_path}: payload={source_step} path={source_path_step}"
+        )
+    source_parameters = _model_parameter_snapshot(model)
+    basis, subspace_summary = _resolve_causal_patch_basis(
+        model=model,
+        vocab=vocab,
+        subspace_name=subspace_name,
+        rank=rank,
+        head_layer=head_layer,
+        head=head,
+        device=device,
+    )
+    source_route_payload = _compute_route_score_gradient_for_pairs(
+        model=model,
+        pairs=route_pairs,
+        vocab=vocab,
+        basis=basis,
+        stage_name=stage_name,
+        position_role=position_role,
+        batch_size=batch_size,
+        pad_token_id=pad_token_id,
+        device=device,
+    )
+    route_gradients = source_route_payload["gradients"]
+    if not isinstance(route_gradients, dict):
+        raise TypeError("Route gradient payload must contain a gradients dictionary.")
+
+    loss_payloads: dict[str, dict[str, Any]] = {}
+    for group in data_groups:
+        loss_records = _loss_records_for_pairs(pairs=group["pairs"], loss_side=loss_side)
+        loss_payloads[str(group["data_group_id"])] = _compute_loss_gradient_for_records(
+            model=model,
+            records=loss_records,
+            batch_size=batch_size,
+            pad_token_id=pad_token_id,
+            device=device,
+        )
+
+    target_checkpoint = load_checkpoint(target_checkpoint_path, device)
+    load_model_state(model, target_checkpoint["model_state"])
+    model.eval()
+    target_step = int(target_checkpoint["step"])
+    target_path_step = _checkpoint_step_from_path(target_checkpoint_path)
+    if target_step != target_path_step:
+        raise RuntimeError(
+            f"Target checkpoint step mismatch for {target_checkpoint_path}: payload={target_step} path={target_path_step}"
+        )
+    if target_step <= source_step:
+        raise ValueError(f"Data update attribution requires increasing steps, got source={source_step} target={target_step}.")
+    target_parameters = _model_parameter_snapshot(model)
+    delta_parameters = _parameter_delta(
+        source_parameters=source_parameters,
+        target_parameters=target_parameters,
+        label=f"{source_step}->{target_step}",
+    )
+    target_route_payload = _compute_route_score_for_pairs(
+        model=model,
+        pairs=route_pairs,
+        vocab=vocab,
+        basis=basis,
+        stage_name=stage_name,
+        position_role=position_role,
+        batch_size=batch_size,
+        pad_token_id=pad_token_id,
+        device=device,
+    )
+    update_route_dot_summary = _gradient_dot_summary(
+        left_gradients=delta_parameters,
+        right_gradients=route_gradients,
+        label=f"data update route objective {source_step}->{target_step} {route_split}/{route_pair_type}",
+    )
+    route_metric_row = _data_update_route_metric_row(
+        source_step=source_step,
+        target_step=target_step,
+        source_checkpoint=source_checkpoint_path,
+        target_checkpoint=target_checkpoint_path,
+        learning_rate=learning_rate,
+        route_split=route_split,
+        route_pair_type=route_pair_type,
+        stage_name=stage_name,
+        subspace_name=subspace_name,
+        subspace_summary=subspace_summary,
+        rank=rank,
+        position_role=position_role,
+        source_payload=source_route_payload,
+        target_payload=target_route_payload,
+        dot_summary=update_route_dot_summary,
+        min_error_denominator=min_error_denominator,
+    )
+
+    data_rows: list[dict[str, Any]] = []
+    for group in data_groups:
+        group_id = str(group["data_group_id"])
+        loss_payload = loss_payloads[group_id]
+        loss_gradients = loss_payload["gradients"]
+        if not isinstance(loss_gradients, dict):
+            raise TypeError("Loss gradient payload must contain a gradients dictionary.")
+        loss_route_dot_summary = _gradient_dot_summary(
+            left_gradients=loss_gradients,
+            right_gradients=route_gradients,
+            label=f"data update loss-route {source_step}->{target_step} {group_id}",
+        )
+        loss_update_dot_summary = _gradient_dot_summary(
+            left_gradients=loss_gradients,
+            right_gradients=delta_parameters,
+            label=f"data update loss-actual-update {source_step}->{target_step} {group_id}",
+        )
+        data_rows.append(
+            _data_update_group_row(
+                route_metric_row=route_metric_row,
+                data_group_id=group_id,
+                data_group_values=group["data_group_values"],
+                loss_side=loss_side,
+                loss_payload=loss_payload,
+                loss_route_dot_summary=loss_route_dot_summary,
+                loss_update_dot_summary=loss_update_dot_summary,
+            )
+        )
+
+    return route_metric_row, data_rows, subspace_summary
+
+
+def _summarize_data_update_attribution(
+    *,
+    route_rows: list[dict[str, Any]],
+    data_rows: list[dict[str, Any]],
+    top_k_data_groups: int,
+) -> dict[str, Any]:
+    if top_k_data_groups <= 0:
+        raise ValueError("top_k_data_groups must be positive.")
+    if not route_rows:
+        raise ValueError("Cannot summarize data update attribution without route rows.")
+    if not data_rows:
+        raise ValueError("Cannot summarize data update attribution without data rows.")
+    final_target_step = max(int(row["target_step"]) for row in route_rows)
+    final_route_rows = [row for row in route_rows if int(row["target_step"]) == final_target_step]
+    if len(final_route_rows) != 1:
+        raise RuntimeError(f"Expected one final route row at target step {final_target_step}, got {len(final_route_rows)}.")
+    final_data_rows = [
+        row
+        for row in data_rows
+        if int(row["target_step"]) == final_target_step
+    ]
+    non_all_final = [row for row in final_data_rows if str(row["data_group_id"]) != "__all__"]
+    return {
+        "num_intervals": len({(int(row["source_step"]), int(row["target_step"])) for row in route_rows}),
+        "intervals": sorted({f"{int(row['source_step'])}->{int(row['target_step'])}" for row in route_rows}),
+        "final_target_step": final_target_step,
+        "final_route": final_route_rows[0],
+        "final_data_rows": sorted(final_data_rows, key=lambda row: str(row["data_group_id"])),
+        "final_top_actual_update_loss_reduction": sorted(
+            non_all_final,
+            key=lambda row: float(row["loss_reduction_under_actual_update_linearized"]),
+            reverse=True,
+        )[:top_k_data_groups],
+        "final_top_route_support": sorted(
+            non_all_final,
+            key=lambda row: float(row["negative_loss_dot_route_gradient"]),
+            reverse=True,
+        )[:top_k_data_groups],
+        "final_top_route_conflict": sorted(
+            non_all_final,
+            key=lambda row: float(row["negative_loss_dot_route_gradient"]),
+        )[:top_k_data_groups],
+    }
+
+
+def _plot_data_update_group_bars(
+    *,
+    data_rows: list[dict[str, Any]],
+    value_field: str,
+    title: str,
+    xlabel: str,
+    top_k_data_groups: int,
+    output_path: Path,
+) -> Path | None:
+    if not data_rows:
+        return None
+    final_target_step = max(int(row["target_step"]) for row in data_rows)
+    rows = [
+        row
+        for row in data_rows
+        if int(row["target_step"]) == final_target_step and str(row["data_group_id"]) != "__all__"
+    ]
+    if not rows:
+        return None
+    rows = sorted(rows, key=lambda row: abs(float(row[value_field])), reverse=True)[:top_k_data_groups]
+    _, plt = _import_matplotlib()
+    fig, ax = plt.subplots(figsize=(12, max(4, 0.4 * len(rows))))
+    y_positions = list(range(len(rows)))
+    values = [float(row[value_field]) for row in rows]
+    labels = [str(row["data_group_id"]) for row in rows]
+    colors = ["#376f8f" if value >= 0.0 else "#8f374a" for value in values]
+    ax.barh(y_positions, values, color=colors)
+    ax.axvline(0.0, color="#777777", linewidth=1.0, linestyle="--")
+    ax.set_yticks(y_positions)
+    ax.set_yticklabels(labels)
+    ax.invert_yaxis()
+    ax.set_title(title)
+    ax.set_xlabel(xlabel)
+    ax.grid(axis="x", alpha=0.25)
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, format="svg")
+    plt.close(fig)
+    return output_path
+
+
+def _plot_data_update_vs_route_support(
+    *,
+    data_rows: list[dict[str, Any]],
+    output_path: Path,
+) -> Path | None:
+    if not data_rows:
+        return None
+    final_target_step = max(int(row["target_step"]) for row in data_rows)
+    rows = [
+        row
+        for row in data_rows
+        if int(row["target_step"]) == final_target_step and str(row["data_group_id"]) != "__all__"
+    ]
+    if not rows:
+        return None
+    _, plt = _import_matplotlib()
+    fig, ax = plt.subplots(figsize=(8, 6))
+    x_values = [float(row["loss_reduction_under_actual_update_linearized"]) for row in rows]
+    y_values = [float(row["negative_loss_dot_route_gradient"]) for row in rows]
+    ax.scatter(x_values, y_values, color="#376f8f")
+    for row, x_value, y_value in zip(rows, x_values, y_values, strict=True):
+        ax.annotate(str(row["data_group_id"]), (x_value, y_value), fontsize=8, xytext=(4, 4), textcoords="offset points")
+    ax.axhline(0.0, color="#777777", linewidth=1.0, linestyle="--")
+    ax.axvline(0.0, color="#777777", linewidth=1.0, linestyle="--")
+    ax.set_title(f"Data loss update alignment vs route support ending at step {final_target_step}")
+    ax.set_xlabel("<-grad loss_group, actual Delta theta>")
+    ax.set_ylabel("<-grad loss_group, grad route>")
+    ax.grid(alpha=0.25)
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, format="svg")
+    plt.close(fig)
+    return output_path
+
+
+def _write_data_update_attribution_markdown(
+    *,
+    path: Path,
+    report: dict[str, Any],
+    plot_paths: dict[str, Path],
+) -> None:
+    summary = report["summary"]
+    final_route = summary["final_route"]
+    lines = [
+        "# Data Update Attribution",
+        "",
+        "## Calculation",
+        "",
+        "This report links data-group loss gradients to both the actual checkpoint update and the candidate route gradient.",
+        "",
+        "```text",
+        "actual_route_delta = route(theta_target; source_basis) - route(theta_source; source_basis)",
+        "actual_update_predicted_route_delta = grad route(theta_source; source_basis) . Delta theta",
+        "data_route_support_g = < -grad loss_g(theta_source), grad route(theta_source; source_basis) >",
+        "data_actual_update_alignment_g = < -grad loss_g(theta_source), Delta theta >",
+        "```",
+        "",
+        "The last quantity is not a replay of the original optimizer batches. It is a source-checkpoint diagnostic: it asks whether a data group's current loss gradient points in the same direction as the actual checkpoint movement.",
+        "",
+        "## Route Objective",
+        "",
+        f"- route split: `{report['route_split']}`",
+        f"- route pair type: `{report['route_pair_type']}`",
+        f"- subspace: `{report['subspace_name']}`",
+        f"- basis mode: `{report['basis_mode']}`",
+        f"- rank: `{report['rank']}`",
+        f"- stage: `{report['stage']}`",
+        f"- position role: `{report['position_role']}`",
+        f"- loss side: `{report['loss_side']}`",
+        "",
+        "## Final Interval",
+        "",
+        f"- interval: `{final_route['source_step']} -> {final_route['target_step']}`",
+        f"- source route score: `{float(final_route['source_route_score']):.6f}`",
+        f"- target route score: `{float(final_route['target_route_score']):.6f}`",
+        f"- actual route delta: `{float(final_route['actual_delta']):.6g}`",
+        f"- actual-update predicted route delta: `{float(final_route['predicted_delta']):.6g}`",
+        f"- relative error: `{float(final_route['relative_error']):.6g}`",
+        "",
+        "## Final Data Groups",
+        "",
+        "| data group | records | loss | actual update loss reduction | route support | local SGD route delta |",
+        "| --- | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for row in summary["final_data_rows"]:
+        lines.append(
+            "| {group} | {records} | {loss:.6f} | {update:.6g} | {support:.6g} | {delta:.6g} |".format(
+                group=row["data_group_id"],
+                records=int(row["loss_num_records"]),
+                loss=float(row["loss"]),
+                update=float(row["loss_reduction_under_actual_update_linearized"]),
+                support=float(row["negative_loss_dot_route_gradient"]),
+                delta=float(row["local_sgd_route_delta_linearized"]),
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "## Top Route-Supporting Data Groups",
+            "",
+            "| data group | route support | actual update loss reduction | cosine to route | cosine to actual update |",
+            "| --- | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for row in summary["final_top_route_support"]:
+        route_cosine = row["loss_negative_route_gradient_cosine"]
+        update_cosine = row["loss_negative_actual_update_cosine"]
+        lines.append(
+            "| {group} | {support:.6g} | {update:.6g} | {route_cosine} | {update_cosine} |".format(
+                group=row["data_group_id"],
+                support=float(row["negative_loss_dot_route_gradient"]),
+                update=float(row["loss_reduction_under_actual_update_linearized"]),
+                route_cosine="" if route_cosine is None else f"{float(route_cosine):.6f}",
+                update_cosine="" if update_cosine is None else f"{float(update_cosine):.6f}",
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "## Raw Outputs",
+            "",
+            f"- route rows: `{report['route_rows_path']}`",
+            f"- data rows: `{report['data_rows_path']}`",
+            f"- pair rows: `{report['pair_rows_path']}`",
+            "",
+            "## Plots",
+            "",
+        ]
+    )
+    for label, plot_path in plot_paths.items():
+        lines.append(f"- {label}: `{plot_path}`")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def run_data_update_attribution(
+    *,
+    config_path: Path,
+    probe_set_path: Path,
+    checkpoint_dir: Path,
+    output_dir: Path,
+    stage_name: str,
+    subspace_name: str,
+    position_role: str,
+    pair_types: list[str],
+    route_pair_type: str,
+    data_group_fields: list[str],
+    rank: int | None = None,
+    device_name: str = "mps",
+    checkpoint_paths: list[Path] | None = None,
+    head_layer: int | None = None,
+    head: int | None = None,
+    max_pairs_per_type: int = 64,
+    min_pairs_per_type: int = 1,
+    split_filter: list[str] | None = None,
+    route_split: str = "__all__",
+    loss_side: str = "both",
+    top_k_data_groups: int = 24,
+    min_error_denominator: float = 1.0e-9,
+) -> tuple[Path, Path, Path, Path, Path, dict[str, Path]]:
+    if loss_side not in ROUTE_GRADIENT_LOSS_SIDES:
+        raise ValueError(f"Unsupported loss_side {loss_side!r}; expected one of {ROUTE_GRADIENT_LOSS_SIDES}.")
+    if top_k_data_groups <= 0:
+        raise ValueError("top_k_data_groups must be positive.")
+    if min_error_denominator <= 0.0:
+        raise ValueError("min_error_denominator must be positive.")
+    if not data_group_fields:
+        raise ValueError("data_group_fields must not be empty.")
+    spec = TrainSpec.from_path(config_path)
+    probe_records, probe_metadata = load_probe_set(probe_set_path)
+    if str(probe_metadata["benchmark_dir"]) != str(spec.benchmark_dir):
+        raise ValueError(
+            f"Probe set benchmark mismatch: probe={probe_metadata['benchmark_dir']} config={spec.benchmark_dir}"
+        )
+    metadata = read_symbolic_kv_stream_metadata(spec.benchmark_dir)
+    vocab = Vocabulary.from_metadata(metadata["vocabulary"])
+    holdout_pairs = _holdout_pair_set(metadata)
+    device = require_device(device_name)
+    checkpoints = _resolve_checkpoint_paths(checkpoint_dir=checkpoint_dir, checkpoint_paths=checkpoint_paths)
+    if len(checkpoints) < 2:
+        raise ValueError("data-update-attribution requires at least two checkpoints.")
+    model = build_model(spec.model, len(vocab.tokens), device)
+    _validate_geometry_stage(model=model, stage_name=stage_name)
+    if position_role not in GEOMETRY_POSITION_ROLES:
+        raise ValueError(f"Unsupported position role {position_role!r}; expected one of {GEOMETRY_POSITION_ROLES}.")
+    pair_types = sorted(set(pair_types), key=pair_types.index)
+    pairs, pair_construction = _build_causal_patch_pairs(
+        probe_records=probe_records,
+        vocab=vocab,
+        holdout_pairs=holdout_pairs,
+        pair_types=pair_types,
+        max_pairs_per_type=max_pairs_per_type,
+        min_pairs_per_type=min_pairs_per_type,
+        split_filter=split_filter,
+    )
+    if not pairs:
+        raise RuntimeError("Data update attribution constructed no pairs.")
+    route_pairs = _route_objective_pairs(
+        pairs=pairs,
+        route_split=route_split,
+        route_pair_type=route_pair_type,
+    )
+    data_groups = _group_pairs_for_data_update(
+        pairs=pairs,
+        data_group_fields=data_group_fields,
+    )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    route_rows_path = output_dir / "data_update_attribution_route_rows.jsonl"
+    data_rows_path = output_dir / "data_update_attribution_rows.jsonl"
+    pair_rows_path = output_dir / "data_update_attribution_pairs.jsonl"
+    progress_path = output_dir / "data_update_attribution_progress.json"
+    for partial_path in (route_rows_path, data_rows_path, pair_rows_path, progress_path):
+        if partial_path.exists():
+            partial_path.unlink()
+    write_jsonl(pair_rows_path, [_pair_metadata(pair) for pair in pairs])
+
+    intervals = list(zip(checkpoints[:-1], checkpoints[1:], strict=True))
+    print(
+        "[data-update-attribution] "
+        f"intervals={len(intervals)} checkpoints={len(checkpoints)} pairs={len(pairs)} route_pairs={len(route_pairs)} "
+        f"pair_types={pair_types} route={route_split}/{route_pair_type} data_groups={len(data_groups)} "
+        f"fields={data_group_fields} device={device_name} subspace={subspace_name} rank={rank} "
+        f"stage={stage_name} role={position_role} loss_side={loss_side}",
+        flush=True,
+    )
+
+    all_route_rows: list[dict[str, Any]] = []
+    all_data_rows: list[dict[str, Any]] = []
+    final_subspace_summary: dict[str, Any] | None = None
+    for interval_index, (source_checkpoint_path, target_checkpoint_path) in enumerate(intervals, start=1):
+        source_step = _checkpoint_step_from_path(source_checkpoint_path)
+        target_step = _checkpoint_step_from_path(target_checkpoint_path)
+        learning_rate = _compute_learning_rate(spec.optimization, source_step)
+        print(
+            "[data-update-attribution] starting "
+            f"{interval_index}/{len(intervals)} {source_checkpoint_path.name}->{target_checkpoint_path.name}",
+            flush=True,
+        )
+        route_row, data_rows, subspace_summary = _compute_data_update_attribution_interval(
+            model=model,
+            source_checkpoint_path=source_checkpoint_path,
+            target_checkpoint_path=target_checkpoint_path,
+            pairs=pairs,
+            route_pairs=route_pairs,
+            data_groups=data_groups,
+            vocab=vocab,
+            learning_rate=learning_rate,
+            route_split=route_split,
+            route_pair_type=route_pair_type,
+            subspace_name=subspace_name,
+            rank=rank,
+            head_layer=head_layer,
+            head=head,
+            stage_name=stage_name,
+            position_role=position_role,
+            loss_side=loss_side,
+            batch_size=spec.evaluation.batch_size,
+            pad_token_id=vocab.pad_token_id,
+            device=device,
+            min_error_denominator=min_error_denominator,
+        )
+        final_subspace_summary = subspace_summary
+        append_jsonl(route_rows_path, route_row)
+        for row in data_rows:
+            append_jsonl(data_rows_path, row)
+        all_route_rows.append(route_row)
+        all_data_rows.extend(data_rows)
+        write_json(
+            progress_path,
+            {
+                "status": "running",
+                "completed_intervals": interval_index,
+                "total_intervals": len(intervals),
+                "last_source_step": source_step,
+                "last_target_step": target_step,
+                "route_rows_path": str(route_rows_path),
+                "data_rows_path": str(data_rows_path),
+                "pair_rows_path": str(pair_rows_path),
+            },
+        )
+        all_data_row = next(row for row in data_rows if str(row["data_group_id"]) == "__all__")
+        print(
+            "[data-update-attribution] finished "
+            f"{source_step}->{target_step} actual_route_delta={float(route_row['actual_delta']):.6g} "
+            f"predicted_route_delta={float(route_row['predicted_delta']):.6g} "
+            f"all_data_route_support={float(all_data_row['negative_loss_dot_route_gradient']):.6g} "
+            f"all_data_update_alignment={float(all_data_row['negative_loss_dot_actual_update']):.6g}",
+            flush=True,
+        )
+
+    if final_subspace_summary is None:
+        raise RuntimeError("No checkpoint intervals were processed for data update attribution.")
+    summary = _summarize_data_update_attribution(
+        route_rows=all_route_rows,
+        data_rows=all_data_rows,
+        top_k_data_groups=top_k_data_groups,
+    )
+    report_path = output_dir / "data_update_attribution_report.json"
+    markdown_path = output_dir / "data_update_attribution_report.md"
+    plot_paths: dict[str, Path] = {}
+    update_plot = _plot_data_update_group_bars(
+        data_rows=all_data_rows,
+        value_field="loss_reduction_under_actual_update_linearized",
+        title="Data groups aligned with actual checkpoint update",
+        xlabel="<-grad loss_group, actual Delta theta>",
+        top_k_data_groups=top_k_data_groups,
+        output_path=output_dir / "data_update_actual_update_alignment.svg",
+    )
+    if update_plot is not None:
+        plot_paths["actual_update_alignment"] = update_plot
+    route_plot = _plot_data_update_group_bars(
+        data_rows=all_data_rows,
+        value_field="negative_loss_dot_route_gradient",
+        title="Data groups supporting route gradient",
+        xlabel="<-grad loss_group, grad route>",
+        top_k_data_groups=top_k_data_groups,
+        output_path=output_dir / "data_update_route_support.svg",
+    )
+    if route_plot is not None:
+        plot_paths["route_support"] = route_plot
+    scatter_plot = _plot_data_update_vs_route_support(
+        data_rows=all_data_rows,
+        output_path=output_dir / "data_update_alignment_vs_route_support.svg",
+    )
+    if scatter_plot is not None:
+        plot_paths["alignment_vs_route_support"] = scatter_plot
+
+    report = {
+        "schema_version": DATA_UPDATE_ATTRIBUTION_SCHEMA_VERSION,
+        "config_path": str(config_path),
+        "probe_set_path": str(probe_set_path),
+        "checkpoint_dir": str(checkpoint_dir),
+        "device": device_name,
+        "stage": stage_name,
+        "subspace": final_subspace_summary,
+        "subspace_name": subspace_name,
+        "rank": rank,
+        "position_role": position_role,
+        "pair_types": pair_types,
+        "route_split": route_split,
+        "route_pair_type": route_pair_type,
+        "data_group_fields": data_group_fields,
+        "max_pairs_per_type": max_pairs_per_type,
+        "min_pairs_per_type": min_pairs_per_type,
+        "split_filter": split_filter,
+        "loss_side": loss_side,
+        "top_k_data_groups": top_k_data_groups,
+        "min_error_denominator": min_error_denominator,
+        "basis_mode": "source_checkpoint_per_interval",
+        "calculation": {
+            "route_score": "patched_transfer_margin - corrupted_transfer_margin",
+            "actual_route_delta": "route_score(theta_target; source_basis) - route_score(theta_source; source_basis)",
+            "actual_update_predicted_route_delta": "grad route(theta_source; source_basis) . Delta theta",
+            "data_route_support": "< -grad loss_data_group(theta_source), grad route(theta_source; source_basis) >",
+            "data_actual_update_alignment": "< -grad loss_data_group(theta_source), Delta theta >",
+            "interpretation_caveat": (
+                "This is a source-checkpoint diagnostic against the observed checkpoint delta, "
+                "not replayed historical optimizer batches."
+            ),
+        },
+        "pair_construction": pair_construction,
+        "route_num_pairs": len(route_pairs),
+        "data_num_groups": len(data_groups),
+        "route_rows_path": str(route_rows_path),
+        "data_rows_path": str(data_rows_path),
+        "pair_rows_path": str(pair_rows_path),
+        "summary": summary,
+    }
+    write_json(report_path, report)
+    _write_data_update_attribution_markdown(path=markdown_path, report=report, plot_paths=plot_paths)
+    write_json(
+        progress_path,
+        {
+            "status": "complete",
+            "completed_intervals": len(intervals),
+            "total_intervals": len(intervals),
+            "last_source_step": int(summary["final_route"]["source_step"]),
+            "last_target_step": int(summary["final_route"]["target_step"]),
+            "report_path": str(report_path),
+            "markdown_path": str(markdown_path),
+            "route_rows_path": str(route_rows_path),
+            "data_rows_path": str(data_rows_path),
+            "pair_rows_path": str(pair_rows_path),
+        },
+    )
+    print(
+        f"[data-update-attribution] complete report={report_path} rows={data_rows_path}",
+        flush=True,
+    )
+    return report_path, markdown_path, route_rows_path, data_rows_path, pair_rows_path, plot_paths
+
+
+@dataclass(frozen=True)
+class _RouteCompetitionSpec:
+    label: str
+    stage_name: str
+    subspace_name: str
+    position_role: str
+    rank: int | None = None
+    head_layer: int | None = None
+    head: int | None = None
+
+
+ROUTE_COMPETITION_SPEC_KEYS = {
+    "label",
+    "stage",
+    "subspace",
+    "position_role",
+    "rank",
+    "head_layer",
+    "head",
+}
+
+
+def _parse_optional_int_field(*, fields: dict[str, str], key: str) -> int | None:
+    if key not in fields:
+        return None
+    raw_value = fields[key]
+    if raw_value.lower() in {"none", "null"}:
+        return None
+    try:
+        return int(raw_value)
+    except ValueError as exc:
+        raise ValueError(f"Route competition field {key!r} must be an integer or none, got {raw_value!r}.") from exc
+
+
+def _parse_route_competition_spec(raw_spec: str) -> _RouteCompetitionSpec:
+    if not raw_spec.strip():
+        raise ValueError("Route competition spec must not be empty.")
+    fields: dict[str, str] = {}
+    for item in raw_spec.split(","):
+        if "=" not in item:
+            raise ValueError(f"Route competition spec item must be key=value: {item!r} in {raw_spec!r}")
+        key, value = item.split("=", maxsplit=1)
+        key = key.strip()
+        value = value.strip()
+        if key not in ROUTE_COMPETITION_SPEC_KEYS:
+            raise ValueError(
+                f"Unsupported route competition spec key {key!r}; expected one of {sorted(ROUTE_COMPETITION_SPEC_KEYS)}."
+            )
+        if key in fields:
+            raise ValueError(f"Duplicate route competition spec key {key!r} in {raw_spec!r}.")
+        if not value:
+            raise ValueError(f"Route competition spec key {key!r} has an empty value in {raw_spec!r}.")
+        fields[key] = value
+    required = ["label", "stage", "subspace", "position_role"]
+    missing = [key for key in required if key not in fields]
+    if missing:
+        raise ValueError(f"Route competition spec is missing required keys {missing}: {raw_spec!r}")
+    return _RouteCompetitionSpec(
+        label=fields["label"],
+        stage_name=fields["stage"],
+        subspace_name=fields["subspace"],
+        position_role=fields["position_role"],
+        rank=_parse_optional_int_field(fields=fields, key="rank"),
+        head_layer=_parse_optional_int_field(fields=fields, key="head_layer"),
+        head=_parse_optional_int_field(fields=fields, key="head"),
+    )
+
+
+def _parse_route_competition_specs(raw_specs: list[str]) -> list[_RouteCompetitionSpec]:
+    if not raw_specs:
+        raise ValueError("At least one route spec is required.")
+    specs = [_parse_route_competition_spec(raw_spec) for raw_spec in raw_specs]
+    labels = [spec.label for spec in specs]
+    duplicate_labels = sorted(label for label in set(labels) if labels.count(label) > 1)
+    if duplicate_labels:
+        raise ValueError(f"Route competition labels must be unique; duplicates={duplicate_labels}")
+    return specs
+
+
+def _route_competition_route_metadata(route_spec: _RouteCompetitionSpec) -> dict[str, Any]:
+    return {
+        "route_label": route_spec.label,
+        "stage": route_spec.stage_name,
+        "subspace_name": route_spec.subspace_name,
+        "position_role": route_spec.position_role,
+        "rank": route_spec.rank,
+        "head_layer": route_spec.head_layer,
+        "head": route_spec.head,
+    }
+
+
+def _annotate_route_competition_row(
+    *,
+    row: dict[str, Any],
+    route_spec: _RouteCompetitionSpec,
+    domain: str,
+) -> dict[str, Any]:
+    annotated = dict(row)
+    annotated.update(_route_competition_route_metadata(route_spec))
+    annotated["domain"] = domain
+    return annotated
+
+
+def _build_route_competition_pairs(
+    *,
+    probe_set_path: Path,
+    spec: TrainSpec,
+    vocab: Vocabulary,
+    holdout_pairs: set[tuple[str, str]],
+    pair_types: list[str],
+    max_pairs_per_type: int,
+    min_pairs_per_type: int,
+    split_filter: list[str] | None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    probe_records, probe_metadata = load_probe_set(probe_set_path)
+    if str(probe_metadata["benchmark_dir"]) != str(spec.benchmark_dir):
+        raise ValueError(
+            f"Probe set benchmark mismatch: probe={probe_metadata['benchmark_dir']} config={spec.benchmark_dir}"
+        )
+    return _build_causal_patch_pairs(
+        probe_records=probe_records,
+        vocab=vocab,
+        holdout_pairs=holdout_pairs,
+        pair_types=pair_types,
+        max_pairs_per_type=max_pairs_per_type,
+        min_pairs_per_type=min_pairs_per_type,
+        split_filter=split_filter,
+    )
+
+
+def _summarize_route_competition_report(
+    *,
+    route_rows: list[dict[str, Any]],
+    data_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if not route_rows:
+        raise ValueError("Cannot summarize route competition without route rows.")
+    if not data_rows:
+        raise ValueError("Cannot summarize route competition without data rows.")
+    final_target_step = max(int(row["target_step"]) for row in route_rows)
+    final_route_rows = [row for row in route_rows if int(row["target_step"]) == final_target_step]
+    final_data_rows = [row for row in data_rows if int(row["target_step"]) == final_target_step]
+    route_labels = sorted({str(row["route_label"]) for row in final_route_rows})
+    combined_rows: list[dict[str, Any]] = []
+    for label in route_labels:
+        eval_rows = [
+            row for row in final_route_rows if str(row["route_label"]) == label and str(row["domain"]) == "eval"
+        ]
+        train_rows = [
+            row for row in final_route_rows if str(row["route_label"]) == label and str(row["domain"]) == "train"
+        ]
+        if len(eval_rows) != 1 or len(train_rows) != 1:
+            raise RuntimeError(
+                f"Expected one eval and one train route row for {label}, got eval={len(eval_rows)} train={len(train_rows)}."
+            )
+        eval_data_all = [
+            row
+            for row in final_data_rows
+            if str(row["route_label"]) == label and str(row["domain"]) == "eval" and str(row["data_group_id"]) == "__all__"
+        ]
+        train_data_all = [
+            row
+            for row in final_data_rows
+            if str(row["route_label"]) == label and str(row["domain"]) == "train" and str(row["data_group_id"]) == "__all__"
+        ]
+        if len(eval_data_all) != 1 or len(train_data_all) != 1:
+            raise RuntimeError(
+                f"Expected one eval and one train __all__ data row for {label}, "
+                f"got eval={len(eval_data_all)} train={len(train_data_all)}."
+            )
+        eval_row = eval_rows[0]
+        train_row = train_rows[0]
+        eval_data = eval_data_all[0]
+        train_data = train_data_all[0]
+        combined_rows.append(
+            {
+                "route_label": label,
+                "stage": train_row["stage"],
+                "subspace_name": train_row["subspace_name"],
+                "rank": train_row["rank"],
+                "head_label": train_row["head_label"],
+                "position_role": train_row["position_role"],
+                "eval_source_route_score": float(eval_row["source_route_score"]),
+                "eval_target_route_score": float(eval_row["target_route_score"]),
+                "eval_actual_delta": float(eval_row["actual_delta"]),
+                "eval_predicted_delta": float(eval_row["predicted_delta"]),
+                "eval_relative_error": float(eval_row["relative_error"]),
+                "eval_sign_match": bool(eval_row["sign_match"]),
+                "eval_route_support": float(eval_data["negative_loss_dot_route_gradient"]),
+                "eval_actual_update_loss_reduction": float(eval_data["loss_reduction_under_actual_update_linearized"]),
+                "train_source_route_score": float(train_row["source_route_score"]),
+                "train_target_route_score": float(train_row["target_route_score"]),
+                "train_actual_delta": float(train_row["actual_delta"]),
+                "train_predicted_delta": float(train_row["predicted_delta"]),
+                "train_relative_error": float(train_row["relative_error"]),
+                "train_sign_match": bool(train_row["sign_match"]),
+                "train_route_support": float(train_data["negative_loss_dot_route_gradient"]),
+                "train_actual_update_loss_reduction": float(train_data["loss_reduction_under_actual_update_linearized"]),
+                "train_local_sgd_route_delta": float(train_data["local_sgd_route_delta_linearized"]),
+            }
+        )
+    return {
+        "num_routes": len(route_labels),
+        "final_target_step": final_target_step,
+        "combined_rows": sorted(combined_rows, key=lambda row: str(row["route_label"])),
+        "ranked_by_train_route_support": sorted(
+            combined_rows,
+            key=lambda row: float(row["train_route_support"]),
+            reverse=True,
+        ),
+        "ranked_by_eval_actual_delta": sorted(
+            combined_rows,
+            key=lambda row: float(row["eval_actual_delta"]),
+            reverse=True,
+        ),
+        "ranked_by_train_actual_delta": sorted(
+            combined_rows,
+            key=lambda row: float(row["train_actual_delta"]),
+            reverse=True,
+        ),
+    }
+
+
+def _plot_route_competition_bars(
+    *,
+    combined_rows: list[dict[str, Any]],
+    value_field: str,
+    title: str,
+    ylabel: str,
+    output_path: Path,
+) -> Path | None:
+    if not combined_rows:
+        return None
+    rows = sorted(combined_rows, key=lambda row: float(row[value_field]), reverse=True)
+    _, plt = _import_matplotlib()
+    fig, ax = plt.subplots(figsize=(max(8, 1.2 * len(rows)), 5))
+    labels = [str(row["route_label"]) for row in rows]
+    values = [float(row[value_field]) for row in rows]
+    colors = ["#376f8f" if value >= 0.0 else "#8f374a" for value in values]
+    ax.bar(labels, values, color=colors)
+    ax.axhline(0.0, color="#777777", linewidth=1.0, linestyle="--")
+    ax.set_title(title)
+    ax.set_ylabel(ylabel)
+    ax.tick_params(axis="x", rotation=30)
+    ax.grid(axis="y", alpha=0.25)
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, format="svg")
+    plt.close(fig)
+    return output_path
+
+
+def _plot_route_competition_predicted_vs_actual(
+    *,
+    combined_rows: list[dict[str, Any]],
+    output_path: Path,
+) -> Path | None:
+    if not combined_rows:
+        return None
+    _, plt = _import_matplotlib()
+    fig, ax = plt.subplots(figsize=(7, 7))
+    for row in combined_rows:
+        ax.scatter(float(row["eval_predicted_delta"]), float(row["eval_actual_delta"]), color="#376f8f")
+        ax.annotate(str(row["route_label"]), (float(row["eval_predicted_delta"]), float(row["eval_actual_delta"])), fontsize=8)
+    values = [float(row["eval_predicted_delta"]) for row in combined_rows] + [
+        float(row["eval_actual_delta"]) for row in combined_rows
+    ]
+    min_value = min(values)
+    max_value = max(values)
+    if min_value == max_value:
+        min_value -= 1.0
+        max_value += 1.0
+    ax.plot([min_value, max_value], [min_value, max_value], color="#777777", linestyle="--", linewidth=1.0)
+    ax.axhline(0.0, color="#999999", linewidth=0.8)
+    ax.axvline(0.0, color="#999999", linewidth=0.8)
+    ax.set_title("Route competition: eval actual vs predicted delta")
+    ax.set_xlabel("grad(route) . Delta theta")
+    ax.set_ylabel("route(theta_target) - route(theta_source)")
+    ax.grid(alpha=0.25)
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, format="svg")
+    plt.close(fig)
+    return output_path
+
+
+def _write_route_competition_markdown(
+    *,
+    path: Path,
+    report: dict[str, Any],
+    plot_paths: dict[str, Path],
+) -> None:
+    summary = report["summary"]
+    lines = [
+        "# Route Competition Report",
+        "",
+        "## Calculation",
+        "",
+        "For every candidate route, this report computes:",
+        "",
+        "```text",
+        "actual_delta = route(theta_target; source_basis) - route(theta_source; source_basis)",
+        "predicted_delta = grad route(theta_source; source_basis) . Delta theta",
+        "data_route_support = < -grad loss_data(theta_source), grad route(theta_source; source_basis) >",
+        "data_actual_update_alignment = < -grad loss_data(theta_source), Delta theta >",
+        "```",
+        "",
+        "The route basis is fixed at the source checkpoint for each interval.",
+        "",
+        "## Final Competition Table",
+        "",
+        "| route | stage | subspace | eval actual delta | eval predicted delta | eval rel err | train support | eval support | train actual delta | train predicted delta |",
+        "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for row in summary["ranked_by_train_route_support"]:
+        lines.append(
+            "| {route} | {stage} | {subspace} | {eval_actual:.6g} | {eval_pred:.6g} | {eval_err:.6g} | {train_support:.6g} | {eval_support:.6g} | {train_actual:.6g} | {train_pred:.6g} |".format(
+                route=row["route_label"],
+                stage=row["stage"],
+                subspace=row["subspace_name"],
+                eval_actual=float(row["eval_actual_delta"]),
+                eval_pred=float(row["eval_predicted_delta"]),
+                eval_err=float(row["eval_relative_error"]),
+                train_support=float(row["train_route_support"]),
+                eval_support=float(row["eval_route_support"]),
+                train_actual=float(row["train_actual_delta"]),
+                train_pred=float(row["train_predicted_delta"]),
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "## Ranked By Train Route Support",
+            "",
+            "| rank | route | train route support | train update loss reduction | train local SGD route delta |",
+            "| ---: | --- | ---: | ---: | ---: |",
+        ]
+    )
+    for index, row in enumerate(summary["ranked_by_train_route_support"], start=1):
+        lines.append(
+            "| {rank} | {route} | {support:.6g} | {update:.6g} | {delta:.6g} |".format(
+                rank=index,
+                route=row["route_label"],
+                support=float(row["train_route_support"]),
+                update=float(row["train_actual_update_loss_reduction"]),
+                delta=float(row["train_local_sgd_route_delta"]),
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "## Route Specs",
+            "",
+        ]
+    )
+    for route in report["routes"]:
+        lines.append(f"- `{route['route_label']}`: `{route}`")
+    lines.extend(
+        [
+            "",
+            "## Raw Outputs",
+            "",
+            f"- route rows: `{report['route_rows_path']}`",
+            f"- data rows: `{report['data_rows_path']}`",
+            f"- pair rows: `{report['pair_rows_path']}`",
+            "",
+            "## Plots",
+            "",
+        ]
+    )
+    for label, plot_path in plot_paths.items():
+        lines.append(f"- {label}: `{plot_path}`")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def run_route_competition_report(
+    *,
+    config_path: Path,
+    probe_set_path: Path,
+    train_probe_set_path: Path,
+    checkpoint_dir: Path,
+    output_dir: Path,
+    raw_route_specs: list[str],
+    route_pair_type: str,
+    eval_pair_types: list[str],
+    train_pair_types: list[str],
+    data_group_fields: list[str],
+    device_name: str = "mps",
+    checkpoint_paths: list[Path] | None = None,
+    eval_split_filter: list[str] | None = None,
+    train_split_filter: list[str] | None = None,
+    eval_loss_side: str = "both",
+    train_loss_side: str = "clean",
+    max_pairs_per_type: int = 64,
+    min_pairs_per_type: int = 1,
+    min_error_denominator: float = 1.0e-9,
+) -> tuple[Path, Path, Path, Path, Path, dict[str, Path]]:
+    if eval_loss_side not in ROUTE_GRADIENT_LOSS_SIDES:
+        raise ValueError(f"Unsupported eval_loss_side {eval_loss_side!r}; expected one of {ROUTE_GRADIENT_LOSS_SIDES}.")
+    if train_loss_side not in ROUTE_GRADIENT_LOSS_SIDES:
+        raise ValueError(f"Unsupported train_loss_side {train_loss_side!r}; expected one of {ROUTE_GRADIENT_LOSS_SIDES}.")
+    if min_error_denominator <= 0.0:
+        raise ValueError("min_error_denominator must be positive.")
+    routes = _parse_route_competition_specs(raw_route_specs)
+    if not data_group_fields:
+        raise ValueError("data_group_fields must not be empty.")
+    spec = TrainSpec.from_path(config_path)
+    metadata = read_symbolic_kv_stream_metadata(spec.benchmark_dir)
+    vocab = Vocabulary.from_metadata(metadata["vocabulary"])
+    holdout_pairs = _holdout_pair_set(metadata)
+    device = require_device(device_name)
+    checkpoints = _resolve_checkpoint_paths(checkpoint_dir=checkpoint_dir, checkpoint_paths=checkpoint_paths)
+    if len(checkpoints) < 2:
+        raise ValueError("route-competition-report requires at least two checkpoints.")
+    model = build_model(spec.model, len(vocab.tokens), device)
+    for route in routes:
+        _validate_geometry_stage(model=model, stage_name=route.stage_name)
+        if route.position_role not in GEOMETRY_POSITION_ROLES:
+            raise ValueError(f"Unsupported position role {route.position_role!r}; expected one of {GEOMETRY_POSITION_ROLES}.")
+
+    eval_pair_types = sorted(set(eval_pair_types), key=eval_pair_types.index)
+    train_pair_types = sorted(set(train_pair_types), key=train_pair_types.index)
+    eval_pairs, eval_pair_construction = _build_route_competition_pairs(
+        probe_set_path=probe_set_path,
+        spec=spec,
+        vocab=vocab,
+        holdout_pairs=holdout_pairs,
+        pair_types=eval_pair_types,
+        max_pairs_per_type=max_pairs_per_type,
+        min_pairs_per_type=min_pairs_per_type,
+        split_filter=eval_split_filter,
+    )
+    train_pairs, train_pair_construction = _build_route_competition_pairs(
+        probe_set_path=train_probe_set_path,
+        spec=spec,
+        vocab=vocab,
+        holdout_pairs=holdout_pairs,
+        pair_types=train_pair_types,
+        max_pairs_per_type=max_pairs_per_type,
+        min_pairs_per_type=min_pairs_per_type,
+        split_filter=train_split_filter,
+    )
+    eval_route_pairs = _route_objective_pairs(
+        pairs=eval_pairs,
+        route_split="__all__",
+        route_pair_type=route_pair_type,
+    )
+    train_route_pairs = _route_objective_pairs(
+        pairs=train_pairs,
+        route_split="__all__",
+        route_pair_type=route_pair_type,
+    )
+    eval_data_groups = _group_pairs_for_data_update(pairs=eval_pairs, data_group_fields=data_group_fields)
+    train_data_groups = _group_pairs_for_data_update(pairs=train_pairs, data_group_fields=data_group_fields)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    route_rows_path = output_dir / "route_competition_route_rows.jsonl"
+    data_rows_path = output_dir / "route_competition_data_rows.jsonl"
+    pair_rows_path = output_dir / "route_competition_pairs.jsonl"
+    progress_path = output_dir / "route_competition_progress.json"
+    for partial_path in (route_rows_path, data_rows_path, pair_rows_path, progress_path):
+        if partial_path.exists():
+            partial_path.unlink()
+    pair_rows = [
+        {"domain": "eval", **_pair_metadata(pair)}
+        for pair in eval_pairs
+    ] + [
+        {"domain": "train", **_pair_metadata(pair)}
+        for pair in train_pairs
+    ]
+    write_jsonl(pair_rows_path, pair_rows)
+
+    intervals = list(zip(checkpoints[:-1], checkpoints[1:], strict=True))
+    print(
+        "[route-competition-report] "
+        f"routes={len(routes)} intervals={len(intervals)} eval_pairs={len(eval_pairs)} train_pairs={len(train_pairs)} "
+        f"route_pair_type={route_pair_type} device={device_name}",
+        flush=True,
+    )
+
+    all_route_rows: list[dict[str, Any]] = []
+    all_data_rows: list[dict[str, Any]] = []
+    final_subspace_summaries: dict[str, dict[str, Any]] = {}
+    total_runs = len(routes) * len(intervals) * 2
+    completed_runs = 0
+    for route in routes:
+        for interval_index, (source_checkpoint_path, target_checkpoint_path) in enumerate(intervals, start=1):
+            source_step = _checkpoint_step_from_path(source_checkpoint_path)
+            target_step = _checkpoint_step_from_path(target_checkpoint_path)
+            learning_rate = _compute_learning_rate(spec.optimization, source_step)
+            print(
+                "[route-competition-report] starting "
+                f"route={route.label} interval={interval_index}/{len(intervals)} "
+                f"{source_checkpoint_path.name}->{target_checkpoint_path.name}",
+                flush=True,
+            )
+            eval_route_row, eval_data_rows, eval_subspace_summary = _compute_data_update_attribution_interval(
+                model=model,
+                source_checkpoint_path=source_checkpoint_path,
+                target_checkpoint_path=target_checkpoint_path,
+                pairs=eval_pairs,
+                route_pairs=eval_route_pairs,
+                data_groups=eval_data_groups,
+                vocab=vocab,
+                learning_rate=learning_rate,
+                route_split="__all__",
+                route_pair_type=route_pair_type,
+                subspace_name=route.subspace_name,
+                rank=route.rank,
+                head_layer=route.head_layer,
+                head=route.head,
+                stage_name=route.stage_name,
+                position_role=route.position_role,
+                loss_side=eval_loss_side,
+                batch_size=spec.evaluation.batch_size,
+                pad_token_id=vocab.pad_token_id,
+                device=device,
+                min_error_denominator=min_error_denominator,
+            )
+            completed_runs += 1
+            train_route_row, train_data_rows, train_subspace_summary = _compute_data_update_attribution_interval(
+                model=model,
+                source_checkpoint_path=source_checkpoint_path,
+                target_checkpoint_path=target_checkpoint_path,
+                pairs=train_pairs,
+                route_pairs=train_route_pairs,
+                data_groups=train_data_groups,
+                vocab=vocab,
+                learning_rate=learning_rate,
+                route_split="__all__",
+                route_pair_type=route_pair_type,
+                subspace_name=route.subspace_name,
+                rank=route.rank,
+                head_layer=route.head_layer,
+                head=route.head,
+                stage_name=route.stage_name,
+                position_role=route.position_role,
+                loss_side=train_loss_side,
+                batch_size=spec.evaluation.batch_size,
+                pad_token_id=vocab.pad_token_id,
+                device=device,
+                min_error_denominator=min_error_denominator,
+            )
+            completed_runs += 1
+            final_subspace_summaries[f"{route.label}:eval"] = eval_subspace_summary
+            final_subspace_summaries[f"{route.label}:train"] = train_subspace_summary
+
+            annotated_route_rows = [
+                _annotate_route_competition_row(row=eval_route_row, route_spec=route, domain="eval"),
+                _annotate_route_competition_row(row=train_route_row, route_spec=route, domain="train"),
+            ]
+            annotated_data_rows = [
+                _annotate_route_competition_row(row=row, route_spec=route, domain="eval")
+                for row in eval_data_rows
+            ] + [
+                _annotate_route_competition_row(row=row, route_spec=route, domain="train")
+                for row in train_data_rows
+            ]
+            for row in annotated_route_rows:
+                append_jsonl(route_rows_path, row)
+            for row in annotated_data_rows:
+                append_jsonl(data_rows_path, row)
+            all_route_rows.extend(annotated_route_rows)
+            all_data_rows.extend(annotated_data_rows)
+            write_json(
+                progress_path,
+                {
+                    "status": "running",
+                    "completed_runs": completed_runs,
+                    "total_runs": total_runs,
+                    "last_route_label": route.label,
+                    "last_source_step": source_step,
+                    "last_target_step": target_step,
+                    "route_rows_path": str(route_rows_path),
+                    "data_rows_path": str(data_rows_path),
+                    "pair_rows_path": str(pair_rows_path),
+                },
+            )
+            eval_all = next(row for row in eval_data_rows if str(row["data_group_id"]) == "__all__")
+            train_all = next(row for row in train_data_rows if str(row["data_group_id"]) == "__all__")
+            print(
+                "[route-competition-report] finished "
+                f"route={route.label} {source_step}->{target_step} "
+                f"eval_actual_delta={float(eval_route_row['actual_delta']):.6g} "
+                f"eval_predicted_delta={float(eval_route_row['predicted_delta']):.6g} "
+                f"train_support={float(train_all['negative_loss_dot_route_gradient']):.6g} "
+                f"eval_support={float(eval_all['negative_loss_dot_route_gradient']):.6g}",
+                flush=True,
+            )
+
+    summary = _summarize_route_competition_report(
+        route_rows=all_route_rows,
+        data_rows=all_data_rows,
+    )
+    report_path = output_dir / "route_competition_report.json"
+    markdown_path = output_dir / "route_competition_report.md"
+    plot_paths: dict[str, Path] = {}
+    train_support_plot = _plot_route_competition_bars(
+        combined_rows=summary["combined_rows"],
+        value_field="train_route_support",
+        title="Route competition: train route support",
+        ylabel="<-grad train loss, grad route>",
+        output_path=output_dir / "route_competition_train_support.svg",
+    )
+    if train_support_plot is not None:
+        plot_paths["train_support"] = train_support_plot
+    eval_delta_plot = _plot_route_competition_bars(
+        combined_rows=summary["combined_rows"],
+        value_field="eval_actual_delta",
+        title="Route competition: eval actual route delta",
+        ylabel="route(theta_target) - route(theta_source)",
+        output_path=output_dir / "route_competition_eval_actual_delta.svg",
+    )
+    if eval_delta_plot is not None:
+        plot_paths["eval_actual_delta"] = eval_delta_plot
+    predicted_plot = _plot_route_competition_predicted_vs_actual(
+        combined_rows=summary["combined_rows"],
+        output_path=output_dir / "route_competition_eval_predicted_vs_actual.svg",
+    )
+    if predicted_plot is not None:
+        plot_paths["eval_predicted_vs_actual"] = predicted_plot
+
+    report = {
+        "schema_version": ROUTE_COMPETITION_REPORT_SCHEMA_VERSION,
+        "config_path": str(config_path),
+        "probe_set_path": str(probe_set_path),
+        "train_probe_set_path": str(train_probe_set_path),
+        "checkpoint_dir": str(checkpoint_dir),
+        "device": device_name,
+        "routes": [_route_competition_route_metadata(route) for route in routes],
+        "subspaces": final_subspace_summaries,
+        "route_pair_type": route_pair_type,
+        "eval_pair_types": eval_pair_types,
+        "train_pair_types": train_pair_types,
+        "data_group_fields": data_group_fields,
+        "eval_split_filter": eval_split_filter,
+        "train_split_filter": train_split_filter,
+        "eval_loss_side": eval_loss_side,
+        "train_loss_side": train_loss_side,
+        "max_pairs_per_type": max_pairs_per_type,
+        "min_pairs_per_type": min_pairs_per_type,
+        "min_error_denominator": min_error_denominator,
+        "basis_mode": "source_checkpoint_per_interval",
+        "calculation": {
+            "actual_delta": "route(theta_target; source_basis) - route(theta_source; source_basis)",
+            "predicted_delta": "grad route(theta_source; source_basis) . Delta theta",
+            "data_route_support": "< -grad loss_data(theta_source), grad route(theta_source; source_basis) >",
+            "data_actual_update_alignment": "< -grad loss_data(theta_source), Delta theta >",
+        },
+        "pair_construction": {
+            "eval": eval_pair_construction,
+            "train": train_pair_construction,
+        },
+        "route_rows_path": str(route_rows_path),
+        "data_rows_path": str(data_rows_path),
+        "pair_rows_path": str(pair_rows_path),
+        "summary": summary,
+    }
+    write_json(report_path, report)
+    _write_route_competition_markdown(path=markdown_path, report=report, plot_paths=plot_paths)
+    write_json(
+        progress_path,
+        {
+            "status": "complete",
+            "completed_runs": total_runs,
+            "total_runs": total_runs,
+            "report_path": str(report_path),
+            "markdown_path": str(markdown_path),
+            "route_rows_path": str(route_rows_path),
+            "data_rows_path": str(data_rows_path),
+            "pair_rows_path": str(pair_rows_path),
+        },
+    )
+    print(
+        f"[route-competition-report] complete report={report_path} rows={route_rows_path}",
+        flush=True,
+    )
+    return report_path, markdown_path, route_rows_path, data_rows_path, pair_rows_path, plot_paths

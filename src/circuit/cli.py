@@ -26,11 +26,24 @@ from circuit.analysis.candidate_dynamics import (
 from circuit.analysis.feature_analysis import analyze_checkpoint_features
 from circuit.analysis.geometric_mechanisms import (
     build_dataset_geometry_report,
+    run_attention_downstream_update_attribution,
+    run_attention_retrieval_chain_report,
+    run_attention_retrieval_separation_update_attribution,
+    run_attention_score_delta_decomposition,
+    run_attention_score_update_attribution,
+    run_checkpoint_update_attribution,
+    run_candidate_route_gradient_selection,
+    run_causal_variable_patch,
+    run_data_update_attribution,
     run_attention_geometry_trace,
     run_geometry_subspace_intervention,
     run_path_logit_decomposition,
     run_prompt_neuron_trace,
+    run_route_competition_report,
+    run_route_gradient_decomposition,
 )
+from circuit.analysis.actual_batch_route_attribution import run_actual_batch_route_attribution
+from circuit.analysis.optimizer_update_trace import run_optimizer_update_trace
 from circuit.analysis.shared_feature_dynamics import (
     family_update_link,
     feature_birth_analyze,
@@ -233,6 +246,7 @@ def main() -> None:
     probe_parser.add_argument("--output", type=Path, required=True)
     probe_parser.add_argument("--examples-per-split", type=int, default=24)
     probe_parser.add_argument("--seed", type=int, default=17)
+    probe_parser.add_argument("--split", type=str, action="append", default=None)
     probe_parser.add_argument("--overwrite", action="store_true")
 
     sweep_parser = subparsers.add_parser("checkpoint-sweep")
@@ -622,6 +636,268 @@ def main() -> None:
     geometry_subspace_parser.add_argument("--head", type=int, default=None)
     geometry_subspace_parser.add_argument("--progress-every-queries", type=int, default=100)
 
+    causal_patch_parser = subparsers.add_parser("causal-variable-patch")
+    causal_patch_parser.add_argument("--config", type=Path, required=True)
+    causal_patch_parser.add_argument("--probe-set", type=Path, required=True)
+    causal_patch_parser.add_argument("--checkpoint-dir", type=Path, required=True)
+    causal_patch_parser.add_argument("--output-dir", type=Path, required=True)
+    causal_patch_parser.add_argument("--device", type=str, default="mps")
+    causal_patch_parser.add_argument("--checkpoint", type=Path, action="append", default=None)
+    causal_patch_parser.add_argument("--stage", type=str, required=True)
+    causal_patch_parser.add_argument("--subspace", type=str, required=True)
+    causal_patch_parser.add_argument("--rank", type=int, default=None)
+    causal_patch_parser.add_argument("--position-role", type=str, required=True)
+    causal_patch_parser.add_argument("--pair-type", type=str, action="append", required=True)
+    causal_patch_parser.add_argument("--head-layer", type=int, default=None)
+    causal_patch_parser.add_argument("--head", type=int, default=None)
+    causal_patch_parser.add_argument("--max-pairs-per-type", type=int, default=128)
+    causal_patch_parser.add_argument("--min-pairs-per-type", type=int, default=1)
+    causal_patch_parser.add_argument("--split", type=str, action="append", default=None)
+    causal_patch_parser.add_argument("--min-recovery-denominator", type=float, default=1.0e-6)
+    causal_patch_parser.add_argument("--progress-every-pairs", type=int, default=64)
+
+    route_gradient_parser = subparsers.add_parser("candidate-route-gradient-selection")
+    route_gradient_parser.add_argument("--config", type=Path, required=True)
+    route_gradient_parser.add_argument("--probe-set", type=Path, required=True)
+    route_gradient_parser.add_argument("--checkpoint-dir", type=Path, required=True)
+    route_gradient_parser.add_argument("--output-dir", type=Path, required=True)
+    route_gradient_parser.add_argument("--device", type=str, default="mps")
+    route_gradient_parser.add_argument("--checkpoint", type=Path, action="append", default=None)
+    route_gradient_parser.add_argument("--stage", type=str, required=True)
+    route_gradient_parser.add_argument("--subspace", type=str, required=True)
+    route_gradient_parser.add_argument("--rank", type=int, default=None)
+    route_gradient_parser.add_argument("--position-role", type=str, required=True)
+    route_gradient_parser.add_argument("--pair-type", type=str, action="append", required=True)
+    route_gradient_parser.add_argument("--head-layer", type=int, default=None)
+    route_gradient_parser.add_argument("--head", type=int, default=None)
+    route_gradient_parser.add_argument("--max-pairs-per-type", type=int, default=64)
+    route_gradient_parser.add_argument("--min-pairs-per-type", type=int, default=1)
+    route_gradient_parser.add_argument("--split", type=str, action="append", default=None)
+    route_gradient_parser.add_argument("--loss-side", type=str, default="both")
+
+    route_decomposition_parser = subparsers.add_parser("route-gradient-decomposition")
+    route_decomposition_parser.add_argument("--config", type=Path, required=True)
+    route_decomposition_parser.add_argument("--probe-set", type=Path, required=True)
+    route_decomposition_parser.add_argument("--checkpoint-dir", type=Path, required=True)
+    route_decomposition_parser.add_argument("--output-dir", type=Path, required=True)
+    route_decomposition_parser.add_argument("--device", type=str, default="mps")
+    route_decomposition_parser.add_argument("--checkpoint", type=Path, action="append", default=None)
+    route_decomposition_parser.add_argument("--stage", type=str, required=True)
+    route_decomposition_parser.add_argument("--subspace", type=str, required=True)
+    route_decomposition_parser.add_argument("--rank", type=int, default=None)
+    route_decomposition_parser.add_argument("--position-role", type=str, required=True)
+    route_decomposition_parser.add_argument("--pair-type", type=str, action="append", required=True)
+    route_decomposition_parser.add_argument("--head-layer", type=int, default=None)
+    route_decomposition_parser.add_argument("--head", type=int, default=None)
+    route_decomposition_parser.add_argument("--max-pairs-per-type", type=int, default=64)
+    route_decomposition_parser.add_argument("--min-pairs-per-type", type=int, default=1)
+    route_decomposition_parser.add_argument("--split", type=str, action="append", default=None)
+    route_decomposition_parser.add_argument("--loss-side", type=str, default="both")
+    route_decomposition_parser.add_argument("--decompose", type=str, action="append", default=None)
+    route_decomposition_parser.add_argument("--top-k-groups", type=int, default=24)
+
+    checkpoint_update_parser = subparsers.add_parser("checkpoint-update-attribution")
+    checkpoint_update_parser.add_argument("--config", type=Path, required=True)
+    checkpoint_update_parser.add_argument("--probe-set", type=Path, required=True)
+    checkpoint_update_parser.add_argument("--checkpoint-dir", type=Path, required=True)
+    checkpoint_update_parser.add_argument("--output-dir", type=Path, required=True)
+    checkpoint_update_parser.add_argument("--device", type=str, default="mps")
+    checkpoint_update_parser.add_argument("--checkpoint", type=Path, action="append", default=None)
+    checkpoint_update_parser.add_argument("--stage", type=str, required=True)
+    checkpoint_update_parser.add_argument("--subspace", type=str, required=True)
+    checkpoint_update_parser.add_argument("--rank", type=int, default=None)
+    checkpoint_update_parser.add_argument("--position-role", type=str, required=True)
+    checkpoint_update_parser.add_argument("--pair-type", type=str, action="append", required=True)
+    checkpoint_update_parser.add_argument("--head-layer", type=int, default=None)
+    checkpoint_update_parser.add_argument("--head", type=int, default=None)
+    checkpoint_update_parser.add_argument("--max-pairs-per-type", type=int, default=64)
+    checkpoint_update_parser.add_argument("--min-pairs-per-type", type=int, default=1)
+    checkpoint_update_parser.add_argument("--split", type=str, action="append", default=None)
+    checkpoint_update_parser.add_argument("--decompose", type=str, action="append", default=None)
+    checkpoint_update_parser.add_argument("--top-k-groups", type=int, default=24)
+    checkpoint_update_parser.add_argument("--min-error-denominator", type=float, default=1.0e-9)
+
+    data_update_parser = subparsers.add_parser("data-update-attribution")
+    data_update_parser.add_argument("--config", type=Path, required=True)
+    data_update_parser.add_argument("--probe-set", type=Path, required=True)
+    data_update_parser.add_argument("--checkpoint-dir", type=Path, required=True)
+    data_update_parser.add_argument("--output-dir", type=Path, required=True)
+    data_update_parser.add_argument("--device", type=str, default="mps")
+    data_update_parser.add_argument("--checkpoint", type=Path, action="append", default=None)
+    data_update_parser.add_argument("--stage", type=str, required=True)
+    data_update_parser.add_argument("--subspace", type=str, required=True)
+    data_update_parser.add_argument("--rank", type=int, default=None)
+    data_update_parser.add_argument("--position-role", type=str, required=True)
+    data_update_parser.add_argument("--pair-type", type=str, action="append", required=True)
+    data_update_parser.add_argument("--route-pair-type", type=str, required=True)
+    data_update_parser.add_argument("--route-split", type=str, default="__all__")
+    data_update_parser.add_argument("--data-group-field", type=str, action="append", required=True)
+    data_update_parser.add_argument("--head-layer", type=int, default=None)
+    data_update_parser.add_argument("--head", type=int, default=None)
+    data_update_parser.add_argument("--max-pairs-per-type", type=int, default=64)
+    data_update_parser.add_argument("--min-pairs-per-type", type=int, default=1)
+    data_update_parser.add_argument("--split", type=str, action="append", default=None)
+    data_update_parser.add_argument("--loss-side", type=str, default="both")
+    data_update_parser.add_argument("--top-k-data-groups", type=int, default=24)
+    data_update_parser.add_argument("--min-error-denominator", type=float, default=1.0e-9)
+
+    route_competition_parser = subparsers.add_parser("route-competition-report")
+    route_competition_parser.add_argument("--config", type=Path, required=True)
+    route_competition_parser.add_argument("--probe-set", type=Path, required=True)
+    route_competition_parser.add_argument("--train-probe-set", type=Path, required=True)
+    route_competition_parser.add_argument("--checkpoint-dir", type=Path, required=True)
+    route_competition_parser.add_argument("--output-dir", type=Path, required=True)
+    route_competition_parser.add_argument("--device", type=str, default="mps")
+    route_competition_parser.add_argument("--checkpoint", type=Path, action="append", default=None)
+    route_competition_parser.add_argument("--route", type=str, action="append", required=True)
+    route_competition_parser.add_argument("--route-pair-type", type=str, required=True)
+    route_competition_parser.add_argument("--pair-type", type=str, action="append", required=True)
+    route_competition_parser.add_argument("--train-pair-type", type=str, action="append", required=True)
+    route_competition_parser.add_argument("--data-group-field", type=str, action="append", required=True)
+    route_competition_parser.add_argument("--eval-split", type=str, action="append", default=None)
+    route_competition_parser.add_argument("--train-split", type=str, action="append", default=None)
+    route_competition_parser.add_argument("--eval-loss-side", type=str, default="both")
+    route_competition_parser.add_argument("--train-loss-side", type=str, default="clean")
+    route_competition_parser.add_argument("--max-pairs-per-type", type=int, default=64)
+    route_competition_parser.add_argument("--min-pairs-per-type", type=int, default=1)
+    route_competition_parser.add_argument("--min-error-denominator", type=float, default=1.0e-9)
+
+    attention_score_delta_parser = subparsers.add_parser("attention-score-delta-decomposition")
+    attention_score_delta_parser.add_argument("--config", type=Path, required=True)
+    attention_score_delta_parser.add_argument("--probe-set", type=Path, required=True)
+    attention_score_delta_parser.add_argument("--checkpoint-dir", type=Path, required=True)
+    attention_score_delta_parser.add_argument("--output-dir", type=Path, required=True)
+    attention_score_delta_parser.add_argument("--device", type=str, default="mps")
+    attention_score_delta_parser.add_argument("--checkpoint", type=Path, action="append", default=None)
+    attention_score_delta_parser.add_argument("--head-layer", type=int, required=True)
+    attention_score_delta_parser.add_argument("--head", type=int, required=True)
+    attention_score_delta_parser.add_argument("--score-query-role", type=str, required=True)
+    attention_score_delta_parser.add_argument("--score-key-role", type=str, action="append", required=True)
+    attention_score_delta_parser.add_argument("--record-side", type=str, action="append", default=None)
+    attention_score_delta_parser.add_argument("--pair-type", type=str, action="append", required=True)
+    attention_score_delta_parser.add_argument("--max-pairs-per-type", type=int, default=64)
+    attention_score_delta_parser.add_argument("--min-pairs-per-type", type=int, default=1)
+    attention_score_delta_parser.add_argument("--split", type=str, action="append", default=None)
+    attention_score_delta_parser.add_argument("--reconstruction-tolerance", type=float, default=1.0e-3)
+    attention_score_delta_parser.add_argument("--top-k-components", type=int, default=16)
+
+    attention_score_update_parser = subparsers.add_parser("attention-score-update-attribution")
+    attention_score_update_parser.add_argument("--config", type=Path, required=True)
+    attention_score_update_parser.add_argument("--probe-set", type=Path, required=True)
+    attention_score_update_parser.add_argument("--checkpoint-dir", type=Path, required=True)
+    attention_score_update_parser.add_argument("--output-dir", type=Path, required=True)
+    attention_score_update_parser.add_argument("--device", type=str, default="mps")
+    attention_score_update_parser.add_argument("--checkpoint", type=Path, action="append", default=None)
+    attention_score_update_parser.add_argument("--head-layer", type=int, required=True)
+    attention_score_update_parser.add_argument("--head", type=int, required=True)
+    attention_score_update_parser.add_argument("--score-query-role", type=str, required=True)
+    attention_score_update_parser.add_argument("--score-key-role", type=str, action="append", required=True)
+    attention_score_update_parser.add_argument("--record-side", type=str, action="append", default=None)
+    attention_score_update_parser.add_argument("--score-component", type=str, action="append", default=None)
+    attention_score_update_parser.add_argument("--pair-type", type=str, action="append", required=True)
+    attention_score_update_parser.add_argument("--max-pairs-per-type", type=int, default=64)
+    attention_score_update_parser.add_argument("--min-pairs-per-type", type=int, default=1)
+    attention_score_update_parser.add_argument("--split", type=str, action="append", default=None)
+    attention_score_update_parser.add_argument("--decompose", type=str, action="append", default=None)
+    attention_score_update_parser.add_argument("--reconstruction-tolerance", type=float, default=1.0e-3)
+    attention_score_update_parser.add_argument("--top-k-groups", type=int, default=24)
+    attention_score_update_parser.add_argument("--min-error-denominator", type=float, default=1.0e-9)
+
+    attention_retrieval_update_parser = subparsers.add_parser("attention-retrieval-separation-update-attribution")
+    attention_retrieval_update_parser.add_argument("--config", type=Path, required=True)
+    attention_retrieval_update_parser.add_argument("--probe-set", type=Path, required=True)
+    attention_retrieval_update_parser.add_argument("--checkpoint-dir", type=Path, required=True)
+    attention_retrieval_update_parser.add_argument("--output-dir", type=Path, required=True)
+    attention_retrieval_update_parser.add_argument("--device", type=str, default="mps")
+    attention_retrieval_update_parser.add_argument("--checkpoint", type=Path, action="append", default=None)
+    attention_retrieval_update_parser.add_argument("--head-layer", type=int, required=True)
+    attention_retrieval_update_parser.add_argument("--head", type=int, required=True)
+    attention_retrieval_update_parser.add_argument("--score-query-role", type=str, required=True)
+    attention_retrieval_update_parser.add_argument("--support-key-role", type=str, required=True)
+    attention_retrieval_update_parser.add_argument("--distractor-key-role", type=str, required=True)
+    attention_retrieval_update_parser.add_argument("--record-side", type=str, action="append", default=None)
+    attention_retrieval_update_parser.add_argument("--score-component", type=str, action="append", default=None)
+    attention_retrieval_update_parser.add_argument("--pair-type", type=str, action="append", required=True)
+    attention_retrieval_update_parser.add_argument("--max-pairs-per-type", type=int, default=64)
+    attention_retrieval_update_parser.add_argument("--min-pairs-per-type", type=int, default=1)
+    attention_retrieval_update_parser.add_argument("--split", type=str, action="append", default=None)
+    attention_retrieval_update_parser.add_argument("--decompose", type=str, action="append", default=None)
+    attention_retrieval_update_parser.add_argument("--reconstruction-tolerance", type=float, default=1.0e-3)
+    attention_retrieval_update_parser.add_argument("--top-k-groups", type=int, default=24)
+    attention_retrieval_update_parser.add_argument("--min-error-denominator", type=float, default=1.0e-9)
+
+    attention_retrieval_chain_parser = subparsers.add_parser("attention-retrieval-chain-report")
+    attention_retrieval_chain_parser.add_argument("--config", type=Path, required=True)
+    attention_retrieval_chain_parser.add_argument("--probe-set", type=Path, required=True)
+    attention_retrieval_chain_parser.add_argument("--checkpoint-dir", type=Path, required=True)
+    attention_retrieval_chain_parser.add_argument("--output-dir", type=Path, required=True)
+    attention_retrieval_chain_parser.add_argument("--device", type=str, default="mps")
+    attention_retrieval_chain_parser.add_argument("--checkpoint", type=Path, action="append", default=None)
+    attention_retrieval_chain_parser.add_argument("--head-layer", type=int, required=True)
+    attention_retrieval_chain_parser.add_argument("--head", type=int, required=True)
+    attention_retrieval_chain_parser.add_argument("--score-query-role", type=str, required=True)
+    attention_retrieval_chain_parser.add_argument("--support-key-role", type=str, required=True)
+    attention_retrieval_chain_parser.add_argument("--distractor-key-role", type=str, required=True)
+    attention_retrieval_chain_parser.add_argument("--record-side", type=str, action="append", default=None)
+    attention_retrieval_chain_parser.add_argument("--pair-type", type=str, action="append", required=True)
+    attention_retrieval_chain_parser.add_argument("--max-pairs-per-type", type=int, default=64)
+    attention_retrieval_chain_parser.add_argument("--min-pairs-per-type", type=int, default=1)
+    attention_retrieval_chain_parser.add_argument("--split", type=str, action="append", default=None)
+
+    attention_downstream_update_parser = subparsers.add_parser("attention-downstream-update-attribution")
+    attention_downstream_update_parser.add_argument("--config", type=Path, required=True)
+    attention_downstream_update_parser.add_argument("--probe-set", type=Path, required=True)
+    attention_downstream_update_parser.add_argument("--checkpoint-dir", type=Path, required=True)
+    attention_downstream_update_parser.add_argument("--output-dir", type=Path, required=True)
+    attention_downstream_update_parser.add_argument("--device", type=str, default="mps")
+    attention_downstream_update_parser.add_argument("--checkpoint", type=Path, action="append", default=None)
+    attention_downstream_update_parser.add_argument("--head-layer", type=int, required=True)
+    attention_downstream_update_parser.add_argument("--head", type=int, required=True)
+    attention_downstream_update_parser.add_argument("--score-query-role", type=str, required=True)
+    attention_downstream_update_parser.add_argument("--support-key-role", type=str, required=True)
+    attention_downstream_update_parser.add_argument("--distractor-key-role", type=str, required=True)
+    attention_downstream_update_parser.add_argument("--record-side", type=str, action="append", default=None)
+    attention_downstream_update_parser.add_argument("--scalar", type=str, action="append", default=None)
+    attention_downstream_update_parser.add_argument("--pair-type", type=str, action="append", required=True)
+    attention_downstream_update_parser.add_argument("--max-pairs-per-type", type=int, default=64)
+    attention_downstream_update_parser.add_argument("--min-pairs-per-type", type=int, default=1)
+    attention_downstream_update_parser.add_argument("--split", type=str, action="append", default=None)
+    attention_downstream_update_parser.add_argument("--decompose", type=str, action="append", default=None)
+    attention_downstream_update_parser.add_argument("--top-k-groups", type=int, default=24)
+    attention_downstream_update_parser.add_argument("--min-error-denominator", type=float, default=1.0e-9)
+
+    optimizer_trace_parser = subparsers.add_parser("optimizer-update-trace")
+    optimizer_trace_parser.add_argument("--config", type=Path, required=True)
+    optimizer_trace_parser.add_argument("--resume-checkpoint", type=Path, required=True)
+    optimizer_trace_parser.add_argument("--output-dir", type=Path, required=True)
+    optimizer_trace_parser.add_argument("--device", type=str, default=None)
+    optimizer_trace_end = optimizer_trace_parser.add_mutually_exclusive_group(required=True)
+    optimizer_trace_end.add_argument("--end-step", type=int)
+    optimizer_trace_end.add_argument("--num-steps", type=int)
+    optimizer_trace_parser.add_argument("--train-split", type=str, default="train")
+    optimizer_trace_parser.add_argument("--checkpoint-every", type=int, required=True)
+    optimizer_trace_parser.add_argument("--progress-every", type=int, default=10)
+    optimizer_trace_parser.add_argument("--top-k-parameters", type=int, default=24)
+    optimizer_trace_parser.add_argument("--overwrite", action="store_true")
+    optimizer_trace_parser.add_argument("--require-historical-replay", action="store_true")
+
+    actual_batch_route_parser = subparsers.add_parser("actual-batch-route-attribution")
+    actual_batch_route_parser.add_argument("--config", type=Path, required=True)
+    actual_batch_route_parser.add_argument("--probe-set", type=Path, required=True)
+    actual_batch_route_parser.add_argument("--optimizer-trace-dir", type=Path, required=True)
+    actual_batch_route_parser.add_argument("--output-dir", type=Path, required=True)
+    actual_batch_route_parser.add_argument("--device", type=str, default="mps")
+    actual_batch_route_parser.add_argument("--checkpoint", type=Path, action="append", default=None)
+    actual_batch_route_parser.add_argument("--route", type=str, action="append", required=True)
+    actual_batch_route_parser.add_argument("--route-pair-type", type=str, required=True)
+    actual_batch_route_parser.add_argument("--pair-type", type=str, action="append", required=True)
+    actual_batch_route_parser.add_argument("--split", type=str, action="append", default=None)
+    actual_batch_route_parser.add_argument("--train-split", type=str, default="train")
+    actual_batch_route_parser.add_argument("--max-pairs-per-type", type=int, default=64)
+    actual_batch_route_parser.add_argument("--min-pairs-per-type", type=int, default=1)
+    actual_batch_route_parser.add_argument("--loss-match-tolerance", type=float, default=1.0e-4)
+    actual_batch_route_parser.add_argument("--overwrite", action="store_true")
+
     args = parser.parse_args()
     if args.command == "generate-benchmark":
         from circuit.io import read_json
@@ -665,6 +941,7 @@ def main() -> None:
             examples_per_split=args.examples_per_split,
             seed=args.seed,
             overwrite=args.overwrite,
+            split_names=args.split,
         )
         print({"probe_set": str(probe_path), "metadata": str(metadata_path)})
         return
@@ -1258,6 +1535,445 @@ def main() -> None:
                 "aggregate_rows": str(aggregate_rows_path),
                 "query_rows": str(query_rows_path),
                 "plots": {key: str(value) for key, value in plot_paths.items()},
+            }
+        )
+        return
+    if args.command == "causal-variable-patch":
+        report_path, markdown_path, aggregate_rows_path, query_rows_path, pair_rows_path, plot_paths = run_causal_variable_patch(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            checkpoint_dir=args.checkpoint_dir,
+            output_dir=args.output_dir,
+            device_name=args.device,
+            checkpoint_paths=args.checkpoint,
+            stage_name=args.stage,
+            subspace_name=args.subspace,
+            rank=args.rank,
+            position_role=args.position_role,
+            pair_types=args.pair_type,
+            head_layer=args.head_layer,
+            head=args.head,
+            max_pairs_per_type=args.max_pairs_per_type,
+            min_pairs_per_type=args.min_pairs_per_type,
+            split_filter=args.split,
+            min_recovery_denominator=args.min_recovery_denominator,
+            progress_every_pairs=args.progress_every_pairs,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "aggregate_rows": str(aggregate_rows_path),
+                "query_rows": str(query_rows_path),
+                "pair_rows": str(pair_rows_path),
+                "plots": {key: str(value) for key, value in plot_paths.items()},
+            }
+        )
+        return
+    if args.command == "candidate-route-gradient-selection":
+        report_path, markdown_path, metric_rows_path, pairwise_rows_path, pair_rows_path, plot_paths = run_candidate_route_gradient_selection(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            checkpoint_dir=args.checkpoint_dir,
+            output_dir=args.output_dir,
+            device_name=args.device,
+            checkpoint_paths=args.checkpoint,
+            stage_name=args.stage,
+            subspace_name=args.subspace,
+            rank=args.rank,
+            position_role=args.position_role,
+            pair_types=args.pair_type,
+            head_layer=args.head_layer,
+            head=args.head,
+            max_pairs_per_type=args.max_pairs_per_type,
+            min_pairs_per_type=args.min_pairs_per_type,
+            split_filter=args.split,
+            loss_side=args.loss_side,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "metric_rows": str(metric_rows_path),
+                "pairwise_rows": str(pairwise_rows_path),
+                "pair_rows": str(pair_rows_path),
+                "plots": {key: str(value) for key, value in plot_paths.items()},
+            }
+        )
+        return
+    if args.command == "route-gradient-decomposition":
+        report_path, markdown_path, metric_rows_path, decomposition_rows_path, group_rows_path, pair_rows_path, plot_paths = run_route_gradient_decomposition(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            checkpoint_dir=args.checkpoint_dir,
+            output_dir=args.output_dir,
+            device_name=args.device,
+            checkpoint_paths=args.checkpoint,
+            stage_name=args.stage,
+            subspace_name=args.subspace,
+            rank=args.rank,
+            position_role=args.position_role,
+            pair_types=args.pair_type,
+            head_layer=args.head_layer,
+            head=args.head,
+            max_pairs_per_type=args.max_pairs_per_type,
+            min_pairs_per_type=args.min_pairs_per_type,
+            split_filter=args.split,
+            loss_side=args.loss_side,
+            decomposition_modes=args.decompose,
+            top_k_groups=args.top_k_groups,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "metric_rows": str(metric_rows_path),
+                "decomposition_rows": str(decomposition_rows_path),
+                "group_rows": str(group_rows_path),
+                "pair_rows": str(pair_rows_path),
+                "plots": {key: str(value) for key, value in plot_paths.items()},
+            }
+        )
+        return
+    if args.command == "checkpoint-update-attribution":
+        report_path, markdown_path, metric_rows_path, decomposition_rows_path, group_rows_path, pair_rows_path, plot_paths = run_checkpoint_update_attribution(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            checkpoint_dir=args.checkpoint_dir,
+            output_dir=args.output_dir,
+            device_name=args.device,
+            checkpoint_paths=args.checkpoint,
+            stage_name=args.stage,
+            subspace_name=args.subspace,
+            rank=args.rank,
+            position_role=args.position_role,
+            pair_types=args.pair_type,
+            head_layer=args.head_layer,
+            head=args.head,
+            max_pairs_per_type=args.max_pairs_per_type,
+            min_pairs_per_type=args.min_pairs_per_type,
+            split_filter=args.split,
+            decomposition_modes=args.decompose,
+            top_k_groups=args.top_k_groups,
+            min_error_denominator=args.min_error_denominator,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "metric_rows": str(metric_rows_path),
+                "decomposition_rows": str(decomposition_rows_path),
+                "group_rows": str(group_rows_path),
+                "pair_rows": str(pair_rows_path),
+                "plots": {key: str(value) for key, value in plot_paths.items()},
+            }
+        )
+        return
+    if args.command == "data-update-attribution":
+        report_path, markdown_path, route_rows_path, data_rows_path, pair_rows_path, plot_paths = run_data_update_attribution(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            checkpoint_dir=args.checkpoint_dir,
+            output_dir=args.output_dir,
+            device_name=args.device,
+            checkpoint_paths=args.checkpoint,
+            stage_name=args.stage,
+            subspace_name=args.subspace,
+            rank=args.rank,
+            position_role=args.position_role,
+            pair_types=args.pair_type,
+            route_pair_type=args.route_pair_type,
+            route_split=args.route_split,
+            data_group_fields=args.data_group_field,
+            head_layer=args.head_layer,
+            head=args.head,
+            max_pairs_per_type=args.max_pairs_per_type,
+            min_pairs_per_type=args.min_pairs_per_type,
+            split_filter=args.split,
+            loss_side=args.loss_side,
+            top_k_data_groups=args.top_k_data_groups,
+            min_error_denominator=args.min_error_denominator,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "route_rows": str(route_rows_path),
+                "data_rows": str(data_rows_path),
+                "pair_rows": str(pair_rows_path),
+                "plots": {key: str(value) for key, value in plot_paths.items()},
+            }
+        )
+        return
+    if args.command == "route-competition-report":
+        report_path, markdown_path, route_rows_path, data_rows_path, pair_rows_path, plot_paths = run_route_competition_report(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            train_probe_set_path=args.train_probe_set,
+            checkpoint_dir=args.checkpoint_dir,
+            output_dir=args.output_dir,
+            device_name=args.device,
+            checkpoint_paths=args.checkpoint,
+            raw_route_specs=args.route,
+            route_pair_type=args.route_pair_type,
+            eval_pair_types=args.pair_type,
+            train_pair_types=args.train_pair_type,
+            data_group_fields=args.data_group_field,
+            eval_split_filter=args.eval_split,
+            train_split_filter=args.train_split,
+            eval_loss_side=args.eval_loss_side,
+            train_loss_side=args.train_loss_side,
+            max_pairs_per_type=args.max_pairs_per_type,
+            min_pairs_per_type=args.min_pairs_per_type,
+            min_error_denominator=args.min_error_denominator,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "route_rows": str(route_rows_path),
+                "data_rows": str(data_rows_path),
+                "pair_rows": str(pair_rows_path),
+                "plots": {key: str(value) for key, value in plot_paths.items()},
+            }
+        )
+        return
+    if args.command == "attention-score-delta-decomposition":
+        report_path, markdown_path, metric_rows_path, score_rows_path, component_rows_path, pair_rows_path, plot_paths = run_attention_score_delta_decomposition(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            checkpoint_dir=args.checkpoint_dir,
+            output_dir=args.output_dir,
+            device_name=args.device,
+            checkpoint_paths=args.checkpoint,
+            head_layer=args.head_layer,
+            head=args.head,
+            score_query_role=args.score_query_role,
+            score_key_roles=args.score_key_role,
+            record_sides=args.record_side,
+            pair_types=args.pair_type,
+            max_pairs_per_type=args.max_pairs_per_type,
+            min_pairs_per_type=args.min_pairs_per_type,
+            split_filter=args.split,
+            reconstruction_tolerance=args.reconstruction_tolerance,
+            top_k_components=args.top_k_components,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "metric_rows": str(metric_rows_path),
+                "score_rows": str(score_rows_path),
+                "component_rows": str(component_rows_path),
+                "pair_rows": str(pair_rows_path),
+                "plots": {key: str(value) for key, value in plot_paths.items()},
+            }
+        )
+        return
+    if args.command == "attention-score-update-attribution":
+        report_path, markdown_path, metric_rows_path, decomposition_rows_path, group_rows_path, score_rows_path, pair_rows_path, plot_paths = run_attention_score_update_attribution(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            checkpoint_dir=args.checkpoint_dir,
+            output_dir=args.output_dir,
+            device_name=args.device,
+            checkpoint_paths=args.checkpoint,
+            head_layer=args.head_layer,
+            head=args.head,
+            score_query_role=args.score_query_role,
+            score_key_roles=args.score_key_role,
+            record_sides=args.record_side,
+            score_components=args.score_component,
+            pair_types=args.pair_type,
+            max_pairs_per_type=args.max_pairs_per_type,
+            min_pairs_per_type=args.min_pairs_per_type,
+            split_filter=args.split,
+            decomposition_modes=args.decompose,
+            reconstruction_tolerance=args.reconstruction_tolerance,
+            top_k_groups=args.top_k_groups,
+            min_error_denominator=args.min_error_denominator,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "metric_rows": str(metric_rows_path),
+                "decomposition_rows": str(decomposition_rows_path),
+                "group_rows": str(group_rows_path),
+                "score_rows": str(score_rows_path),
+                "pair_rows": str(pair_rows_path),
+                "plots": {key: str(value) for key, value in plot_paths.items()},
+            }
+        )
+        return
+    if args.command == "attention-retrieval-separation-update-attribution":
+        report_path, markdown_path, metric_rows_path, decomposition_rows_path, group_rows_path, score_rows_path, pair_rows_path, plot_paths = run_attention_retrieval_separation_update_attribution(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            checkpoint_dir=args.checkpoint_dir,
+            output_dir=args.output_dir,
+            device_name=args.device,
+            checkpoint_paths=args.checkpoint,
+            head_layer=args.head_layer,
+            head=args.head,
+            score_query_role=args.score_query_role,
+            support_key_role=args.support_key_role,
+            distractor_key_role=args.distractor_key_role,
+            record_sides=args.record_side,
+            score_components=args.score_component,
+            pair_types=args.pair_type,
+            max_pairs_per_type=args.max_pairs_per_type,
+            min_pairs_per_type=args.min_pairs_per_type,
+            split_filter=args.split,
+            decomposition_modes=args.decompose,
+            reconstruction_tolerance=args.reconstruction_tolerance,
+            top_k_groups=args.top_k_groups,
+            min_error_denominator=args.min_error_denominator,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "metric_rows": str(metric_rows_path),
+                "decomposition_rows": str(decomposition_rows_path),
+                "group_rows": str(group_rows_path),
+                "score_rows": str(score_rows_path),
+                "pair_rows": str(pair_rows_path),
+                "plots": {key: str(value) for key, value in plot_paths.items()},
+            }
+        )
+        return
+    if args.command == "attention-retrieval-chain-report":
+        report_path, markdown_path, checkpoint_rows_path, delta_rows_path, pair_metric_rows_path, pair_rows_path, plot_paths = run_attention_retrieval_chain_report(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            checkpoint_dir=args.checkpoint_dir,
+            output_dir=args.output_dir,
+            device_name=args.device,
+            checkpoint_paths=args.checkpoint,
+            head_layer=args.head_layer,
+            head=args.head,
+            score_query_role=args.score_query_role,
+            support_key_role=args.support_key_role,
+            distractor_key_role=args.distractor_key_role,
+            record_sides=args.record_side,
+            pair_types=args.pair_type,
+            max_pairs_per_type=args.max_pairs_per_type,
+            min_pairs_per_type=args.min_pairs_per_type,
+            split_filter=args.split,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "checkpoint_rows": str(checkpoint_rows_path),
+                "delta_rows": str(delta_rows_path),
+                "pair_metric_rows": str(pair_metric_rows_path),
+                "pair_rows": str(pair_rows_path),
+                "plots": {key: str(value) for key, value in plot_paths.items()},
+            }
+        )
+        return
+    if args.command == "attention-downstream-update-attribution":
+        report_path, markdown_path, metric_rows_path, decomposition_rows_path, group_rows_path, scalar_rows_path, pair_rows_path, plot_paths = run_attention_downstream_update_attribution(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            checkpoint_dir=args.checkpoint_dir,
+            output_dir=args.output_dir,
+            device_name=args.device,
+            checkpoint_paths=args.checkpoint,
+            head_layer=args.head_layer,
+            head=args.head,
+            score_query_role=args.score_query_role,
+            support_key_role=args.support_key_role,
+            distractor_key_role=args.distractor_key_role,
+            record_sides=args.record_side,
+            scalar_names=args.scalar,
+            pair_types=args.pair_type,
+            max_pairs_per_type=args.max_pairs_per_type,
+            min_pairs_per_type=args.min_pairs_per_type,
+            split_filter=args.split,
+            decomposition_modes=args.decompose,
+            top_k_groups=args.top_k_groups,
+            min_error_denominator=args.min_error_denominator,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "metric_rows": str(metric_rows_path),
+                "decomposition_rows": str(decomposition_rows_path),
+                "group_rows": str(group_rows_path),
+                "scalar_rows": str(scalar_rows_path),
+                "pair_rows": str(pair_rows_path),
+                "plots": {key: str(value) for key, value in plot_paths.items()},
+            }
+        )
+        return
+    if args.command == "optimizer-update-trace":
+        if args.end_step is None and args.num_steps is None:
+            raise ValueError("Expected --end-step or --num-steps.")
+        if args.end_step is not None and args.num_steps is not None:
+            raise ValueError("Expected only one of --end-step or --num-steps.")
+        if args.end_step is None:
+            from circuit.runtime import load_checkpoint, require_device
+
+            from circuit.config import TrainSpec
+
+            spec = TrainSpec.from_path(args.config)
+            device = require_device(args.device if args.device is not None else spec.device)
+            checkpoint = load_checkpoint(args.resume_checkpoint, device)
+            end_step = int(checkpoint["step"]) + int(args.num_steps)
+        else:
+            end_step = int(args.end_step)
+        report_path, markdown_path, step_rows_path, batch_rows_path, parameter_update_rows_path, checkpoint_dir = run_optimizer_update_trace(
+            config_path=args.config,
+            resume_checkpoint=args.resume_checkpoint,
+            output_dir=args.output_dir,
+            end_step=end_step,
+            device_name=args.device,
+            train_split=args.train_split,
+            checkpoint_every_steps=args.checkpoint_every,
+            progress_every_steps=args.progress_every,
+            top_k_parameters=args.top_k_parameters,
+            overwrite=args.overwrite,
+            require_historical_replay=args.require_historical_replay,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "step_rows": str(step_rows_path),
+                "batch_rows": str(batch_rows_path),
+                "parameter_update_rows": str(parameter_update_rows_path),
+                "checkpoint_dir": str(checkpoint_dir),
+            }
+        )
+        return
+    if args.command == "actual-batch-route-attribution":
+        report_path, markdown_path, rows_path, pair_rows_path = run_actual_batch_route_attribution(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            optimizer_trace_dir=args.optimizer_trace_dir,
+            output_dir=args.output_dir,
+            device_name=args.device,
+            checkpoint_paths=args.checkpoint,
+            raw_route_specs=args.route,
+            route_pair_type=args.route_pair_type,
+            pair_types=args.pair_type,
+            split_filter=args.split,
+            train_split=args.train_split,
+            max_pairs_per_type=args.max_pairs_per_type,
+            min_pairs_per_type=args.min_pairs_per_type,
+            loss_match_tolerance=args.loss_match_tolerance,
+            overwrite=args.overwrite,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "rows": str(rows_path),
+                "pair_rows": str(pair_rows_path),
             }
         )
         return

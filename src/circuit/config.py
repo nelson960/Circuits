@@ -18,6 +18,20 @@ def _ensure_empty(payload: dict[str, Any], context: str) -> None:
         raise ValueError(f"Unexpected keys in {context}: {sorted(payload)}")
 
 
+def _pop_optional_int(payload: dict[str, Any], key: str) -> int | None:
+    if key not in payload:
+        return None
+    value = payload.pop(key)
+    return None if value is None else int(value)
+
+
+def _pop_optional_float(payload: dict[str, Any], key: str) -> float | None:
+    if key not in payload:
+        return None
+    value = payload.pop(key)
+    return None if value is None else float(value)
+
+
 @dataclass(frozen=True)
 class AxisRange:
     min: int
@@ -218,11 +232,9 @@ class LearningRateScheduleSpec:
         kind = str(_pop_required(payload, "kind", context))
         instance = cls(
             kind=kind,
-            decay_start_step=None if "decay_start_step" not in payload else int(payload.pop("decay_start_step")),
-            decay_end_step=None if "decay_end_step" not in payload else int(payload.pop("decay_end_step")),
-            min_learning_rate=None
-            if "min_learning_rate" not in payload
-            else float(payload.pop("min_learning_rate")),
+            decay_start_step=_pop_optional_int(payload, "decay_start_step"),
+            decay_end_step=_pop_optional_int(payload, "decay_end_step"),
+            min_learning_rate=_pop_optional_float(payload, "min_learning_rate"),
         )
         _ensure_empty(payload, context)
         return instance

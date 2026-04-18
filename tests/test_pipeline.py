@@ -23,10 +23,21 @@ from circuit.analysis.checkpoint_sweep import generate_probe_set, run_checkpoint
 from circuit.analysis.feature_analysis import analyze_checkpoint_features
 from circuit.analysis.geometric_mechanisms import (
     build_dataset_geometry_report,
+    run_attention_downstream_update_attribution,
     run_attention_geometry_trace,
+    run_attention_retrieval_chain_report,
+    run_attention_retrieval_separation_update_attribution,
+    run_attention_score_delta_decomposition,
+    run_attention_score_update_attribution,
+    run_candidate_route_gradient_selection,
+    run_checkpoint_update_attribution,
+    run_causal_variable_patch,
+    run_data_update_attribution,
     run_geometry_subspace_intervention,
     run_path_logit_decomposition,
     run_prompt_neuron_trace,
+    run_route_competition_report,
+    run_route_gradient_decomposition,
 )
 from circuit.analysis.shared_feature_dynamics import (
     family_update_link,
@@ -198,6 +209,422 @@ def test_analysis_and_training_pipeline(tmp_path: Path, benchmark_config_path: P
     assert "margin_drop_mean" in geometry_rows[0]
     assert "patched_positions" in geometry_query_rows[0]
 
+    causal_patch_report_path, causal_patch_markdown_path, causal_patch_rows_path, causal_patch_query_rows_path, causal_patch_pair_rows_path, causal_patch_plot_paths = run_causal_variable_patch(
+        config_path=train_config,
+        probe_set_path=probe_set_path,
+        checkpoint_dir=run_dir / "checkpoints",
+        checkpoint_paths=[checkpoint_path],
+        output_dir=tmp_path / "causal_variable_patch",
+        device_name="cpu",
+        stage_name="embedding",
+        subspace_name="full_residual",
+        rank=None,
+        position_role="query_key",
+        pair_types=["query_key"],
+        max_pairs_per_type=2,
+        min_pairs_per_type=1,
+        progress_every_pairs=0,
+    )
+    causal_patch_payload = read_json(causal_patch_report_path)
+    causal_patch_rows = list(iter_jsonl(causal_patch_rows_path))
+    causal_patch_query_rows = list(iter_jsonl(causal_patch_query_rows_path))
+    causal_patch_pair_rows = list(iter_jsonl(causal_patch_pair_rows_path))
+
+    assert causal_patch_report_path.exists()
+    assert causal_patch_markdown_path.exists()
+    assert causal_patch_rows_path.exists()
+    assert causal_patch_query_rows_path.exists()
+    assert causal_patch_pair_rows_path.exists()
+    assert all(path.exists() for path in causal_patch_plot_paths.values())
+    assert causal_patch_payload["summary"]["num_checkpoints"] == 1
+    assert causal_patch_payload["subspace"]["subspace_name"] == "full_residual"
+    assert causal_patch_rows
+    assert causal_patch_query_rows
+    assert causal_patch_pair_rows
+    assert "transfer_recovery" in causal_patch_query_rows[0]
+    assert "patched_predicts_clean_answer_fraction" in causal_patch_rows[0]
+
+    route_gradient_report_path, route_gradient_markdown_path, route_gradient_rows_path, route_gradient_pairwise_rows_path, route_gradient_pair_rows_path, route_gradient_plot_paths = run_candidate_route_gradient_selection(
+        config_path=train_config,
+        probe_set_path=probe_set_path,
+        checkpoint_dir=run_dir / "checkpoints",
+        checkpoint_paths=[checkpoint_path],
+        output_dir=tmp_path / "candidate_route_gradient_selection",
+        device_name="cpu",
+        stage_name="embedding",
+        subspace_name="full_residual",
+        rank=None,
+        position_role="query_key",
+        pair_types=["query_key", "distractor"],
+        max_pairs_per_type=1,
+        min_pairs_per_type=1,
+        loss_side="both",
+    )
+    route_gradient_payload = read_json(route_gradient_report_path)
+    route_gradient_rows = list(iter_jsonl(route_gradient_rows_path))
+    route_gradient_pairwise_rows = list(iter_jsonl(route_gradient_pairwise_rows_path))
+    route_gradient_pair_rows = list(iter_jsonl(route_gradient_pair_rows_path))
+
+    assert route_gradient_report_path.exists()
+    assert route_gradient_markdown_path.exists()
+    assert route_gradient_rows_path.exists()
+    assert route_gradient_pairwise_rows_path.exists()
+    assert route_gradient_pair_rows_path.exists()
+    assert all(path.exists() for path in route_gradient_plot_paths.values())
+    assert route_gradient_payload["summary"]["num_checkpoints"] == 1
+    assert route_gradient_payload["subspace"]["subspace_name"] == "full_residual"
+    assert route_gradient_rows
+    assert route_gradient_pairwise_rows
+    assert route_gradient_pair_rows
+    assert "negative_loss_dot_route_gradient" in route_gradient_rows[0]
+    assert "route_gradient_cosine" in route_gradient_pairwise_rows[0]
+
+    route_decomposition_report_path, route_decomposition_markdown_path, route_decomposition_metric_rows_path, route_decomposition_rows_path, route_decomposition_group_rows_path, route_decomposition_pair_rows_path, route_decomposition_plot_paths = run_route_gradient_decomposition(
+        config_path=train_config,
+        probe_set_path=probe_set_path,
+        checkpoint_dir=run_dir / "checkpoints",
+        checkpoint_paths=[checkpoint_path],
+        output_dir=tmp_path / "route_gradient_decomposition",
+        device_name="cpu",
+        stage_name="embedding",
+        subspace_name="full_residual",
+        rank=None,
+        position_role="query_key",
+        pair_types=["query_key", "distractor"],
+        max_pairs_per_type=1,
+        min_pairs_per_type=1,
+        loss_side="both",
+        decomposition_modes=["attention_heads", "mlp_neurons"],
+        top_k_groups=8,
+    )
+    route_decomposition_payload = read_json(route_decomposition_report_path)
+    route_decomposition_metric_rows = list(iter_jsonl(route_decomposition_metric_rows_path))
+    route_decomposition_rows = list(iter_jsonl(route_decomposition_rows_path))
+    route_decomposition_group_rows = list(iter_jsonl(route_decomposition_group_rows_path))
+    route_decomposition_pair_rows = list(iter_jsonl(route_decomposition_pair_rows_path))
+
+    assert route_decomposition_report_path.exists()
+    assert route_decomposition_markdown_path.exists()
+    assert route_decomposition_metric_rows_path.exists()
+    assert route_decomposition_rows_path.exists()
+    assert route_decomposition_group_rows_path.exists()
+    assert route_decomposition_pair_rows_path.exists()
+    assert all(path.exists() for path in route_decomposition_plot_paths.values())
+    assert route_decomposition_payload["summary"]["num_checkpoints"] == 1
+    assert route_decomposition_payload["subspace"]["subspace_name"] == "full_residual"
+    assert route_decomposition_metric_rows
+    assert route_decomposition_rows
+    assert route_decomposition_group_rows
+    assert route_decomposition_pair_rows
+    assert "group_kind" in route_decomposition_rows[0]
+    assert "support_per_parameter" in route_decomposition_rows[0]
+    assert any(row["group_kind"] == "attention_head_projection" for row in route_decomposition_rows)
+    assert any(row["group_kind"] == "mlp_neuron" for row in route_decomposition_rows)
+
+    checkpoint_update_report_path, checkpoint_update_markdown_path, checkpoint_update_metric_rows_path, checkpoint_update_decomposition_rows_path, checkpoint_update_group_rows_path, checkpoint_update_pair_rows_path, checkpoint_update_plot_paths = run_checkpoint_update_attribution(
+        config_path=train_config,
+        probe_set_path=probe_set_path,
+        checkpoint_dir=run_dir / "checkpoints",
+        checkpoint_paths=[run_dir / "checkpoints" / "step_000002.pt", checkpoint_path],
+        output_dir=tmp_path / "checkpoint_update_attribution",
+        device_name="cpu",
+        stage_name="embedding",
+        subspace_name="full_residual",
+        rank=None,
+        position_role="query_key",
+        pair_types=["query_key"],
+        max_pairs_per_type=1,
+        min_pairs_per_type=1,
+        decomposition_modes=["module_blocks"],
+        top_k_groups=4,
+    )
+    checkpoint_update_payload = read_json(checkpoint_update_report_path)
+    checkpoint_update_metric_rows = list(iter_jsonl(checkpoint_update_metric_rows_path))
+    checkpoint_update_decomposition_rows = list(iter_jsonl(checkpoint_update_decomposition_rows_path))
+    checkpoint_update_group_rows = list(iter_jsonl(checkpoint_update_group_rows_path))
+    checkpoint_update_pair_rows = list(iter_jsonl(checkpoint_update_pair_rows_path))
+
+    assert checkpoint_update_report_path.exists()
+    assert checkpoint_update_markdown_path.exists()
+    assert checkpoint_update_metric_rows_path.exists()
+    assert checkpoint_update_decomposition_rows_path.exists()
+    assert checkpoint_update_group_rows_path.exists()
+    assert checkpoint_update_pair_rows_path.exists()
+    assert all(path.exists() for path in checkpoint_update_plot_paths.values())
+    assert checkpoint_update_payload["summary"]["num_intervals"] == 1
+    assert checkpoint_update_payload["basis_mode"] == "source_checkpoint_per_interval"
+    assert checkpoint_update_metric_rows
+    assert checkpoint_update_decomposition_rows
+    assert checkpoint_update_group_rows
+    assert checkpoint_update_pair_rows
+    assert "actual_delta" in checkpoint_update_metric_rows[0]
+    assert "predicted_delta" in checkpoint_update_metric_rows[0]
+    assert "relative_error" in checkpoint_update_metric_rows[0]
+    assert "predicted_delta_contribution" in checkpoint_update_decomposition_rows[0]
+
+    data_update_report_path, data_update_markdown_path, data_update_route_rows_path, data_update_rows_path, data_update_pair_rows_path, data_update_plot_paths = run_data_update_attribution(
+        config_path=train_config,
+        probe_set_path=probe_set_path,
+        checkpoint_dir=run_dir / "checkpoints",
+        checkpoint_paths=[run_dir / "checkpoints" / "step_000002.pt", checkpoint_path],
+        output_dir=tmp_path / "data_update_attribution",
+        device_name="cpu",
+        stage_name="embedding",
+        subspace_name="full_residual",
+        rank=None,
+        position_role="query_key",
+        pair_types=["query_key", "distractor"],
+        route_pair_type="query_key",
+        data_group_fields=["pair_type"],
+        max_pairs_per_type=1,
+        min_pairs_per_type=1,
+        loss_side="both",
+        top_k_data_groups=4,
+    )
+    data_update_payload = read_json(data_update_report_path)
+    data_update_route_rows = list(iter_jsonl(data_update_route_rows_path))
+    data_update_rows = list(iter_jsonl(data_update_rows_path))
+    data_update_pair_rows = list(iter_jsonl(data_update_pair_rows_path))
+
+    assert data_update_report_path.exists()
+    assert data_update_markdown_path.exists()
+    assert data_update_route_rows_path.exists()
+    assert data_update_rows_path.exists()
+    assert data_update_pair_rows_path.exists()
+    assert all(path.exists() for path in data_update_plot_paths.values())
+    assert data_update_payload["summary"]["num_intervals"] == 1
+    assert data_update_payload["route_pair_type"] == "query_key"
+    assert data_update_route_rows
+    assert data_update_rows
+    assert data_update_pair_rows
+    assert "negative_loss_dot_actual_update" in data_update_rows[0]
+    assert "negative_loss_dot_route_gradient" in data_update_rows[0]
+    assert any(row["data_group_id"] == "pair_type=query_key" for row in data_update_rows)
+
+    attention_score_report_path, attention_score_markdown_path, attention_score_metric_rows_path, attention_score_rows_path, attention_score_component_rows_path, attention_score_pair_rows_path, attention_score_plot_paths = run_attention_score_delta_decomposition(
+        config_path=train_config,
+        probe_set_path=probe_set_path,
+        checkpoint_dir=run_dir / "checkpoints",
+        checkpoint_paths=[run_dir / "checkpoints" / "step_000002.pt", checkpoint_path],
+        output_dir=tmp_path / "attention_score_delta_decomposition",
+        device_name="cpu",
+        head_layer=0,
+        head=0,
+        score_query_role="query_key",
+        score_key_roles=["support_key"],
+        record_sides=["clean"],
+        pair_types=["query_key"],
+        max_pairs_per_type=1,
+        min_pairs_per_type=1,
+        top_k_components=4,
+    )
+    attention_score_payload = read_json(attention_score_report_path)
+    attention_score_metric_rows = list(iter_jsonl(attention_score_metric_rows_path))
+    attention_score_rows = list(iter_jsonl(attention_score_rows_path))
+    attention_score_component_rows = list(iter_jsonl(attention_score_component_rows_path))
+    attention_score_pair_rows = list(iter_jsonl(attention_score_pair_rows_path))
+
+    assert attention_score_report_path.exists()
+    assert attention_score_markdown_path.exists()
+    assert attention_score_metric_rows_path.exists()
+    assert attention_score_rows_path.exists()
+    assert attention_score_component_rows_path.exists()
+    assert attention_score_pair_rows_path.exists()
+    assert all(path.exists() for path in attention_score_plot_paths.values())
+    assert attention_score_payload["summary"]["num_intervals"] == 1
+    assert attention_score_metric_rows
+    assert attention_score_rows
+    assert attention_score_component_rows
+    assert attention_score_pair_rows
+    assert "actual_score_delta_mean" in attention_score_metric_rows[0]
+    assert "linear_score_delta_mean" in attention_score_metric_rows[0]
+    assert "softmax_residual_mean" in attention_score_metric_rows[0]
+    assert "component" in attention_score_component_rows[0]
+
+    attention_score_update_report_path, attention_score_update_markdown_path, attention_score_update_metric_rows_path, attention_score_update_decomposition_rows_path, attention_score_update_group_rows_path, attention_score_update_score_rows_path, attention_score_update_pair_rows_path, attention_score_update_plot_paths = run_attention_score_update_attribution(
+        config_path=train_config,
+        probe_set_path=probe_set_path,
+        checkpoint_dir=run_dir / "checkpoints",
+        checkpoint_paths=[run_dir / "checkpoints" / "step_000002.pt", checkpoint_path],
+        output_dir=tmp_path / "attention_score_update_attribution",
+        device_name="cpu",
+        head_layer=0,
+        head=0,
+        score_query_role="query_key",
+        score_key_roles=["support_key"],
+        record_sides=["clean"],
+        score_components=["score", "q_side", "k_side"],
+        pair_types=["query_key"],
+        max_pairs_per_type=1,
+        min_pairs_per_type=1,
+        decomposition_modes=["module_blocks"],
+        top_k_groups=4,
+    )
+    attention_score_update_payload = read_json(attention_score_update_report_path)
+    attention_score_update_metric_rows = list(iter_jsonl(attention_score_update_metric_rows_path))
+    attention_score_update_decomposition_rows = list(iter_jsonl(attention_score_update_decomposition_rows_path))
+    attention_score_update_group_rows = list(iter_jsonl(attention_score_update_group_rows_path))
+    attention_score_update_score_rows = list(iter_jsonl(attention_score_update_score_rows_path))
+    attention_score_update_pair_rows = list(iter_jsonl(attention_score_update_pair_rows_path))
+
+    assert attention_score_update_report_path.exists()
+    assert attention_score_update_markdown_path.exists()
+    assert attention_score_update_metric_rows_path.exists()
+    assert attention_score_update_decomposition_rows_path.exists()
+    assert attention_score_update_group_rows_path.exists()
+    assert attention_score_update_score_rows_path.exists()
+    assert attention_score_update_pair_rows_path.exists()
+    assert all(path.exists() for path in attention_score_update_plot_paths.values())
+    assert attention_score_update_payload["summary"]["num_intervals"] == 1
+    assert attention_score_update_metric_rows
+    assert attention_score_update_decomposition_rows
+    assert attention_score_update_group_rows
+    assert attention_score_update_score_rows
+    assert attention_score_update_pair_rows
+    assert {row["score_component"] for row in attention_score_update_metric_rows} == {"score", "q_side", "k_side"}
+    assert "actual_delta" in attention_score_update_metric_rows[0]
+    assert "predicted_delta" in attention_score_update_metric_rows[0]
+    assert "actual_q_side_delta_mean" in attention_score_update_metric_rows[0]
+    assert "predicted_delta_contribution" in attention_score_update_decomposition_rows[0]
+
+    attention_retrieval_update_report_path, attention_retrieval_update_markdown_path, attention_retrieval_update_metric_rows_path, attention_retrieval_update_decomposition_rows_path, attention_retrieval_update_group_rows_path, attention_retrieval_update_score_rows_path, attention_retrieval_update_pair_rows_path, attention_retrieval_update_plot_paths = run_attention_retrieval_separation_update_attribution(
+        config_path=train_config,
+        probe_set_path=probe_set_path,
+        checkpoint_dir=run_dir / "checkpoints",
+        checkpoint_paths=[run_dir / "checkpoints" / "step_000002.pt", checkpoint_path],
+        output_dir=tmp_path / "attention_retrieval_separation_update_attribution",
+        device_name="cpu",
+        head_layer=0,
+        head=0,
+        score_query_role="query_key",
+        support_key_role="support_key",
+        distractor_key_role="key_distractors",
+        record_sides=["clean"],
+        score_components=["score", "q_side", "k_side"],
+        pair_types=["query_key"],
+        max_pairs_per_type=1,
+        min_pairs_per_type=1,
+        decomposition_modes=["module_blocks"],
+        top_k_groups=4,
+    )
+    attention_retrieval_update_payload = read_json(attention_retrieval_update_report_path)
+    attention_retrieval_update_metric_rows = list(iter_jsonl(attention_retrieval_update_metric_rows_path))
+    attention_retrieval_update_decomposition_rows = list(iter_jsonl(attention_retrieval_update_decomposition_rows_path))
+    attention_retrieval_update_group_rows = list(iter_jsonl(attention_retrieval_update_group_rows_path))
+    attention_retrieval_update_score_rows = list(iter_jsonl(attention_retrieval_update_score_rows_path))
+    attention_retrieval_update_pair_rows = list(iter_jsonl(attention_retrieval_update_pair_rows_path))
+
+    assert attention_retrieval_update_report_path.exists()
+    assert attention_retrieval_update_markdown_path.exists()
+    assert attention_retrieval_update_metric_rows_path.exists()
+    assert attention_retrieval_update_decomposition_rows_path.exists()
+    assert attention_retrieval_update_group_rows_path.exists()
+    assert attention_retrieval_update_score_rows_path.exists()
+    assert attention_retrieval_update_pair_rows_path.exists()
+    assert all(path.exists() for path in attention_retrieval_update_plot_paths.values())
+    assert attention_retrieval_update_payload["summary"]["num_intervals"] == 1
+    assert attention_retrieval_update_metric_rows
+    assert attention_retrieval_update_decomposition_rows
+    assert attention_retrieval_update_group_rows
+    assert attention_retrieval_update_score_rows
+    assert attention_retrieval_update_pair_rows
+    assert {row["score_component"] for row in attention_retrieval_update_metric_rows} == {"score", "q_side", "k_side"}
+    assert {row["objective"] for row in attention_retrieval_update_metric_rows} == {"retrieval_separation"}
+    assert "support_delta_mean" in attention_retrieval_update_metric_rows[0]
+    assert "distractor_delta_mean" in attention_retrieval_update_metric_rows[0]
+    assert "predicted_delta_contribution" in attention_retrieval_update_decomposition_rows[0]
+
+    attention_chain_report_path, attention_chain_markdown_path, attention_chain_checkpoint_rows_path, attention_chain_delta_rows_path, attention_chain_pair_metric_rows_path, attention_chain_pair_rows_path, attention_chain_plot_paths = run_attention_retrieval_chain_report(
+        config_path=train_config,
+        probe_set_path=probe_set_path,
+        checkpoint_dir=run_dir / "checkpoints",
+        checkpoint_paths=[run_dir / "checkpoints" / "step_000002.pt", checkpoint_path],
+        output_dir=tmp_path / "attention_retrieval_chain_report",
+        device_name="cpu",
+        head_layer=0,
+        head=0,
+        score_query_role="query_key",
+        support_key_role="support_key",
+        distractor_key_role="key_distractors",
+        record_sides=["clean"],
+        pair_types=["query_key"],
+        max_pairs_per_type=1,
+        min_pairs_per_type=1,
+    )
+    attention_chain_payload = read_json(attention_chain_report_path)
+    attention_chain_checkpoint_rows = list(iter_jsonl(attention_chain_checkpoint_rows_path))
+    attention_chain_delta_rows = list(iter_jsonl(attention_chain_delta_rows_path))
+    attention_chain_pair_metric_rows = list(iter_jsonl(attention_chain_pair_metric_rows_path))
+    attention_chain_pair_rows = list(iter_jsonl(attention_chain_pair_rows_path))
+
+    assert attention_chain_report_path.exists()
+    assert attention_chain_markdown_path.exists()
+    assert attention_chain_checkpoint_rows_path.exists()
+    assert attention_chain_delta_rows_path.exists()
+    assert attention_chain_pair_metric_rows_path.exists()
+    assert attention_chain_pair_rows_path.exists()
+    assert all(path.exists() for path in attention_chain_plot_paths.values())
+    assert attention_chain_payload["summary"]["num_checkpoints"] == 2
+    assert attention_chain_checkpoint_rows
+    assert attention_chain_delta_rows
+    assert attention_chain_pair_metric_rows
+    assert attention_chain_pair_rows
+    assert "qk_separation_mean" in attention_chain_checkpoint_rows[0]
+    assert "attention_separation_mean" in attention_chain_checkpoint_rows[0]
+    assert "head_margin_dla_mean" in attention_chain_checkpoint_rows[0]
+    assert "delta_qk_separation_mean" in attention_chain_delta_rows[0]
+    assert "negative_delta_answer_loss_mean" in attention_chain_delta_rows[0]
+
+    attention_downstream_update_report_path, attention_downstream_update_markdown_path, attention_downstream_update_metric_rows_path, attention_downstream_update_decomposition_rows_path, attention_downstream_update_group_rows_path, attention_downstream_update_scalar_rows_path, attention_downstream_update_pair_rows_path, attention_downstream_update_plot_paths = run_attention_downstream_update_attribution(
+        config_path=train_config,
+        probe_set_path=probe_set_path,
+        checkpoint_dir=run_dir / "checkpoints",
+        checkpoint_paths=[run_dir / "checkpoints" / "step_000002.pt", checkpoint_path],
+        output_dir=tmp_path / "attention_downstream_update_attribution",
+        device_name="cpu",
+        head_layer=0,
+        head=0,
+        score_query_role="query_key",
+        support_key_role="support_key",
+        distractor_key_role="key_distractors",
+        record_sides=["clean"],
+        scalar_names=["attention_separation", "head_margin_dla_fixed_readout", "negative_answer_loss"],
+        pair_types=["query_key"],
+        max_pairs_per_type=1,
+        min_pairs_per_type=1,
+        decomposition_modes=["module_blocks"],
+        top_k_groups=4,
+    )
+    attention_downstream_update_payload = read_json(attention_downstream_update_report_path)
+    attention_downstream_update_metric_rows = list(iter_jsonl(attention_downstream_update_metric_rows_path))
+    attention_downstream_update_decomposition_rows = list(iter_jsonl(attention_downstream_update_decomposition_rows_path))
+    attention_downstream_update_group_rows = list(iter_jsonl(attention_downstream_update_group_rows_path))
+    attention_downstream_update_scalar_rows = list(iter_jsonl(attention_downstream_update_scalar_rows_path))
+    attention_downstream_update_pair_rows = list(iter_jsonl(attention_downstream_update_pair_rows_path))
+
+    assert attention_downstream_update_report_path.exists()
+    assert attention_downstream_update_markdown_path.exists()
+    assert attention_downstream_update_metric_rows_path.exists()
+    assert attention_downstream_update_decomposition_rows_path.exists()
+    assert attention_downstream_update_group_rows_path.exists()
+    assert attention_downstream_update_scalar_rows_path.exists()
+    assert attention_downstream_update_pair_rows_path.exists()
+    assert all(path.exists() for path in attention_downstream_update_plot_paths.values())
+    assert attention_downstream_update_payload["summary"]["num_intervals"] == 1
+    assert attention_downstream_update_metric_rows
+    assert attention_downstream_update_decomposition_rows
+    assert attention_downstream_update_group_rows
+    assert attention_downstream_update_scalar_rows
+    assert attention_downstream_update_pair_rows
+    assert {row["scalar_name"] for row in attention_downstream_update_metric_rows} == {
+        "attention_separation",
+        "head_margin_dla_fixed_readout",
+        "negative_answer_loss",
+    }
+    assert "actual_delta" in attention_downstream_update_metric_rows[0]
+    assert "predicted_delta" in attention_downstream_update_metric_rows[0]
+    assert "predicted_delta_contribution" in attention_downstream_update_decomposition_rows[0]
+
     path_logit_report_path, path_logit_markdown_path, path_logit_plot_paths = run_path_logit_decomposition(
         config_path=train_config,
         probe_set_path=probe_set_path,
@@ -261,6 +688,60 @@ def test_analysis_and_training_pipeline(tmp_path: Path, benchmark_config_path: P
 
     assert probe_set_path.exists()
     assert probe_metadata_path.exists()
+
+    train_probe_set_path, train_probe_metadata_path = generate_probe_set(
+        benchmark_dir=benchmark_dir,
+        output_path=tmp_path / "train_probe_set.jsonl",
+        examples_per_split=1,
+        seed=29,
+        split_names=["train"],
+    )
+    train_probe_metadata = read_json(train_probe_metadata_path)
+
+    assert train_probe_set_path.exists()
+    assert train_probe_metadata["splits"] == ["train"]
+    assert train_probe_metadata["split_counts"]["train"] == 1
+
+    route_competition_report_path, route_competition_markdown_path, route_competition_route_rows_path, route_competition_data_rows_path, route_competition_pair_rows_path, route_competition_plot_paths = run_route_competition_report(
+        config_path=train_config,
+        probe_set_path=probe_set_path,
+        train_probe_set_path=train_probe_set_path,
+        checkpoint_dir=run_dir / "checkpoints",
+        checkpoint_paths=[run_dir / "checkpoints" / "step_000002.pt", checkpoint_path],
+        output_dir=tmp_path / "route_competition",
+        device_name="cpu",
+        raw_route_specs=[
+            "label=embedding_full_residual,stage=embedding,subspace=full_residual,position_role=query_key",
+            "label=layer0_post_mlp_full_residual,stage=layer_0_post_mlp,subspace=full_residual,position_role=query_key",
+        ],
+        route_pair_type="query_key",
+        eval_pair_types=["query_key"],
+        train_pair_types=["query_key"],
+        data_group_fields=["pair_type"],
+        max_pairs_per_type=1,
+        min_pairs_per_type=1,
+    )
+    route_competition_payload = read_json(route_competition_report_path)
+    route_competition_route_rows = list(iter_jsonl(route_competition_route_rows_path))
+    route_competition_data_rows = list(iter_jsonl(route_competition_data_rows_path))
+    route_competition_pair_rows = list(iter_jsonl(route_competition_pair_rows_path))
+
+    assert route_competition_report_path.exists()
+    assert route_competition_markdown_path.exists()
+    assert route_competition_route_rows_path.exists()
+    assert route_competition_data_rows_path.exists()
+    assert route_competition_pair_rows_path.exists()
+    assert all(path.exists() for path in route_competition_plot_paths.values())
+    assert route_competition_payload["summary"]["num_routes"] == 2
+    assert route_competition_payload["route_pair_type"] == "query_key"
+    assert route_competition_payload["basis_mode"] == "source_checkpoint_per_interval"
+    assert route_competition_route_rows
+    assert route_competition_data_rows
+    assert route_competition_pair_rows
+    assert "route_label" in route_competition_route_rows[0]
+    assert "domain" in route_competition_route_rows[0]
+    assert "negative_loss_dot_route_gradient" in route_competition_data_rows[0]
+
     assert len(sweep_rows) == 2
     assert "answer_probe_accuracy_by_stage" in sweep_rows[0]
     assert "top_mlps_by_ablation" in sweep_rows[0]
@@ -684,7 +1165,7 @@ def test_analysis_and_training_pipeline(tmp_path: Path, benchmark_config_path: P
     assert family_update_link_plot_paths["interval_plot"].exists()
     assert family_update_link_plot_paths["useful_correlation_plot"].exists()
     assert family_update_link_payload["family_id"] == multi_feature_family_ids[0]
-    assert family_update_link_payload["selected_feature_ids"] == subset_trajectory_payload["feature_ids"]
+    assert sorted(family_update_link_payload["selected_feature_ids"]) == sorted(subset_trajectory_payload["feature_ids"])
     assert len(family_update_link_payload["interval_rows"]) == 1
     assert "correlation_summary" in family_update_link_payload
     assert "top_intervals" in family_update_link_payload
@@ -978,6 +1459,29 @@ def test_train_config_supports_full_eval(tmp_path: Path, benchmark_config_path: 
     spec = TrainSpec.from_path(train_config)
 
     assert spec.evaluation.max_eval_batches is None
+
+
+def test_constant_schedule_accepts_explicit_null_optional_decay_fields(
+    tmp_path: Path,
+    benchmark_config_path: Path,
+) -> None:
+    benchmark_dir = generate_symbolic_kv_stream_benchmark(benchmark_config_path)
+    train_config = write_small_train_config(tmp_path / "train_null_schedule.json", benchmark_dir)
+    payload = read_json(train_config)
+    payload["optimization"]["schedule"] = {
+        "kind": "constant",
+        "decay_start_step": None,
+        "decay_end_step": None,
+        "min_learning_rate": None,
+    }
+    write_json(train_config, payload)
+
+    spec = TrainSpec.from_path(train_config)
+
+    assert spec.optimization.schedule.kind == "constant"
+    assert spec.optimization.schedule.decay_start_step is None
+    assert spec.optimization.schedule.decay_end_step is None
+    assert spec.optimization.schedule.min_learning_rate is None
 
 
 def test_cosine_decay_learning_rate_schedule() -> None:
