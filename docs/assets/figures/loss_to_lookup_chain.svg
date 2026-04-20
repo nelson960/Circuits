@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="260" viewBox="0 0 960 260" role="img" aria-labelledby="title desc">
+  <title id="title">Loss to lookup proof chain</title>
+  <desc id="desc">The desired proof chain from data relation through loss, gradient, parameter update, geometry change, route growth, and answer margin.</desc>
+  <rect width="960" height="260" fill="#fbfbf7"/>
+  <text x="480" y="38" text-anchor="middle" font-family="Georgia, serif" font-size="27" font-weight="700" fill="#171615">The proof chain we want</text>
+  <g font-family="Georgia, serif">
+    <g transform="translate(35 92)">
+      <rect width="112" height="72" rx="8" fill="#e9f5f0" stroke="#22745a" stroke-width="2"/>
+      <text x="56" y="30" text-anchor="middle" font-size="19" font-weight="700" fill="#184f40">data</text>
+      <text x="56" y="54" text-anchor="middle" font-size="14" fill="#184f40">d(x,y)</text>
+    </g>
+    <g transform="translate(175 92)">
+      <rect width="112" height="72" rx="8" fill="#f7f1e3" stroke="#9a7a31" stroke-width="2"/>
+      <text x="56" y="30" text-anchor="middle" font-size="19" font-weight="700" fill="#5e4a1d">loss</text>
+      <text x="56" y="54" text-anchor="middle" font-size="14" fill="#5e4a1d">error signal</text>
+    </g>
+    <g transform="translate(315 92)">
+      <rect width="112" height="72" rx="8" fill="#eef3fa" stroke="#356aa0" stroke-width="2"/>
+      <text x="56" y="30" text-anchor="middle" font-size="19" font-weight="700" fill="#254e77">gradient</text>
+      <text x="56" y="54" text-anchor="middle" font-size="14" fill="#254e77">dL/dtheta</text>
+    </g>
+    <g transform="translate(455 92)">
+      <rect width="112" height="72" rx="8" fill="#f3edf7" stroke="#7c5797" stroke-width="2"/>
+      <text x="56" y="30" text-anchor="middle" font-size="19" font-weight="700" fill="#573d6b">update</text>
+      <text x="56" y="54" text-anchor="middle" font-size="14" fill="#573d6b">Delta theta</text>
+    </g>
+    <g transform="translate(595 92)">
+      <rect width="112" height="72" rx="8" fill="#eaf3f2" stroke="#39706d" stroke-width="2"/>
+      <text x="56" y="30" text-anchor="middle" font-size="19" font-weight="700" fill="#255452">geometry</text>
+      <text x="56" y="54" text-anchor="middle" font-size="14" fill="#255452">QK / OV</text>
+    </g>
+    <g transform="translate(735 92)">
+      <rect width="112" height="72" rx="8" fill="#f7eeee" stroke="#9b4b4b" stroke-width="2"/>
+      <text x="56" y="30" text-anchor="middle" font-size="19" font-weight="700" fill="#673333">route</text>
+      <text x="56" y="54" text-anchor="middle" font-size="14" fill="#673333">C_P grows</text>
+    </g>
+    <g transform="translate(608 190)">
+      <rect width="214" height="42" rx="8" fill="#fff" stroke="#333" stroke-width="1.5"/>
+      <text x="107" y="27" text-anchor="middle" font-size="17" font-weight="700" fill="#171615">answer margin improves</text>
+    </g>
+  </g>
+  <g stroke="#333" stroke-width="2" fill="none">
+    <path d="M147 128 H175"/>
+    <path d="M287 128 H315"/>
+    <path d="M427 128 H455"/>
+    <path d="M567 128 H595"/>
+    <path d="M707 128 H735"/>
+    <path d="M791 164 V190"/>
+  </g>
+  <g fill="#333">
+    <polygon points="175,128 166,123 166,133"/>
+    <polygon points="315,128 306,123 306,133"/>
+    <polygon points="455,128 446,123 446,133"/>
+    <polygon points="595,128 586,123 586,133"/>
+    <polygon points="735,128 726,123 726,133"/>
+    <polygon points="791,190 786,181 796,181"/>
+  </g>
+</svg>

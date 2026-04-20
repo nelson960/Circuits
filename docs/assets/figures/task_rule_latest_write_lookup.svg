@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="360" viewBox="0 0 960 360" role="img" aria-labelledby="title desc">
+  <title id="title">Latest-write lookup task</title>
+  <desc id="desc">A symbolic key-value stream where the read query must return the latest value for the queried key.</desc>
+  <rect width="960" height="360" fill="#fbfbf7"/>
+  <text x="480" y="42" text-anchor="middle" font-family="Georgia, serif" font-size="28" font-weight="700" fill="#171615">Latest-write lookup rule</text>
+  <text x="480" y="75" text-anchor="middle" font-family="Georgia, serif" font-size="17" fill="#4a4741">The answer is the value from the most recent write with the queried key.</text>
+
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="20" font-weight="700">
+    <rect x="70" y="126" width="118" height="64" rx="8" fill="#e9f5f0" stroke="#22745a" stroke-width="2"/>
+    <text x="129" y="165" text-anchor="middle" fill="#184f40">W K03 V14</text>
+    <rect x="215" y="126" width="118" height="64" rx="8" fill="#f3f0e8" stroke="#9a7a31" stroke-width="2"/>
+    <text x="274" y="165" text-anchor="middle" fill="#5e4a1d">W K01 V09</text>
+    <rect x="360" y="126" width="118" height="64" rx="8" fill="#e9f5f0" stroke="#22745a" stroke-width="2"/>
+    <text x="419" y="165" text-anchor="middle" fill="#184f40">R K03</text>
+    <rect x="505" y="126" width="118" height="64" rx="8" fill="#eef3fa" stroke="#356aa0" stroke-width="2"/>
+    <text x="564" y="165" text-anchor="middle" fill="#254e77">W K03 V02</text>
+    <rect x="650" y="126" width="118" height="64" rx="8" fill="#eef3fa" stroke="#356aa0" stroke-width="2"/>
+    <text x="709" y="165" text-anchor="middle" fill="#254e77">R K03</text>
+  </g>
+
+  <path d="M129 198 C145 240 320 238 397 198" fill="none" stroke="#22745a" stroke-width="3"/>
+  <polygon points="397,198 386,196 393,207" fill="#22745a"/>
+  <text x="260" y="255" text-anchor="middle" font-family="Georgia, serif" font-size="18" fill="#184f40">latest K03 write before this read: V14</text>
+  <rect x="343" y="273" width="150" height="48" rx="8" fill="#fff" stroke="#22745a" stroke-width="2"/>
+  <text x="418" y="304" text-anchor="middle" font-family="Georgia, serif" font-size="22" font-weight="700" fill="#184f40">answer V14</text>
+
+  <path d="M564 198 C575 240 645 238 694 198" fill="none" stroke="#356aa0" stroke-width="3"/>
+  <polygon points="694,198 683,196 690,207" fill="#356aa0"/>
+  <text x="658" y="255" text-anchor="middle" font-family="Georgia, serif" font-size="18" fill="#254e77">new latest K03 write: V02</text>
+  <rect x="638" y="273" width="150" height="48" rx="8" fill="#fff" stroke="#356aa0" stroke-width="2"/>
+  <text x="713" y="304" text-anchor="middle" font-family="Georgia, serif" font-size="22" font-weight="700" fill="#254e77">answer V02</text>
+
+  <text x="274" y="222" text-anchor="middle" font-family="Georgia, serif" font-size="15" fill="#6b604b">distractor key</text>
+</svg>

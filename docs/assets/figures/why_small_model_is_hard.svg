@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="420" viewBox="0 0 960 420" role="img" aria-labelledby="title desc">
+  <title id="title">Why a small model is still hard</title>
+  <desc id="desc">A simple rule becomes dense vectors, shared residual state, superposed neurons, interacting components, and output logits.</desc>
+  <rect width="960" height="420" fill="#fbfbf7"/>
+  <text x="480" y="42" text-anchor="middle" font-family="Georgia, serif" font-size="28" font-weight="700" fill="#171615">Why this is hard even in a small model</text>
+  <text x="480" y="72" text-anchor="middle" font-family="Georgia, serif" font-size="17" fill="#4a4741">The outside rule is simple. The learned implementation is distributed and interactive.</text>
+
+  <g font-family="Georgia, serif">
+    <rect x="50" y="145" width="145" height="90" rx="8" fill="#e9f5f0" stroke="#22745a" stroke-width="2"/>
+    <text x="122" y="181" text-anchor="middle" font-size="21" font-weight="700" fill="#184f40">simple rule</text>
+    <text x="122" y="210" text-anchor="middle" font-size="15" fill="#184f40">latest write</text>
+
+    <rect x="235" y="145" width="145" height="90" rx="8" fill="#eef3fa" stroke="#356aa0" stroke-width="2"/>
+    <text x="307" y="181" text-anchor="middle" font-size="21" font-weight="700" fill="#254e77">vectors</text>
+    <text x="307" y="210" text-anchor="middle" font-size="15" fill="#254e77">directions mix</text>
+
+    <rect x="420" y="145" width="145" height="90" rx="8" fill="#f7f1e3" stroke="#9a7a31" stroke-width="2"/>
+    <text x="492" y="181" text-anchor="middle" font-size="21" font-weight="700" fill="#5e4a1d">residual</text>
+    <text x="492" y="210" text-anchor="middle" font-size="15" fill="#5e4a1d">shared state</text>
+
+    <rect x="605" y="145" width="145" height="90" rx="8" fill="#f7eeee" stroke="#9b4b4b" stroke-width="2"/>
+    <text x="677" y="181" text-anchor="middle" font-size="21" font-weight="700" fill="#673333">neurons</text>
+    <text x="677" y="210" text-anchor="middle" font-size="15" fill="#673333">polysemantic</text>
+
+    <rect x="790" y="145" width="145" height="90" rx="8" fill="#eaf3f2" stroke="#39706d" stroke-width="2"/>
+    <text x="862" y="181" text-anchor="middle" font-size="21" font-weight="700" fill="#255452">logits</text>
+    <text x="862" y="210" text-anchor="middle" font-size="15" fill="#255452">many paths</text>
+  </g>
+
+  <g stroke="#333" stroke-width="2.5" fill="none">
+    <path d="M195 190 H235"/>
+    <path d="M380 190 H420"/>
+    <path d="M565 190 H605"/>
+    <path d="M750 190 H790"/>
+  </g>
+  <g fill="#333">
+    <polygon points="235,190 225,185 225,195"/>
+    <polygon points="420,190 410,185 410,195"/>
+    <polygon points="605,190 595,185 595,195"/>
+    <polygon points="790,190 780,185 780,195"/>
+  </g>
+
+  <g font-family="Georgia, serif" font-size="18" fill="#333">
+    <text x="112" y="300" text-anchor="middle">human rule</text>
+    <text x="307" y="300" text-anchor="middle">no named variables</text>
+    <text x="492" y="300" text-anchor="middle">everything shares space</text>
+    <text x="677" y="300" text-anchor="middle">one unit has many roles</text>
+    <text x="862" y="300" text-anchor="middle">effects interact</text>
+  </g>
+  <text x="480" y="358" text-anchor="middle" font-family="Georgia, serif" font-size="19" font-weight="700" fill="#171615">Small does not mean clean. Dense co-adaptation can appear even in this toy task.</text>
+</svg>

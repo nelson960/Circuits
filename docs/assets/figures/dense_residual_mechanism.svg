@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="470" viewBox="0 0 960 470" role="img" aria-labelledby="title desc">
+  <title id="title">Dense residual mechanism</title>
+  <desc id="desc">Current trained-model picture with early infrastructure feeding a shared residual stream and late writer routes.</desc>
+  <rect width="960" height="470" fill="#fbfbf7"/>
+  <text x="480" y="42" text-anchor="middle" font-family="Georgia, serif" font-size="28" font-weight="700" fill="#171615">Current trained-model picture</text>
+  <text x="480" y="72" text-anchor="middle" font-family="Georgia, serif" font-size="17" fill="#4a4741">Not one clean serial circuit: early infrastructure shapes a shared residual state used by late writer routes.</text>
+
+  <g font-family="Georgia, serif">
+    <rect x="60" y="130" width="150" height="58" rx="8" fill="#f7f1e3" stroke="#9a7a31" stroke-width="2"/>
+    <text x="135" y="166" text-anchor="middle" font-size="21" font-weight="700" fill="#5e4a1d">L0MLP</text>
+    <rect x="60" y="215" width="150" height="58" rx="8" fill="#f7f1e3" stroke="#9a7a31" stroke-width="2"/>
+    <text x="135" y="251" text-anchor="middle" font-size="21" font-weight="700" fill="#5e4a1d">L1H3</text>
+    <rect x="60" y="300" width="150" height="58" rx="8" fill="#f7f1e3" stroke="#9a7a31" stroke-width="2"/>
+    <text x="135" y="336" text-anchor="middle" font-size="21" font-weight="700" fill="#5e4a1d">L1MLP</text>
+
+    <rect x="310" y="155" width="270" height="178" rx="8" fill="#eef3fa" stroke="#356aa0" stroke-width="2.5"/>
+    <text x="445" y="205" text-anchor="middle" font-size="25" font-weight="700" fill="#254e77">shared residual stream</text>
+    <text x="445" y="240" text-anchor="middle" font-size="17" fill="#254e77">mixed key, value, recency,</text>
+    <text x="445" y="265" text-anchor="middle" font-size="17" fill="#254e77">position, and readout directions</text>
+    <text x="445" y="300" text-anchor="middle" font-size="16" fill="#254e77">full residual patches rescue,</text>
+    <text x="445" y="322" text-anchor="middle" font-size="16" fill="#254e77">but hide which variable mattered</text>
+
+    <rect x="695" y="115" width="150" height="58" rx="8" fill="#e9f5f0" stroke="#22745a" stroke-width="2"/>
+    <text x="770" y="151" text-anchor="middle" font-size="21" font-weight="700" fill="#184f40">L1H2</text>
+    <rect x="695" y="205" width="150" height="58" rx="8" fill="#e9f5f0" stroke="#22745a" stroke-width="2"/>
+    <text x="770" y="241" text-anchor="middle" font-size="21" font-weight="700" fill="#184f40">L2H1</text>
+    <rect x="695" y="295" width="150" height="58" rx="8" fill="#e9f5f0" stroke="#22745a" stroke-width="2"/>
+    <text x="770" y="331" text-anchor="middle" font-size="21" font-weight="700" fill="#184f40">L2MLP</text>
+
+    <rect x="665" y="390" width="210" height="46" rx="8" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="770" y="420" text-anchor="middle" font-size="20" font-weight="700" fill="#171615">answer logits</text>
+  </g>
+
+  <g stroke="#333" stroke-width="2.5" fill="none">
+    <path d="M210 159 C245 165 265 183 310 200"/>
+    <path d="M210 244 C250 244 270 244 310 244"/>
+    <path d="M210 329 C245 323 265 305 310 288"/>
+    <path d="M580 200 C625 175 650 155 695 144"/>
+    <path d="M580 244 C625 240 650 235 695 234"/>
+    <path d="M580 288 C625 306 650 320 695 324"/>
+    <path d="M770 173 V205"/>
+    <path d="M770 263 V295"/>
+    <path d="M770 353 V390"/>
+  </g>
+  <g fill="#333">
+    <polygon points="310,200 299,194 301,207"/>
+    <polygon points="310,244 299,239 299,249"/>
+    <polygon points="310,288 301,281 299,294"/>
+    <polygon points="695,144 683,140 688,152"/>
+    <polygon points="695,234 684,229 684,239"/>
+    <polygon points="695,324 684,318 683,331"/>
+    <polygon points="770,205 765,196 775,196"/>
+    <polygon points="770,295 765,286 775,286"/>
+    <polygon points="770,390 765,381 775,381"/>
+  </g>
+</svg>

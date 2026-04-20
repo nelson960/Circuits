@@ -4087,3 +4087,1066 @@ We have closed the update-to-route part at one-step resolution.
 We have also measured actual recorded batch support for support-value routes.
 We have not yet explained why the route with the largest batch support is not the route with the largest realized growth.
 ```
+
+## 2026-04-20 Update: Output-Route Closure And Moving-Margin Branch Diagnosis
+
+After the last update, we moved from route-transfer scores into output-space closure.
+
+The reason was simple:
+
+```text
+The previous route-to-margin closure was not enough.
+Patch-transfer route scores did not fully explain final answer-margin movement.
+So we tested whether component writes explain the final output scalar directly.
+```
+
+This is a different measurement from the earlier route reports.
+
+Earlier route reports asked:
+
+```text
+If we patch this route/subspace, does the answer transfer?
+```
+
+The new output-route closure asks:
+
+```text
+For each component write, how much does its movement explain the final scalar movement?
+```
+
+The calculation is:
+
+```text
+g_s(theta, x) =
+  d scalar_s / d final_pre_layernorm_residual
+
+DLA_{component,s}(theta, x) =
+  component_write(theta, x) dot g_s(theta, x)
+
+Delta scalar_s
+  ~= sum over components beta_component * Delta DLA_{component,s}
+```
+
+This uses the final output readout gradient through final layernorm.
+
+Completed artifact:
+
+```text
+artifacts/runs/symbolic_kv_reference_formation/analysis/output_route_closure/query_key_support_value_5500_5550_stepwise/output_route_closure_report.md
+```
+
+### Output-Route Closure Result
+
+The output-route closure used:
+
+```text
+window:       5500 -> 5550 stepwise
+pairs:        128 causal pairs
+observations: 6400 pair-interval rows
+components:   embedding + all attention heads + all MLP blocks
+margin side:  clean
+pair types:   query_key, support_value
+```
+
+All-component closure by scalar:
+
+```text
+scalar                          R^2       mean abs residual
+negative_answer_loss             0.8422    0.00922
+correct_value_logit              0.7828    0.19660
+target_best_wrong_logit          0.6413    0.15557
+source_best_wrong_logit          0.6379    0.15586
+fixed_target_competitor_margin   0.6127    0.19603
+fixed_source_competitor_margin   0.6117    0.19629
+moving_answer_margin             0.0992    0.27991
+```
+
+Simple interpretation:
+
+```text
+The output-space component movement explains the training-like scalar well.
+It also explains correct-answer logit movement well.
+It moderately explains fixed wrong-token margins.
+It fails badly on raw moving answer margin.
+```
+
+This means the problem is not simply:
+
+```text
+we cannot explain output movement
+```
+
+The more precise result is:
+
+```text
+we can explain differentiable/fixed output quantities much better than the moving max-margin quantity.
+```
+
+### Important Development Check
+
+The output-route tool initially failed a scalar recomputation guard:
+
+```text
+Scalar recomputation mismatch for moving_answer_margin
+```
+
+This exposed a real implementation bug:
+
+```text
+endpoint residual/component vectors were computed at each checkpoint,
+but endpoint readout gradients were accidentally recomputed using the last-loaded checkpoint.
+```
+
+That was fixed by reloading and validating the correct checkpoint for every endpoint-gradient group.
+
+The final reported run completed after this fix.
+
+### What The Output-Route Result Says About Components
+
+For `correct_value_logit`, the largest fitted output-route contributions were dense, not isolated:
+
+```text
+component   mean contribution
+L1H3        +0.02605
+L0MLP       -0.01491
+L1MLP       -0.01355
+L2H0        -0.00915
+L2H2        -0.00864
+embedding   +0.00847
+L0H1        +0.00835
+L1H2        +0.00750
+```
+
+For `negative_answer_loss`, the biggest all-pair contributions were also distributed:
+
+```text
+component   qualitative role in fitted closure
+embedding   large contribution
+L0MLP       large contribution
+L0H1        large contribution
+L2MLP       nontrivial contribution
+L2H1        nontrivial contribution
+L1H3        nontrivial contribution
+L1H2        nontrivial contribution
+L2H3        nontrivial contribution
+```
+
+This supports the dense-infrastructure view:
+
+```text
+The local output movement is not carried by one clean head or one clean neuron.
+Many components move in partially opposing directions.
+The final scalar is produced by their combined readout effect.
+```
+
+### Why Moving Answer Margin Looked Bad
+
+The bad scalar was:
+
+```text
+moving_answer_margin =
+  logit(correct) - logit(best_wrong_at_that_checkpoint)
+```
+
+This scalar is unstable because the identity of `best_wrong` can change between checkpoints.
+
+So the metric can silently switch from:
+
+```text
+logit(correct) - logit(V040)
+```
+
+to:
+
+```text
+logit(correct) - logit(V056)
+```
+
+That is not just measuring model improvement.
+It is also measuring which wrong token is currently second-best.
+
+We therefore built:
+
+```text
+answer-margin-branch-decomposition
+```
+
+Completed artifact:
+
+```text
+artifacts/runs/symbolic_kv_reference_formation/analysis/answer_margin_branch_decomposition/query_key_support_value_5500_5550_stepwise/answer_margin_branch_decomposition_report.md
+```
+
+The exact algebra is:
+
+```text
+Delta moving_margin
+  = Delta fixed_source_margin
+    + [target_logit(source_wrong) - target_logit(target_wrong)]
+
+Delta moving_margin
+  = Delta fixed_target_margin
+    + [source_logit(source_wrong) - source_logit(target_wrong)]
+```
+
+The reconstruction error was exactly zero within the recorded rows:
+
+```text
+source_reconstruction_abs_error_max = 0
+target_reconstruction_abs_error_max = 0
+```
+
+So the branch decomposition is not a heuristic.
+It is an exact accounting identity over the saved scalar rows.
+
+### Branch-Decomposition Result
+
+Competitor switches were rare:
+
+```text
+competitor switches: 298 / 6400
+switch fraction:     4.65625%
+```
+
+Across all examples:
+
+```text
+moving margin abs mean:            0.29275
+target branch correction abs mean: 0.00939
+source branch correction abs mean: 0.00921
+target branch energy / moving:     0.02945
+source branch energy / moving:     0.02361
+```
+
+So across all rows, branch switching is small on average.
+
+But on the switch rows only:
+
+```text
+moving margin abs mean:            0.36415
+target branch correction abs mean: 0.20161
+source branch correction abs mean: 0.19771
+target branch energy / moving:     0.43061
+source branch energy / moving:     0.34529
+```
+
+This means:
+
+```text
+Wrong-token switching is rare,
+but when it happens it explains a large fraction of the moving-margin instability.
+```
+
+### Branch-Aware Closure Result
+
+Before branch correction:
+
+```text
+direct moving-margin closure R^2 = 0.0992
+```
+
+After using fixed margin plus exact branch correction:
+
+```text
+all rows:
+  direct moving R^2:             0.0992
+  fixed-source + branch R^2:     0.6064
+  fixed-target + branch R^2:     0.6080
+
+competitor-switch rows:
+  direct moving R^2:             0.1611
+  fixed-source + branch R^2:     0.7132
+  fixed-target + branch R^2:     0.7380
+
+same-competitor rows:
+  direct moving R^2:             0.6063
+  fixed-source + branch R^2:     0.6063
+  fixed-target + branch R^2:     0.6063
+```
+
+Simple interpretation:
+
+```text
+The terrible moving-margin result was mostly a branch/metric problem.
+When the best wrong token is held fixed, or when the branch correction is added exactly,
+moving-margin closure rises from about 10% to about 61%.
+```
+
+For the switch-only rows, the improvement is stronger:
+
+```text
+16% explained -> 71-74% explained
+```
+
+So the old failure does not mean:
+
+```text
+the route/output explanation is useless
+```
+
+It means:
+
+```text
+moving answer margin is a bad local proof scalar unless competitor identity is handled explicitly.
+```
+
+### Updated Proof Status
+
+Current supported chain:
+
+```text
+actual optimizer update
+  -> local route movement
+
+actual recorded batch gradient
+  -> support for support-value routes
+
+component output movement
+  -> training-like scalar movement
+
+fixed wrong-token branch accounting
+  -> much better moving-margin closure
+```
+
+The strongest local scalar is now:
+
+```text
+negative_answer_loss
+```
+
+because:
+
+```text
+1. it is closest to the training objective,
+2. output-route closure is strong for it,
+3. it avoids the hard max branch-switch problem.
+```
+
+The main behavioral scalar can still be reported as answer margin, but the proof should use:
+
+```text
+negative_answer_loss and fixed-competitor margins
+```
+
+with moving margin treated as a downstream summary that requires branch correction.
+
+### Current Simple Research Story
+
+The model is not forming one clean isolated circuit.
+
+The current evidence says:
+
+```text
+SGD updates a dense residual infrastructure.
+Within that infrastructure, some routes become useful for retrieval and value writing.
+Those route/component changes explain much of the final output movement.
+The final answer score is produced by many components pushing and cancelling together.
+```
+
+The important shift is:
+
+```text
+We are no longer only saying "component X matters."
+We can now say:
+
+component movement, measured in output-readout coordinates,
+explains a large fraction of the actual output scalar movement.
+```
+
+### What Is Still Missing
+
+The proof is still not complete.
+
+Remaining gaps:
+
+```text
+1. Causal validation of output-DLA components
+   The output-route closure is mathematical/readout evidence.
+   We still need to ablate or patch the top components and verify behavior changes.
+
+2. The missing 39% of branch-aware moving-margin variance
+   Best branch-aware moving-margin R^2 is about 0.61, not 1.0.
+   The rest may come from nonlinear final layernorm effects, component interactions,
+   residual coupling, or unmeasured subcomponent structure.
+
+3. Actual-batch output-DLA attribution
+   We have actual-batch route attribution.
+   We have output-DLA closure.
+   We have not yet directly connected actual recorded batch updates to output-DLA scalar movement.
+
+4. Query-key side actual-batch proof
+   The support-value side is better traced.
+   Query-key routing still needs the same level of actual-batch/output closure.
+
+5. Cross-seed replication
+   Current results are one seed.
+   We cannot claim stable role-level SGD selection until repeated across seeds.
+```
+
+### Next Plan
+
+Do not rerun the same route-to-margin or output-route closure tools.
+
+The next stage should be:
+
+```text
+output-component-causal-validation
+```
+
+Purpose:
+
+```text
+Take the components identified by output-route closure,
+remove or patch them,
+and check whether the scalar changes match the DLA prediction.
+```
+
+Suggested component set:
+
+```text
+correct_value_logit top components:
+  L1H3, L0MLP, L1MLP, L2H0, L2H2, embedding, L0H1, L1H2
+
+negative_answer_loss top components:
+  embedding, L0MLP, L0H1, L2MLP, L2H1, L1H3, L1H2, L2H3
+```
+
+The tool should measure:
+
+```text
+baseline scalar
+component-ablated scalar
+causal drop
+DLA predicted contribution
+causal drop vs DLA prediction
+same-competitor vs competitor-switch split
+query_key vs support_value split
+```
+
+Primary scalars:
+
+```text
+negative_answer_loss
+correct_value_logit
+fixed_source_competitor_margin
+fixed_target_competitor_margin
+branch-aware moving margin
+```
+
+Expected outcome:
+
+```text
+If high-DLA components also produce high causal drops,
+then output-route closure becomes causal evidence.
+
+If DLA and causal drops disagree,
+then the remaining explanation must account for nonlinear component interactions.
+```
+
+After that:
+
+```text
+1. actual-batch output-DLA attribution
+2. query-key side actual-batch/output closure
+3. cross-seed role-level replication
+4. paper update with this proof chain
+```
+
+## 2026-04-20 Update: Causal Validation, Mediation, And Residual Rescue
+
+This section records the new results after the output-route closure note above.
+
+Important correction:
+
+```text
+These results do not prove why SGD formed the circuit.
+They improve the trained-model causal accounting.
+```
+
+The recent run sequence was:
+
+```text
+1. output-component-causal-validation
+2. output-mediated-causal-decomposition
+3. output-mediated-causal-decomposition with all later components
+4. residual-state-rescue
+```
+
+The artifacts are:
+
+```text
+artifacts/runs/symbolic_kv_reference_formation/analysis/output_component_causal_validation/query_key_support_value_5500_5550_stepwise/
+
+artifacts/runs/symbolic_kv_reference_formation/analysis/output_mediated_causal_decomposition/query_key_support_value_5500_5550_stepwise/
+
+artifacts/runs/symbolic_kv_reference_formation/analysis/output_mediated_causal_decomposition/l0mlp_all_later_components_5500_5550_stepwise/
+
+artifacts/runs/symbolic_kv_reference_formation/analysis/output_mediated_causal_decomposition/l1h3_all_later_components_5500_5550_stepwise/
+
+artifacts/runs/symbolic_kv_reference_formation/analysis/output_mediated_causal_decomposition/l1mlp_all_later_components_5500_5550_stepwise/
+
+artifacts/runs/symbolic_kv_reference_formation/analysis/residual_state_rescue/query_key_support_value_5500_5550_stepwise/
+```
+
+### What Output-Component Causal Validation Tested
+
+The output-route closure result was a readout accounting result:
+
+```text
+DLA(component, scalar)
+  = component residual write dot scalar readout gradient
+```
+
+That says how much a component points toward an output scalar. It does not by itself prove that the component is causally load-bearing.
+
+The causal-validation run compared:
+
+```text
+DLA contribution:
+  component_write dot scalar_gradient
+
+causal effect:
+  scalar(normal model) - scalar(model with component removed)
+
+gap:
+  causal effect - DLA contribution
+```
+
+The command tested `512000` endpoint/component/scalar rows:
+
+```text
+128 pairs
+6400 scalar rows
+51 endpoint checkpoints
+10 components
+4 scalars
+source and target endpoints
+```
+
+### Output-Component Causal Validation Result
+
+Late components have much better agreement between direct DLA and causal effect.
+
+For target endpoints:
+
+| scalar | component | mean causal effect | mean DLA | sign match | correlation | R^2 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `fixed_source_competitor_margin` | `L2MLP` | `3.364054` | `1.850016` | `0.880` | `0.985` | `0.897` |
+| `fixed_target_competitor_margin` | `L2MLP` | `3.358048` | `1.844964` | `0.881` | `0.985` | `0.898` |
+| `fixed_source_competitor_margin` | `L2H1` | `7.345897` | `5.444075` | `0.921` | `0.881` | `0.626` |
+| `fixed_target_competitor_margin` | `L2H1` | `7.347727` | `5.444509` | `0.921` | `0.881` | `0.626` |
+| `fixed_source_competitor_margin` | `L1H2` | `6.553232` | `3.990044` | `0.922` | `0.725` | `0.293` |
+| `fixed_target_competitor_margin` | `L1H2` | `6.549956` | `3.987632` | `0.922` | `0.727` | `0.295` |
+
+For the correct-value logit:
+
+| component | mean causal effect | mean DLA | sign match | correlation | R^2 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `L2H1` | `12.593419` | `7.554457` | `0.973` | `0.857` | `-0.221` |
+| `L1H2` | `10.673396` | `5.437859` | `0.974` | `0.641` | `-0.703` |
+| `L2MLP` | `6.122651` | `2.515269` | `0.780` | `0.939` | `0.282` |
+| `L2H3` | `0.648262` | `0.274151` | `0.804` | `0.747` | `0.443` |
+| `L2H0` | `0.004342` | `-0.259079` | `0.856` | `0.810` | `0.591` |
+
+Interpretation:
+
+```text
+L2H1, L2MLP, and L1H2 are closer to direct output/readout pieces.
+Their output-DLA is not perfect, but it tracks causal effect much better
+than early components do.
+```
+
+Early components are causally huge, but their direct DLA is a bad explanation of their effect.
+
+For target endpoint `correct_value_logit`:
+
+| component | mean causal effect | mean DLA | sign match | correlation | R^2 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `L0MLP` | `27.738898` | `-7.652493` | `0.162` | `-0.055` | `-27.293` |
+| `L1H3` | `21.515125` | `-2.711512` | `0.318` | `0.072` | `-9.370` |
+| `L1MLP` | `15.712419` | `-0.387060` | `0.495` | `0.490` | `-2.993` |
+
+Simple interpretation:
+
+```text
+L0MLP, L1H3, and L1MLP are important.
+But their importance is not "they directly write the answer logit."
+Removing them changes the rest of the computation.
+```
+
+This is the clearest current split:
+
+```text
+late components:
+  closer to direct writers / readout routes
+
+early components:
+  broad upstream infrastructure
+```
+
+### Negative Answer Loss Caveat
+
+Earlier output-route closure made `negative_answer_loss` look like the strongest scalar because it was closest to the training objective.
+
+The causal-validation and mediation runs show a limitation:
+
+```text
+negative_answer_loss is useful for update/objective accounting,
+but it becomes unstable under off-manifold component ablations.
+```
+
+For example, target endpoint `negative_answer_loss`:
+
+```text
+L0MLP causal effect = 16.927812
+L0MLP DLA           = 0.054080
+```
+
+The loss/log-prob scalar is therefore not the best scalar for component-mediation claims.
+
+For causal mediation and residual rescue, the cleaner scalars are:
+
+```text
+correct_value_logit
+fixed_source_competitor_margin
+fixed_target_competitor_margin
+```
+
+### What Narrow Output Mediation Tested
+
+The narrow mediation run asked:
+
+```text
+If an early source component is removed,
+does that damage the DLA of the later direct writers?
+```
+
+The decomposition was:
+
+```text
+total_effect(A)
+  = scalar(theta) - scalar(theta with A ablated)
+
+direct_effect(A)
+  = DLA_A(theta)
+
+mediated_effect(A -> B)
+  = DLA_B(theta) - DLA_B(theta with A ablated)
+
+residual
+  = total_effect(A) - direct_effect(A) - sum_B mediated_effect(A -> B)
+```
+
+The source components were:
+
+```text
+L0MLP
+L1H3
+L1MLP
+```
+
+The downstream components were:
+
+```text
+L1H2
+L2H1
+L2MLP
+L2H0
+L2H2
+L2H3
+```
+
+### Narrow Output Mediation Result
+
+For target endpoint `correct_value_logit`:
+
+| source | total causal effect | direct DLA | downstream mediated sum | direct + mediated | abs residual | explained fraction |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `L0MLP` | `27.738898` | `-7.652493` | `16.124124` | `8.471631` | `19.535640` | `0.305` |
+| `L1H3` | `21.515125` | `-2.711512` | `12.577657` | `9.866145` | `11.695200` | `0.459` |
+| `L1MLP` | `15.712419` | `-0.387060` | `11.584630` | `11.197570` | `5.344625` | `0.713` |
+
+For target endpoint fixed margins:
+
+| source | fixed-source explained fraction | fixed-target explained fraction |
+| --- | ---: | ---: |
+| `L0MLP` | `0.542` | `0.541` |
+| `L1H3` | `0.667` | `0.667` |
+| `L1MLP` | `1.078` | `1.079` |
+
+Interpretation:
+
+```text
+L1MLP is mostly explainable through downstream direct writers.
+L1H3 is partly explainable.
+L0MLP is only partly explainable.
+```
+
+The largest mediated paths were:
+
+| path | scalar | mediated effect |
+| --- | --- | ---: |
+| `L0MLP -> L2H1` | `correct_value_logit` | `7.4515` |
+| `L0MLP -> L1H2` | `correct_value_logit` | `5.1969` |
+| `L0MLP -> L2MLP` | `correct_value_logit` | `3.1648` |
+| `L1H3 -> L2H1` | `correct_value_logit` | `6.5816` |
+| `L1H3 -> L2MLP` | `correct_value_logit` | `3.3300` |
+| `L1MLP -> L2MLP` | `correct_value_logit` | `6.1051` |
+| `L1MLP -> L2H1` | `correct_value_logit` | `2.8337` |
+
+This supports a real, but incomplete, upstream-to-downstream story:
+
+```text
+early components help maintain later output-writing routes,
+but that does not explain the full early-component causal effect.
+```
+
+### All-Later Output Mediation Result
+
+We then expanded the downstream set to all later heads and MLPs.
+
+This was meant to test:
+
+```text
+Maybe the residual is large only because we left out important later components.
+```
+
+That hypothesis failed.
+
+Adding more downstream components did not improve closure. It made closure worse for several source/scalar pairs.
+
+For target endpoint `correct_value_logit`:
+
+| source | narrow explained fraction | all-later explained fraction |
+| --- | ---: | ---: |
+| `L0MLP` | `0.305` | `0.147` |
+| `L1H3` | `0.459` | `0.452` |
+| `L1MLP` | `0.713` | `0.629` |
+
+For target endpoint fixed margins:
+
+| source | narrow fixed-source fraction | all-later fixed-source fraction | narrow fixed-target fraction | all-later fixed-target fraction |
+| --- | ---: | ---: | ---: | ---: |
+| `L0MLP` | `0.542` | `0.370` | `0.541` | `0.369` |
+| `L1H3` | `0.667` | `0.526` | `0.667` | `0.525` |
+| `L1MLP` | `1.078` | `0.830` | `1.079` | `0.831` |
+
+This is important.
+
+It says the missing effect is not simply:
+
+```text
+we forgot to include a later head
+```
+
+When all later components are included, positive and negative mediated terms cancel.
+
+Example for `L0MLP -> correct_value_logit`:
+
+```text
+positive mediated terms:
+  L0MLP -> L2H1   +7.451
+  L0MLP -> L1H2   +5.197
+  L0MLP -> L2MLP  +3.165
+
+negative mediated terms:
+  L0MLP -> L1H3   -2.744
+  L0MLP -> L1H0   -0.837
+  L0MLP -> L1MLP  -0.458
+  L0MLP -> L1H1   -0.364
+```
+
+Simple interpretation:
+
+```text
+The downstream network is sign-conflicted.
+The learned computation is not a clean additive chain.
+It is a dense residual system where components push and cancel together.
+```
+
+### Residual-State Rescue Result
+
+The residual-state rescue run asked:
+
+```text
+If a source component is removed,
+can we restore behavior by patching back the clean residual stream at a later stage?
+```
+
+The calculation was:
+
+```text
+damage = scalar(clean) - scalar(source ablated)
+
+rescue = scalar(source ablated + clean residual patch at stage S)
+         - scalar(source ablated)
+
+rescue_fraction = rescue / damage
+```
+
+The result is clean, but mostly confirms the intervention boundary.
+
+For target endpoint `correct_value_logit`:
+
+| source | patch stage | damage | rescue | rescue fraction | read |
+| --- | --- | ---: | ---: | ---: | --- |
+| `L0MLP` | `layer_0_post_mlp` | `27.7389` | `27.7389` | `1.000` | rescued immediately after `L0MLP` |
+| `L0MLP` | `layer_1_post_attn` | `27.7389` | `27.7389` | `1.000` | rescued |
+| `L1H3` | `layer_0_post_mlp` | `21.5151` | `0.0000` | `0.000` | too early |
+| `L1H3` | `layer_1_post_attn` | `21.5151` | `21.5151` | `1.000` | rescued immediately after `L1H3` writes |
+| `L1MLP` | `layer_1_post_attn` | `15.7124` | `0.0000` | `0.000` | too early |
+| `L1MLP` | `layer_1_post_mlp` | `15.7124` | `15.7124` | `1.000` | rescued immediately after `L1MLP` writes |
+
+The same pattern holds for fixed-source and fixed-target margins.
+
+Interpretation:
+
+```text
+L0MLP damage enters the residual stream at layer_0_post_mlp.
+L1H3 damage enters at layer_1_post_attn.
+L1MLP damage enters at layer_1_post_mlp.
+```
+
+But this is not a deep explanation by itself.
+
+It is partly tautological:
+
+```text
+If we ablate a component and then patch the full clean residual stream after that component,
+we restore that component's effect.
+```
+
+What it gives us is a clean boundary:
+
+```text
+the missing effect is in the residual state after the source component,
+not necessarily in a named downstream head/MLP decomposition.
+```
+
+### Current Honest Interpretation
+
+The recent results should change the project story.
+
+Old over-strong story:
+
+```text
+SGD builds a dense upstream infrastructure that supports L2H1.
+```
+
+More careful story:
+
+```text
+The trained model uses a dense residual-stream mechanism.
+
+Late components such as L2H1, L2MLP, and L1H2 behave more like direct output/readout routes.
+
+Early components such as L0MLP, L1H3, and L1MLP are causally essential,
+but their effects are not explained by direct DLA or additive mediation through named later components.
+
+Full residual patching restores the effect once we patch after the ablated component,
+which localizes the damage but does not identify the abstract variable.
+```
+
+This is a trained-model causal-accounting result.
+
+It is not yet an SGD-formation proof.
+
+### Why This Is Hard Even In A Small Model
+
+This task is symbolically simple:
+
+```text
+find latest write for queried key
+return value
+```
+
+But the model does not implement it as symbolic code.
+
+It implements it with:
+
+```text
+residual stream vectors
+QK dot products
+OV writes
+MLP nonlinearities
+layernorm
+unembedding directions
+```
+
+The residual stream is a shared workspace:
+
+```text
+attention reads it
+attention writes it
+MLPs read it
+MLPs write it
+later layers read a mixture of everything
+```
+
+So even a small transformer can learn:
+
+```text
+overlapping features
+shared residual directions
+sign-conflicted component contributions
+partial routes
+shortcuts mixed with real retrieval
+```
+
+This is why the analysis keeps becoming dense:
+
+```text
+the model did not build a clean software module called lookup_table.
+It built a distributed vector process that behaves like lookup.
+```
+
+Neuron-level analysis is hard because neurons are not clean units:
+
+```text
+one neuron can support multiple features
+one feature can be spread over many neurons
+the useful variable can be a direction or subspace, not a single neuron
+```
+
+Component-level analysis is hard because heads and MLPs are not independent modules:
+
+```text
+removing one component changes the inputs seen by later components
+patching a full residual state can rescue behavior while hiding which variable inside that state mattered
+DLA is local linear readout accounting, not a complete causal model
+```
+
+SGD formation is harder still because SGD does not choose circuits explicitly.
+
+It only does:
+
+```text
+reduce current batch loss
+```
+
+Every update changes many parameters. A route can become useful because:
+
+```text
+the current data gradient supports it
+the current residual geometry makes it easy to amplify
+downstream components can already read it
+other routes interfere less
+optimizer state pushes parameters in that direction
+```
+
+So the correct question is not:
+
+```text
+Which component is the circuit?
+```
+
+It is:
+
+```text
+Which scalar internal variable C actually grows under the recorded update,
+and does that growth explain behavior better than competing variables?
+```
+
+### Where We Are Stuck
+
+The project is currently strong on:
+
+```text
+trained-model causal accounting
+direct writer identification
+load-bearing upstream component identification
+controlled intervention design
+short-window update attribution
+```
+
+The project is still weak on:
+
+```text
+identifying one abstract internal variable C
+proving actual historical SGD caused C to grow
+showing C beats competing variables under the same update
+showing C growth closes behavior
+replicating the role across seeds
+```
+
+The main problem is not a lack of more measurements.
+
+The main problem is:
+
+```text
+we have not fixed one final proof variable.
+```
+
+### Stop Condition For Broad Tooling
+
+The recent runs show that broad component accounting has hit diminishing returns.
+
+We should stop creating broad reports of the form:
+
+```text
+measure many components
+rank many effects
+find another residual
+```
+
+Those are useful for exploration, but they are not moving the project toward the why question anymore.
+
+The next formation proof should choose one variable:
+
+```text
+C(theta, x) = L2H1 support-value retrieval separation
+```
+
+or:
+
+```text
+C(theta, x) = fixed-competitor correct-value readout contribution from a validated route set
+```
+
+Then measure only:
+
+```text
+C(theta_t)
+C(theta_{t+1})
+Delta C_actual
+grad_theta C(theta_t) dot Delta theta_actual
+Delta behavior
+competing route Delta C
+```
+
+This is the finite proof unit.
+
+### Updated Simple Summary
+
+The simplest honest summary now is:
+
+```text
+We trained a tiny transformer on a simple retrieval task.
+
+The trained model does not contain a clean lookup circuit.
+It contains a dense residual-stream implementation.
+
+Late parts like L2H1, L2MLP, and L1H2 look like direct readout/retrieval pieces.
+
+Earlier parts like L0MLP, L1H3, and L1MLP are necessary,
+but they do not directly write the answer.
+They change the residual state that the rest of the model uses.
+
+Trying to explain those early parts by summing later component effects does not close.
+The system is sign-conflicted and nonlinear.
+
+Full residual patching rescues the model after the damaged component,
+but that only tells us where the damage enters the residual stream,
+not what abstract variable SGD learned.
+
+Therefore we have a good trained-model causal map,
+but not yet a proof of circuit formation by SGD.
+```
+
+The next research question should be:
+
+```text
+Pick one internal variable C.
+Did actual SGD updates create and amplify C,
+and does C growth explain behavior better than alternatives?
+```

@@ -43,7 +43,16 @@ from circuit.analysis.geometric_mechanisms import (
     run_route_gradient_decomposition,
 )
 from circuit.analysis.actual_batch_route_attribution import run_actual_batch_route_attribution
+from circuit.analysis.answer_margin_delta_decomposition import run_answer_margin_delta_decomposition
+from circuit.analysis.answer_margin_branch_decomposition import run_answer_margin_branch_decomposition
+from circuit.analysis.answer_scalar_residual_diagnosis import run_answer_scalar_residual_diagnosis
 from circuit.analysis.optimizer_update_trace import run_optimizer_update_trace
+from circuit.analysis.output_component_causal_validation import run_output_component_causal_validation
+from circuit.analysis.output_mediated_causal_decomposition import run_output_mediated_causal_decomposition
+from circuit.analysis.output_route_closure import run_output_route_closure
+from circuit.analysis.residual_state_rescue import run_residual_state_rescue
+from circuit.analysis.route_to_margin_closure import run_route_to_margin_closure
+from circuit.analysis.route_to_scalar_closure import run_route_to_scalar_closure
 from circuit.analysis.shared_feature_dynamics import (
     family_update_link,
     feature_birth_analyze,
@@ -897,6 +906,166 @@ def main() -> None:
     actual_batch_route_parser.add_argument("--min-pairs-per-type", type=int, default=1)
     actual_batch_route_parser.add_argument("--loss-match-tolerance", type=float, default=1.0e-4)
     actual_batch_route_parser.add_argument("--overwrite", action="store_true")
+
+    route_to_margin_parser = subparsers.add_parser("route-to-margin-closure")
+    route_to_margin_parser.add_argument("--config", type=Path, required=True)
+    route_to_margin_parser.add_argument("--probe-set", type=Path, required=True)
+    route_to_margin_parser.add_argument("--checkpoint-dir", type=Path, required=True)
+    route_to_margin_parser.add_argument("--output-dir", type=Path, required=True)
+    route_to_margin_parser.add_argument("--device", type=str, default="mps")
+    route_to_margin_parser.add_argument("--checkpoint", type=Path, action="append", default=None)
+    route_to_margin_parser.add_argument("--route", type=str, action="append", required=True)
+    route_to_margin_parser.add_argument("--route-pair-type", type=str, required=True)
+    route_to_margin_parser.add_argument("--pair-type", type=str, action="append", required=True)
+    route_to_margin_parser.add_argument("--target-scalar", type=str, default="answer_margin")
+    route_to_margin_parser.add_argument("--margin-side", type=str, default="clean")
+    route_to_margin_parser.add_argument("--split", type=str, action="append", default=None)
+    route_to_margin_parser.add_argument("--max-pairs-per-type", type=int, default=64)
+    route_to_margin_parser.add_argument("--min-pairs-per-type", type=int, default=1)
+    route_to_margin_parser.add_argument("--fit-intercept", action="store_true")
+    route_to_margin_parser.add_argument("--overwrite", action="store_true")
+
+    answer_margin_delta_parser = subparsers.add_parser("answer-margin-delta-decomposition")
+    answer_margin_delta_parser.add_argument("--config", type=Path, required=True)
+    answer_margin_delta_parser.add_argument("--probe-set", type=Path, required=True)
+    answer_margin_delta_parser.add_argument("--checkpoint-dir", type=Path, required=True)
+    answer_margin_delta_parser.add_argument("--output-dir", type=Path, required=True)
+    answer_margin_delta_parser.add_argument("--device", type=str, default="mps")
+    answer_margin_delta_parser.add_argument("--checkpoint", type=Path, action="append", default=None)
+    answer_margin_delta_parser.add_argument("--pair-type", type=str, action="append", required=True)
+    answer_margin_delta_parser.add_argument("--margin-side", type=str, action="append", default=None)
+    answer_margin_delta_parser.add_argument("--split", type=str, action="append", default=None)
+    answer_margin_delta_parser.add_argument("--max-pairs-per-type", type=int, default=64)
+    answer_margin_delta_parser.add_argument("--min-pairs-per-type", type=int, default=1)
+    answer_margin_delta_parser.add_argument("--decompose", type=str, action="append", default=None)
+    answer_margin_delta_parser.add_argument("--top-k-groups", type=int, default=24)
+    answer_margin_delta_parser.add_argument("--min-error-denominator", type=float, default=1.0e-9)
+    answer_margin_delta_parser.add_argument("--overwrite", action="store_true")
+
+    answer_scalar_residual_parser = subparsers.add_parser("answer-scalar-residual-diagnosis")
+    answer_scalar_residual_parser.add_argument("--config", type=Path, required=True)
+    answer_scalar_residual_parser.add_argument("--probe-set", type=Path, required=True)
+    answer_scalar_residual_parser.add_argument("--checkpoint-dir", type=Path, required=True)
+    answer_scalar_residual_parser.add_argument("--output-dir", type=Path, required=True)
+    answer_scalar_residual_parser.add_argument("--device", type=str, default="mps")
+    answer_scalar_residual_parser.add_argument("--checkpoint", type=Path, action="append", default=None)
+    answer_scalar_residual_parser.add_argument("--pair-type", type=str, action="append", required=True)
+    answer_scalar_residual_parser.add_argument("--margin-side", type=str, action="append", default=None)
+    answer_scalar_residual_parser.add_argument("--scalar", type=str, action="append", default=None)
+    answer_scalar_residual_parser.add_argument("--switch-bucket", type=str, action="append", default=None)
+    answer_scalar_residual_parser.add_argument("--metric-scope", type=str, action="append", default=None)
+    answer_scalar_residual_parser.add_argument("--second-order-mode", type=str, default="none")
+    answer_scalar_residual_parser.add_argument("--split", type=str, action="append", default=None)
+    answer_scalar_residual_parser.add_argument("--max-pairs-per-type", type=int, default=64)
+    answer_scalar_residual_parser.add_argument("--min-pairs-per-type", type=int, default=1)
+    answer_scalar_residual_parser.add_argument("--top-k-wrong", type=int, default=5)
+    answer_scalar_residual_parser.add_argument("--top-k-rows", type=int, default=24)
+    answer_scalar_residual_parser.add_argument("--min-error-denominator", type=float, default=1.0e-9)
+    answer_scalar_residual_parser.add_argument("--overwrite", action="store_true")
+
+    route_to_scalar_parser = subparsers.add_parser("route-to-scalar-closure")
+    route_to_scalar_parser.add_argument("--route-closure-rows", type=Path, required=True)
+    route_to_scalar_parser.add_argument("--scalar-pair-rows", type=Path, required=True)
+    route_to_scalar_parser.add_argument("--output-dir", type=Path, required=True)
+    route_to_scalar_parser.add_argument("--scalar", type=str, action="append", default=None)
+    route_to_scalar_parser.add_argument("--switch-bucket", type=str, action="append", default=None)
+    route_to_scalar_parser.add_argument("--route-label", type=str, action="append", default=None)
+    route_to_scalar_parser.add_argument("--margin-side", type=str, default=None)
+    route_to_scalar_parser.add_argument("--pair-type", type=str, action="append", default=None)
+    route_to_scalar_parser.add_argument("--fit-intercept", action="store_true")
+    route_to_scalar_parser.add_argument("--duplicate-tolerance", type=float, default=1.0e-6)
+    route_to_scalar_parser.add_argument("--overwrite", action="store_true")
+
+    output_route_parser = subparsers.add_parser("output-route-closure")
+    output_route_parser.add_argument("--config", type=Path, required=True)
+    output_route_parser.add_argument("--probe-set", type=Path, required=True)
+    output_route_parser.add_argument("--scalar-pair-rows", type=Path, required=True)
+    output_route_parser.add_argument("--output-dir", type=Path, required=True)
+    output_route_parser.add_argument("--device", type=str, default="mps")
+    output_route_parser.add_argument("--pair-type", type=str, action="append", required=True)
+    output_route_parser.add_argument("--scalar", type=str, action="append", default=None)
+    output_route_parser.add_argument("--margin-side", type=str, action="append", default=None)
+    output_route_parser.add_argument("--switch-bucket", type=str, action="append", default=None)
+    output_route_parser.add_argument("--component", type=str, action="append", default=None)
+    output_route_parser.add_argument("--split", type=str, action="append", default=None)
+    output_route_parser.add_argument("--max-pairs-per-type", type=int, default=64)
+    output_route_parser.add_argument("--min-pairs-per-type", type=int, default=1)
+    output_route_parser.add_argument("--fit-intercept", action="store_true")
+    output_route_parser.add_argument("--top-k-components", type=int, default=8)
+    output_route_parser.add_argument("--scalar-value-tolerance", type=float, default=1.0e-4)
+    output_route_parser.add_argument("--overwrite", action="store_true")
+
+    output_component_parser = subparsers.add_parser("output-component-causal-validation")
+    output_component_parser.add_argument("--config", type=Path, required=True)
+    output_component_parser.add_argument("--probe-set", type=Path, required=True)
+    output_component_parser.add_argument("--scalar-pair-rows", type=Path, required=True)
+    output_component_parser.add_argument("--output-dir", type=Path, required=True)
+    output_component_parser.add_argument("--device", type=str, default="mps")
+    output_component_parser.add_argument("--pair-type", type=str, action="append", required=True)
+    output_component_parser.add_argument("--scalar", type=str, action="append", default=None)
+    output_component_parser.add_argument("--margin-side", type=str, action="append", default=None)
+    output_component_parser.add_argument("--endpoint-role", type=str, action="append", default=None)
+    output_component_parser.add_argument("--component", type=str, action="append", default=None)
+    output_component_parser.add_argument("--coefficient-rows", type=Path, default=None)
+    output_component_parser.add_argument("--coefficient-switch-bucket", type=str, action="append", default=None)
+    output_component_parser.add_argument("--split", type=str, action="append", default=None)
+    output_component_parser.add_argument("--max-pairs-per-type", type=int, default=64)
+    output_component_parser.add_argument("--min-pairs-per-type", type=int, default=1)
+    output_component_parser.add_argument("--top-k-components", type=int, default=8)
+    output_component_parser.add_argument("--scalar-value-tolerance", type=float, default=1.0e-4)
+    output_component_parser.add_argument("--markdown-top-k-rows", type=int, default=48)
+    output_component_parser.add_argument("--overwrite", action="store_true")
+
+    output_mediation_parser = subparsers.add_parser("output-mediated-causal-decomposition")
+    output_mediation_parser.add_argument("--config", type=Path, required=True)
+    output_mediation_parser.add_argument("--probe-set", type=Path, required=True)
+    output_mediation_parser.add_argument("--scalar-pair-rows", type=Path, required=True)
+    output_mediation_parser.add_argument("--output-dir", type=Path, required=True)
+    output_mediation_parser.add_argument("--device", type=str, default="mps")
+    output_mediation_parser.add_argument("--pair-type", type=str, action="append", required=True)
+    output_mediation_parser.add_argument("--source-component", type=str, action="append", required=True)
+    output_mediation_parser.add_argument("--downstream-component", type=str, action="append", required=True)
+    output_mediation_parser.add_argument("--scalar", type=str, action="append", default=None)
+    output_mediation_parser.add_argument("--margin-side", type=str, action="append", default=None)
+    output_mediation_parser.add_argument("--endpoint-role", type=str, action="append", default=None)
+    output_mediation_parser.add_argument("--split", type=str, action="append", default=None)
+    output_mediation_parser.add_argument("--max-pairs-per-type", type=int, default=64)
+    output_mediation_parser.add_argument("--min-pairs-per-type", type=int, default=1)
+    output_mediation_parser.add_argument("--scalar-value-tolerance", type=float, default=1.0e-4)
+    output_mediation_parser.add_argument("--markdown-top-k-rows", type=int, default=48)
+    output_mediation_parser.add_argument("--plot-top-k-rows", type=int, default=24)
+    output_mediation_parser.add_argument("--overwrite", action="store_true")
+
+    residual_rescue_parser = subparsers.add_parser("residual-state-rescue")
+    residual_rescue_parser.add_argument("--config", type=Path, required=True)
+    residual_rescue_parser.add_argument("--probe-set", type=Path, required=True)
+    residual_rescue_parser.add_argument("--scalar-pair-rows", type=Path, required=True)
+    residual_rescue_parser.add_argument("--output-dir", type=Path, required=True)
+    residual_rescue_parser.add_argument("--device", type=str, default="mps")
+    residual_rescue_parser.add_argument("--pair-type", type=str, action="append", required=True)
+    residual_rescue_parser.add_argument("--source-component", type=str, action="append", required=True)
+    residual_rescue_parser.add_argument("--patch-stage", type=str, action="append", required=True)
+    residual_rescue_parser.add_argument("--scalar", type=str, action="append", default=None)
+    residual_rescue_parser.add_argument("--margin-side", type=str, action="append", default=None)
+    residual_rescue_parser.add_argument("--endpoint-role", type=str, action="append", default=None)
+    residual_rescue_parser.add_argument("--split", type=str, action="append", default=None)
+    residual_rescue_parser.add_argument("--max-pairs-per-type", type=int, default=64)
+    residual_rescue_parser.add_argument("--min-pairs-per-type", type=int, default=1)
+    residual_rescue_parser.add_argument("--scalar-value-tolerance", type=float, default=1.0e-4)
+    residual_rescue_parser.add_argument("--denominator-threshold", type=float, default=1.0e-6)
+    residual_rescue_parser.add_argument("--markdown-top-k-rows", type=int, default=120)
+    residual_rescue_parser.add_argument("--plot-top-k-rows", type=int, default=48)
+    residual_rescue_parser.add_argument("--overwrite", action="store_true")
+
+    answer_branch_parser = subparsers.add_parser("answer-margin-branch-decomposition")
+    answer_branch_parser.add_argument("--scalar-pair-rows", type=Path, required=True)
+    answer_branch_parser.add_argument("--output-dir", type=Path, required=True)
+    answer_branch_parser.add_argument("--output-closure-rows", type=Path, default=None)
+    answer_branch_parser.add_argument("--margin-side", type=str, default="clean")
+    answer_branch_parser.add_argument("--pair-type", type=str, action="append", default=None)
+    answer_branch_parser.add_argument("--switch-bucket", type=str, action="append", default=None)
+    answer_branch_parser.add_argument("--reconstruction-tolerance", type=float, default=1.0e-5)
+    answer_branch_parser.add_argument("--overwrite", action="store_true")
 
     args = parser.parse_args()
     if args.command == "generate-benchmark":
@@ -1974,6 +2143,347 @@ def main() -> None:
                 "markdown": str(markdown_path),
                 "rows": str(rows_path),
                 "pair_rows": str(pair_rows_path),
+            }
+        )
+        return
+    if args.command == "route-to-margin-closure":
+        (
+            report_path,
+            markdown_path,
+            closure_rows_path,
+            margin_rows_path,
+            route_rows_path,
+            coefficient_rows_path,
+            pair_rows_path,
+            plot_paths,
+        ) = run_route_to_margin_closure(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            checkpoint_dir=args.checkpoint_dir,
+            output_dir=args.output_dir,
+            device_name=args.device,
+            checkpoint_paths=args.checkpoint,
+            raw_route_specs=args.route,
+            route_pair_type=args.route_pair_type,
+            pair_types=args.pair_type,
+            target_scalar=args.target_scalar,
+            margin_side=args.margin_side,
+            split_filter=args.split,
+            max_pairs_per_type=args.max_pairs_per_type,
+            min_pairs_per_type=args.min_pairs_per_type,
+            fit_intercept=args.fit_intercept,
+            overwrite=args.overwrite,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "closure_rows": str(closure_rows_path),
+                "margin_rows": str(margin_rows_path),
+                "route_rows": str(route_rows_path),
+                "coefficient_rows": str(coefficient_rows_path),
+                "pair_rows": str(pair_rows_path),
+                "plots": {key: str(value) for key, value in plot_paths.items()},
+            }
+        )
+        return
+    if args.command == "answer-margin-delta-decomposition":
+        (
+            report_path,
+            markdown_path,
+            metric_rows_path,
+            decomposition_rows_path,
+            group_rows_path,
+            margin_rows_path,
+            pair_rows_path,
+            plot_paths,
+        ) = run_answer_margin_delta_decomposition(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            checkpoint_dir=args.checkpoint_dir,
+            output_dir=args.output_dir,
+            device_name=args.device,
+            checkpoint_paths=args.checkpoint,
+            pair_types=args.pair_type,
+            margin_sides=args.margin_side,
+            split_filter=args.split,
+            max_pairs_per_type=args.max_pairs_per_type,
+            min_pairs_per_type=args.min_pairs_per_type,
+            decomposition_modes=args.decompose,
+            top_k_groups=args.top_k_groups,
+            min_error_denominator=args.min_error_denominator,
+            overwrite=args.overwrite,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "metric_rows": str(metric_rows_path),
+                "decomposition_rows": str(decomposition_rows_path),
+                "group_rows": str(group_rows_path),
+                "margin_rows": str(margin_rows_path),
+                "pair_rows": str(pair_rows_path),
+                "plots": {key: str(value) for key, value in plot_paths.items()},
+            }
+        )
+        return
+    if args.command == "answer-scalar-residual-diagnosis":
+        (
+            report_path,
+            markdown_path,
+            metric_rows_path,
+            interval_pair_rows_path,
+            pair_metadata_rows_path,
+            plot_paths,
+        ) = run_answer_scalar_residual_diagnosis(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            checkpoint_dir=args.checkpoint_dir,
+            output_dir=args.output_dir,
+            device_name=args.device,
+            checkpoint_paths=args.checkpoint,
+            pair_types=args.pair_type,
+            margin_sides=args.margin_side,
+            scalar_names=args.scalar,
+            switch_buckets=args.switch_bucket,
+            metric_scopes=args.metric_scope,
+            second_order_mode=args.second_order_mode,
+            split_filter=args.split,
+            max_pairs_per_type=args.max_pairs_per_type,
+            min_pairs_per_type=args.min_pairs_per_type,
+            top_k_wrong=args.top_k_wrong,
+            top_k_rows=args.top_k_rows,
+            min_error_denominator=args.min_error_denominator,
+            overwrite=args.overwrite,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "metric_rows": str(metric_rows_path),
+                "interval_pair_rows": str(interval_pair_rows_path),
+                "pair_metadata_rows": str(pair_metadata_rows_path),
+                "plots": {key: str(value) for key, value in plot_paths.items()},
+            }
+        )
+        return
+    if args.command == "route-to-scalar-closure":
+        (
+            report_path,
+            markdown_path,
+            closure_rows_path,
+            coefficient_rows_path,
+            plot_paths,
+        ) = run_route_to_scalar_closure(
+            route_closure_rows_path=args.route_closure_rows,
+            scalar_pair_rows_path=args.scalar_pair_rows,
+            output_dir=args.output_dir,
+            scalar_names=args.scalar,
+            switch_buckets=args.switch_bucket,
+            route_labels=args.route_label,
+            margin_side=args.margin_side,
+            pair_types=args.pair_type,
+            fit_intercept=args.fit_intercept,
+            duplicate_tolerance=args.duplicate_tolerance,
+            overwrite=args.overwrite,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "closure_rows": str(closure_rows_path),
+                "coefficient_rows": str(coefficient_rows_path),
+                "plots": {key: str(value) for key, value in plot_paths.items()},
+            }
+        )
+        return
+    if args.command == "output-route-closure":
+        (
+            report_path,
+            markdown_path,
+            closure_rows_path,
+            endpoint_component_rows_path,
+            coefficient_rows_path,
+            pair_rows_path,
+            plot_paths,
+        ) = run_output_route_closure(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            scalar_pair_rows_path=args.scalar_pair_rows,
+            output_dir=args.output_dir,
+            device_name=args.device,
+            pair_types=args.pair_type,
+            scalar_names=args.scalar,
+            margin_sides=args.margin_side,
+            switch_buckets=args.switch_bucket,
+            component_labels=args.component,
+            split_filter=args.split,
+            max_pairs_per_type=args.max_pairs_per_type,
+            min_pairs_per_type=args.min_pairs_per_type,
+            fit_intercept=args.fit_intercept,
+            top_k_components=args.top_k_components,
+            scalar_value_tolerance=args.scalar_value_tolerance,
+            overwrite=args.overwrite,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "closure_rows": str(closure_rows_path),
+                "endpoint_component_rows": str(endpoint_component_rows_path),
+                "coefficient_rows": str(coefficient_rows_path),
+                "pair_rows": str(pair_rows_path),
+                "plots": {key: str(value) for key, value in plot_paths.items()},
+            }
+        )
+        return
+    if args.command == "output-component-causal-validation":
+        (
+            report_path,
+            markdown_path,
+            validation_rows_path,
+            summary_rows_path,
+            pair_rows_path,
+            plot_paths,
+        ) = run_output_component_causal_validation(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            scalar_pair_rows_path=args.scalar_pair_rows,
+            output_dir=args.output_dir,
+            device_name=args.device,
+            pair_types=args.pair_type,
+            scalar_names=args.scalar,
+            margin_sides=args.margin_side,
+            endpoint_roles=args.endpoint_role,
+            component_labels=args.component,
+            coefficient_rows_path=args.coefficient_rows,
+            coefficient_switch_buckets=args.coefficient_switch_bucket,
+            split_filter=args.split,
+            max_pairs_per_type=args.max_pairs_per_type,
+            min_pairs_per_type=args.min_pairs_per_type,
+            top_k_components=args.top_k_components,
+            scalar_value_tolerance=args.scalar_value_tolerance,
+            markdown_top_k_rows=args.markdown_top_k_rows,
+            overwrite=args.overwrite,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "validation_rows": str(validation_rows_path),
+                "summary_rows": str(summary_rows_path),
+                "pair_rows": str(pair_rows_path),
+                "plots": {key: str(value) for key, value in plot_paths.items()},
+            }
+        )
+        return
+    if args.command == "output-mediated-causal-decomposition":
+        (
+            report_path,
+            markdown_path,
+            source_rows_path,
+            downstream_rows_path,
+            source_summary_rows_path,
+            downstream_summary_rows_path,
+            pair_rows_path,
+            plot_paths,
+        ) = run_output_mediated_causal_decomposition(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            scalar_pair_rows_path=args.scalar_pair_rows,
+            output_dir=args.output_dir,
+            device_name=args.device,
+            pair_types=args.pair_type,
+            source_components=args.source_component,
+            downstream_components=args.downstream_component,
+            scalar_names=args.scalar,
+            margin_sides=args.margin_side,
+            endpoint_roles=args.endpoint_role,
+            split_filter=args.split,
+            max_pairs_per_type=args.max_pairs_per_type,
+            min_pairs_per_type=args.min_pairs_per_type,
+            scalar_value_tolerance=args.scalar_value_tolerance,
+            markdown_top_k_rows=args.markdown_top_k_rows,
+            plot_top_k_rows=args.plot_top_k_rows,
+            overwrite=args.overwrite,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "source_rows": str(source_rows_path),
+                "downstream_rows": str(downstream_rows_path),
+                "source_summary_rows": str(source_summary_rows_path),
+                "downstream_summary_rows": str(downstream_summary_rows_path),
+                "pair_rows": str(pair_rows_path),
+                "plots": {key: str(value) for key, value in plot_paths.items()},
+            }
+        )
+        return
+    if args.command == "residual-state-rescue":
+        (
+            report_path,
+            markdown_path,
+            rescue_rows_path,
+            summary_rows_path,
+            pair_rows_path,
+            plot_paths,
+        ) = run_residual_state_rescue(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            scalar_pair_rows_path=args.scalar_pair_rows,
+            output_dir=args.output_dir,
+            device_name=args.device,
+            pair_types=args.pair_type,
+            source_components=args.source_component,
+            patch_stages=args.patch_stage,
+            scalar_names=args.scalar,
+            margin_sides=args.margin_side,
+            endpoint_roles=args.endpoint_role,
+            split_filter=args.split,
+            max_pairs_per_type=args.max_pairs_per_type,
+            min_pairs_per_type=args.min_pairs_per_type,
+            scalar_value_tolerance=args.scalar_value_tolerance,
+            denominator_threshold=args.denominator_threshold,
+            markdown_top_k_rows=args.markdown_top_k_rows,
+            plot_top_k_rows=args.plot_top_k_rows,
+            overwrite=args.overwrite,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "rescue_rows": str(rescue_rows_path),
+                "summary_rows": str(summary_rows_path),
+                "pair_rows": str(pair_rows_path),
+                "plots": {key: str(value) for key, value in plot_paths.items()},
+            }
+        )
+        return
+    if args.command == "answer-margin-branch-decomposition":
+        (
+            report_path,
+            markdown_path,
+            branch_rows_path,
+            branch_aware_rows_path,
+            plot_paths,
+        ) = run_answer_margin_branch_decomposition(
+            scalar_pair_rows_path=args.scalar_pair_rows,
+            output_dir=args.output_dir,
+            output_closure_rows_path=args.output_closure_rows,
+            margin_side=args.margin_side,
+            pair_types=args.pair_type,
+            switch_buckets=args.switch_bucket,
+            reconstruction_tolerance=args.reconstruction_tolerance,
+            overwrite=args.overwrite,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "branch_rows": str(branch_rows_path),
+                "branch_aware_rows": None if branch_aware_rows_path is None else str(branch_aware_rows_path),
+                "plots": {key: str(value) for key, value in plot_paths.items()},
             }
         )
         return

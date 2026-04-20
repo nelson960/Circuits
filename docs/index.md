@@ -1,275 +1,95 @@
 ---
 layout: default
 title: "From Loss To Lookup: Tracing Circuit Formation In A Small Transformer"
-description: Ongoing mechanistic interpretability research on how SGD forms retrieval circuits in small symbolic key-value transformers.
+description: Ongoing mechanistic interpretability research on how SGD forms retrieval machinery in a small symbolic key-value transformer.
 ---
 
 # From Loss To Lookup: Tracing Circuit Formation In A Small Transformer
 
 Nelson Alex
 
-Living draft: 2026-04-18
+Living draft: 2026-04-20
 
-This is a living research paper. It is not a final solved claim. The point of this page is to make the current evidence readable: what task was trained, what the model learned, what we measured, what failed, what now looks true, and what is still missing before we can honestly say we understand why SGD formed this circuit.
+This is a living research paper. It is not a finished proof. The goal is to explain, in simple but technical terms, how a small transformer trained by SGD turns a symbolic key-value lookup rule into dense internal machinery.
 
 ## Short Version
 
-We trained a small transformer on a stream-based symbolic key-value task. The model sees writes and reads:
+We trained a small decoder-only transformer on a stream-based symbolic key-value task. The external rule is simple:
 
 ```text
-W K03 V14   W K01 V09   R K03 V14   W K03 V02   R K03 V02
+When the model reads key K, output the most recent value written for K.
 ```
 
-The rule is simple:
+The deeper research question is not only:
 
 ```text
-When the model reads key K, it must output the most recent value written for K.
+Which head, MLP, or neuron matters?
 ```
 
-The research question is not just:
+It is:
 
 ```text
-Which head or neuron matters?
+How does the loss from this data relation cause SGD updates that build an internal lookup mechanism?
 ```
 
-The real question is:
+The current answer is partial.
+
+We have a strong causal map of the trained model. The model uses a dense residual-stream system. Late components such as `L2H1`, `L2MLP`, and `L1H2` behave closest to direct output/readout routes. Early components such as `L0MLP`, `L1H3`, and `L1MLP` are causally essential, but they mostly act as upstream infrastructure rather than clean answer writers.
+
+We do not yet have a complete proof that SGD selected this mechanism over all alternatives. The missing object is a small, validated internal scalar `C(theta)` whose growth can be traced from actual optimizer updates to behavior improvement and compared against competing routes.
+
+In one sentence:
 
 ```text
-Why does SGD build one internal route for this relation instead of another?
+We understand much more about the trained mechanism than about the exact historical reason SGD formed it.
 ```
 
-The current answer is partial but sharper than where we started:
+## The Task
+
+Each prompt is a stream of writes and reads:
 
 ```text
-The model does not form one clean isolated circuit.
-It forms a dense residual infrastructure.
-
-Inside that infrastructure:
-  L2H1 becomes a strong late support-value retrieval/write route.
-  L1H2 and L0H0 also shape retrieval geometry.
-  MLPs and full residual routes carry substantial growth.
-  Feature families reveal useful projections, but they are not final mechanism units.
+W K03 V14   W K01 V09   R K03   W K03 V02   R K03
 ```
 
-The strongest new progress is that we can now measure actual optimizer updates, not just static component importance. In a traced continuation from step `5500` to `5550`, the recorded batches and actual parameter deltas can be compared against route growth step by step.
+`W K V` means "write value `V` into key `K`." `R K` means "read key `K`." The correct answer is the value from the latest previous write with that key.
 
-The strongest remaining gap is that this still does not prove a unique route-selection theorem. The data gradients support several routes at once, and broad residual routes often receive more support than isolated heads.
+<figure class="paper-figure">
+  <img src="assets/figures/task_rule_latest_write_lookup.svg" alt="Latest-write lookup task diagram">
+  <figcaption><strong>Figure 1. Latest-write lookup rule.</strong> The first `R K03` should output `V14`; after a later `W K03 V02`, the next `R K03` should output `V02`. The model is not given this algorithm directly. It only receives next-token loss.</figcaption>
+</figure>
 
-## How Far The Project Has Come
-
-The research has gone through several stages.
-
-| stage | what we asked | what happened |
-| --- | --- | --- |
-| behavior | does the model learn symbolic KV retrieval? | yes, heldout retrieval becomes strong |
-| components | which heads and MLPs matter? | L2H1, L1H2, L0H0, MLPs, and full residual routes all matter |
-| feature families | can feature families explain circuit birth? | family7/family4 were useful, but the birth model failed |
-| coalitions | are families separate circuits? | no, they share a dense neuron base |
-| geometry | can QK/OV subspaces explain retrieval/write roles? | partially, especially for L2H1 support-value retrieval/write |
-| causality | are these subspaces necessary and sufficient? | removal shows necessity; patching shows only partial sufficiency |
-| update attribution | do actual parameter updates move routes? | yes, one-step updates predict local route movement well |
-| actual batches | do recorded batches support route growth? | yes for tested support-value routes, but support ranking does not equal growth ranking |
-
-The current position is:
+The dataset relation can be written as:
 
 ```text
-We are past raw observation.
-We are not yet at a full mathematical proof.
-
-We can now connect:
-  actual update -> route movement
-  recorded batch gradient -> route support
-
-We still cannot fully explain:
-  why the route with the largest batch support
-  is not always the route with the largest realized growth.
+d(x, y) = 1  if y is the latest written value for the queried key in x
+d(x, y) = 0  otherwise
 ```
 
-## What This Project Tries To Prove
-
-The desired final proof has this shape:
-
-```text
-data relation d(x, y)
-  -> loss gradient from actual training batches
-  -> parameter update Delta theta
-  -> change in internal geometry
-  -> growth of a candidate route C_P
-  -> improvement in answer margin m(x, y)
-```
-
-In plain words:
-
-```text
-The data creates errors.
-Backprop turns those errors into gradients.
-The optimizer changes the weights.
-Those weight changes reshape attention and residual geometry.
-Some routes become better at solving the task.
-The answer margin improves.
-```
-
-The mathematical object we are tracking is the answer margin:
-
-```text
-m_t(x, y) = logit_t(y | x) - max_{z != y} logit_t(z | x)
-```
-
-Here `y` is the correct value token, and `z` ranges over wrong value tokens. A positive margin means the model prefers the right answer over the best wrong answer.
-
-For a candidate route `P`, we define a route score or contribution:
-
-```text
-C_P(theta_t, x, y)
-```
-
-The local first-order update equation is:
-
-```text
-Delta C_P(t)
-  ~= grad_theta C_P(theta_t) . Delta theta_t
-```
-
-If the update is approximately SGD-like:
-
-```text
-Delta theta_t ~= -eta grad_theta L_batch(theta_t)
-```
-
-then route growth is linked to batch-gradient alignment:
-
-```text
-Delta C_P(t)
-  ~= eta < -grad_theta L_batch(theta_t), grad_theta C_P(theta_t) >
-```
-
-This inner product is the core mathematical question. It asks:
-
-```text
-Does the actual training batch push the model in a direction that increases this route?
-```
-
-That is different from saying:
-
-```text
-This head has high attention.
-This neuron ablation hurts.
-This feature activates.
-```
-
-Those are useful measurements, but they are not yet an explanation of SGD selection.
-
-## Why Existing Work Does Not Already Solve This
-
-This project sits inside mechanistic interpretability, but it is asking a narrower training-time question than most circuit work:
-
-```text
-Given a fixed data relation and a fixed architecture,
-why does SGD amplify this route rather than another possible route?
-```
-
-Several existing lines of work give pieces of the answer.
-
-[A Mathematical Framework for Transformer Circuits](https://transformer-circuits.pub/2021/framework/index.html) gives the right decomposition for attention heads:
-
-```text
-QK decides where information routes.
-OV decides what information gets written.
-```
-
-That is why this paper separates QK support-vs-distractor geometry from OV/value-write geometry.
-
-[In-Context Learning and Induction Heads](https://transformer-circuits.pub/2022/in-context-learning-and-induction-heads/index.html) shows that useful attention circuits can form during training and that their formation is visible in training curves. That motivates checkpoint tracing, but it does not by itself explain why one route wins in this particular symbolic KV task.
-
-[Toy Models of Superposition](https://www.anthropic.com/research/toy-models-of-superposition) explains why individual neurons are often not clean variables. A model can pack more features than dimensions by representing sparse features in shared directions. In that setting, one neuron can participate in many features, and one feature can be distributed across many neurons.
-
-[Towards Monosemanticity](https://transformer-circuits.pub/2023/monosemantic-features/index.html) motivates looking for feature directions rather than assuming neurons are the natural atoms. Our feature-family phase followed that idea, but our results also show a limit: fitted feature families can still be analysis coordinates rather than final mechanism units.
-
-[Progress Measures for Grokking via Mechanistic Interpretability](https://huggingface.co/papers/2301.05217) is close in spirit because it connects training dynamics, progress measures, and a learned algorithm. This project tries to do something similar for latest-write symbolic retrieval.
-
-[ACDC](https://proceedings.neurips.cc/paper_files/paper/2023/hash/34e1dbe95d34d7ebaf99b9bcaeb5b2be-Abstract-Conference.html) and automated circuit-discovery work clarify that a circuit claim must specify the task, metric, intervention unit, and graph of dependencies. This is why our reports separate behavior, DLA, causal removal, controlled patching, route competition, and update attribution.
-
-[Causal Abstraction](https://jmlr.org/beta/papers/v26/23-0058.html) gives the right standard for stronger claims: a mechanistic explanation should identify abstract variables and show that they remain faithful under interventions. That is why this project distinguishes:
-
-```text
-removal drop:
-  this part is load-bearing
-
-patch recovery:
-  this part carries transferable abstract content
-```
-
-The literature explains why this is possible and why it is hard. It does not give a finished proof for this run. The missing object is still:
-
-```text
-actual data batch
-  -> actual optimizer update
-  -> change in route geometry
-  -> change in answer margin
-  -> comparison against competing routes
-```
-
-## Document Map
-
-Supporting plans:
-
-- [Checkpoint Analysis Plan](checkpoint_analysis_plan.md)
-- [Shared Feature Dynamics Plan](shared_feature_dynamics_plan.md)
-
-The page figures live in:
-
-```text
-docs/assets/figures/
-```
-
-The source artifacts live in:
-
-```text
-artifacts/runs/symbolic_kv_reference_formation/analysis/
-```
-
-All numbers on this page come from those reports.
-
-## The Benchmark
-
-The task is deliberately small but not trivial. Each sequence is a stream of key-value events:
-
-```text
-W K V  means write value V into key K
-R K V  means read key K and emit the current value V
-```
-
-The target relation is:
-
-```text
-d(x, y) = 1 if y is the latest written value for the queried key in x
-d(x, y) = 0 otherwise
-```
-
-The minimal algorithm is:
+The minimal symbolic algorithm would be:
 
 ```text
 store = {}
-for token event in stream:
+for event in stream:
   if event is W K V:
     store[K] = V
   if event is R K:
     output store[K]
 ```
 
-This matters because the model is not given this algorithm directly. It only receives next-token loss. The question is how that loss turns into an internal implementation of this algorithm.
+The transformer does not have a Python dictionary. It has token embeddings, attention scores, MLP activations, residual streams, layer norms, and logits. The research question is how SGD turns the loss on this relation into that internal machinery.
 
 <figure class="paper-figure">
   <img src="assets/figures/dataset_geometry_split_axes.svg" alt="Dataset split geometry">
-  <figcaption>Dataset geometry summary. The train, IID, heldout, OOD, and counterfactual splits differ in query structure, active keys, writes, overwrites, and lag.</figcaption>
+  <figcaption><strong>Figure 2. Dataset split geometry.</strong> The train, IID, heldout, OOD, and counterfactual splits differ in query structure, active keys, writes, overwrites, and lag. This matters because a shortcut can work on IID examples while failing on heldout key-value relations.</figcaption>
 </figure>
 
 <figure class="paper-figure">
-  <img src="assets/figures/dataset_geometry_answer_pair_matrix.svg" alt="Answer pair matrix">
-  <figcaption>The heldout-pairs split is structurally important because it separates key-value pair combinations from the training set.</figcaption>
+  <img src="assets/figures/dataset_geometry_answer_pair_matrix.svg" alt="Dataset answer pair matrix">
+  <figcaption><strong>Figure 3. Answer-pair structure.</strong> The heldout-pair split separates key-value combinations from the training set. This makes heldout success more meaningful than memorizing seen pairs.</figcaption>
 </figure>
 
-The dataset geometry report says:
+The dataset geometry report records:
 
 | split | records | queries | active keys | writes | overwrites | query lag |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -278,9 +98,9 @@ The dataset geometry report says:
 | heldout_pairs | 1024 | 6686 | 2.483 | 10.483 | 8.000 | 1.176 |
 | structural_ood | 1024 | 9255 | 4.507 | 15.472 | 10.965 | 2.425 |
 
-The heldout split has zero pair overlap with train in the dataset report. That is why heldout behavior is more meaningful than only checking IID accuracy.
+The heldout-pairs split has zero pair overlap with train in the dataset report.
 
-## Model And Training Run
+## Model And Run
 
 The reference run is:
 
@@ -288,40 +108,123 @@ The reference run is:
 | --- | --- |
 | model | decoder-only transformer |
 | layers | 3 |
-| heads | 4 |
+| heads per layer | 4 |
 | width | 128 |
 | seed | 7 |
 | training steps | 16000 |
 | batch size | 128 |
 
-The model reaches strong heldout behavior. The best checkpoint report records heldout-pairs answer accuracy around `0.872`.
+The model learns the task. A best-checkpoint report records heldout-pairs answer accuracy around `0.872`.
 
-The broad training trajectory is staged:
+The important training windows are:
 
-| window | center | behavior |
+| window | rough step range | role in the analysis |
 | --- | ---: | --- |
-| early | 1750 | weak retrieval, behavior beginning |
-| mid | 4500 | useful retrieval is forming |
-| later | 7500 to 8250 | strong support-value retrieval/write routes |
-| final | 14000 to 16000 | high heldout behavior but still dense and distributed |
+| early | 1750 to 2500 | first useful behavior and feature-family movement |
+| middle | 4500 to 8250 | main route-formation window |
+| stepwise trace | 5500 to 5550 | actual batch/update continuation used for short-step attribution |
+| final | 14000 to 16000 | high behavior, dense trained mechanism |
 
-This staged pattern is important. If the model simply memorized all answers, we would not expect clean formation windows or route growth. But staged behavior alone does not explain why the route forms.
+## The Proof Chain We Want
+
+A finished explanation would connect the data relation all the way to behavior:
+
+```text
+data relation d(x,y)
+  -> loss on actual batches
+  -> gradient
+  -> parameter update Delta theta
+  -> attention/residual geometry change
+  -> route growth
+  -> answer-margin improvement
+```
+
+<figure class="paper-figure">
+  <img src="assets/figures/loss_to_lookup_chain.svg" alt="Loss to lookup proof chain">
+  <figcaption><strong>Figure 4. The desired proof chain.</strong> A full result must connect actual training loss to parameter updates, then to internal route growth, and finally to answer-margin improvement.</figcaption>
+</figure>
+
+The main behavioral scalar is answer margin:
+
+```text
+m_t(x, y) = logit_t(y | x) - max_{z != y} logit_t(z | x)
+```
+
+where `y` is the correct value token and `z` ranges over wrong value tokens. A larger margin means the model prefers the correct answer more strongly.
+
+For a candidate internal route `P`, we want a scalar:
+
+```text
+C_P(theta_t, x, y)
+```
+
+The local update question is:
+
+```text
+Delta C_P(t) ~= grad_theta C_P(theta_t) dot Delta theta_t
+```
+
+If the update is close to SGD:
+
+```text
+Delta theta_t ~= -eta grad_theta L_batch(theta_t)
+```
+
+then route growth is controlled by an alignment:
+
+```text
+Delta C_P(t)
+  ~= eta < -grad_theta L_batch(theta_t), grad_theta C_P(theta_t) >
+```
+
+This is the central mathematical object. It asks whether the actual training batch pushed the model in a direction that increased a candidate route.
+
+## Evidence Ladder
+
+Different measurements prove different things. A head being active is not the same as proving that SGD selected it.
+
+<figure class="paper-figure">
+  <img src="assets/figures/evidence_ladder.svg" alt="Evidence ladder">
+  <figcaption><strong>Figure 5. Evidence ladder.</strong> Observation is the weakest evidence. Causal removal, causal patching, actual update attribution, route-to-margin closure, and cross-seed replication are stronger.</figcaption>
+</figure>
+
+The levels are:
+
+| level | question it answers | example |
+| --- | --- | --- |
+| observation | does something move or activate? | attention score rises |
+| causal necessity | is it load-bearing? | removing it drops margin |
+| causal content | does it carry the right variable? | patching transfers key/value information |
+| update attribution | did the actual optimizer step grow it? | `grad C dot Delta theta_actual` predicts route movement |
+| closure | does route growth explain behavior growth? | route deltas explain answer-margin delta |
+| replication | is the role stable? | same role appears across seeds |
+
+Most early experiments were below the closure level. The current work is now near update attribution and partial closure, but not yet cross-seed replication.
+
+## What Existing Work Contributes
+
+This project uses several ideas from mechanistic interpretability:
+
+- Transformer-circuits work says attention should be decomposed into `QK` and `OV`: `QK` decides where a head reads from, and `OV` decides what gets written.
+- Induction-head work shows that useful attention circuits can form during training and have measurable progress signals.
+- Grokking progress-measure work motivates tracking mechanism strength continuously rather than only measuring final accuracy.
+- Superposition work explains why individual neurons are often not clean variables.
+- Causal abstraction work raises the standard: a mechanism should correspond to abstract variables that survive interventions.
+
+This project is narrower than those papers. It asks:
+
+```text
+In this symbolic KV task, which internal route grows under actual SGD updates,
+and how much of the behavioral improvement does that growth explain?
+```
 
 ## First Attempt: Feature Families
 
-The first deep analysis asked:
+The first deep analysis tried to explain formation through activation features and neuron coalitions.
 
-```text
-Which activation features form during training?
-Which families appear first?
-Which neurons support those families?
-```
+At `layer_2_post_mlp`, two feature families became important:
 
-This found real structure.
-
-At `layer_2_post_mlp`, two candidate families became central:
-
-| family | features | interpretation |
+| family | features | initial interpretation |
 | --- | --- | --- |
 | family7 | 27, 54 | stronger useful/generalizing candidate |
 | family4 | 1, 59 | related sibling candidate with stronger raw pre-birth factor score |
@@ -333,31 +236,20 @@ The candidate mechanism report found:
 | family7 top2 | 0.408211 | 0.196319 | 0.109958 |
 | family4 top2 | 0.234053 | 0.021933 | 0.147239 |
 
-Simple reading:
-
-```text
-family7 helped useful and heldout behavior more.
-family4 had stronger raw feature-score drive.
-```
-
-This difference matters because it exposed the first major failure. The transparent `candidate-birth-model` predicted family4 over family7 from shared strict pre-birth evidence:
+But the transparent birth model failed. It predicted family4 over family7 from shared strict pre-birth evidence:
 
 | candidate | birth-model score | predicted rank | actual useful birth |
 | --- | ---: | ---: | ---: |
 | family4 top2 | 4 | 1 | 2500 |
 | family7 top2 | 0 | 2 | 2250 |
 
-That is a negative result. It means:
+This was a useful negative result. It showed that feature-family score drive was not enough to explain why the more generalizing route emerged earlier.
 
-```text
-Our first factor model did not explain why the more generalizing family won.
-```
+## Why Feature Families Hit A Wall
 
-## Why The Feature-Family Path Hit A Wall
+Feature families were useful for discovery, but they were not final mechanism units.
 
-Feature families were useful, but they were not the final unit of explanation.
-
-The coalition map showed that family7 and family4 are not cleanly separate circuits. They share a dense neuron base:
+The coalition map showed that family7 and family4 share a dense neuron substrate:
 
 | coalition category | neurons |
 | --- | ---: |
@@ -365,135 +257,81 @@ The coalition map showed that family7 and family4 are not cleanly separate circu
 | shared negative | 316 |
 | conflict | 224 |
 
-The top shared neurons were mostly in layer 0 MLP, including neurons such as `L0N376`, `L0N302`, `L0N124`, `L0N96`, and `L0N36`.
+That means the model did not use one clean neuron set for family7 and another clean neuron set for family4. The same early neurons participate in multiple later projections.
 
-This means the model is not using one neuron family for family7 and another independent family for family4. The same early neurons can support multiple later feature projections.
-
-The important lesson was:
+The lesson:
 
 ```text
 Feature IDs are analysis coordinates.
 They are not guaranteed to be natural circuit atoms.
 ```
 
-This is where the research pivoted. Instead of asking only which feature family formed, we started asking:
-
-```text
-What relation does the dataset impose?
-Which attention and residual routes implement that relation?
-Do actual SGD updates increase those routes?
-```
+This is why the project moved from feature-family stories toward route-level and residual-stream measurements.
 
 ## Superposition And Polysemantic Neurons
 
-The main obstacle is not that the model is too large. This model is small. The obstacle is that the internal representation is dense.
+The main difficulty is not model size. This model is small. The difficulty is that the learned representation is dense.
 
-In a clean hand-written program, a variable might live in one named location:
+In a hand-written program, the state might be:
 
 ```text
 query_key = K03
 stored_value[K03] = V14
 ```
 
-A transformer does not have to use clean locations like that. It can represent information as directions in the residual stream, combinations of neuron activations, and routes that only become meaningful when several components interact.
+A transformer does not need to represent those variables in clean named slots. It can distribute them across:
 
-This is the superposition problem:
+- residual-stream directions
+- QK attention subspaces
+- OV write directions
+- MLP activations
+- neuron combinations
+- layer norm scaling
+- final unembedding directions
 
-```text
-The model can represent many features in overlapping directions.
-```
-
-And this is the polysemantic-neuron problem:
-
-```text
-One neuron can participate in more than one feature or computation.
-```
-
-Our own results show this directly.
-
-The coalition map did not find two clean neuron sets, one for family7 and one for family4. It found:
+This is superposition:
 
 ```text
-shared positive neurons: 484
-shared negative neurons: 316
-conflict neurons:        224
+many features can share overlapping directions
 ```
 
-That means family7 and family4 are different projections through a shared substrate. Some neurons support both. Some oppose both. Some are in conflict.
-
-The prompt-neuron trace also showed why neuron labels are unstable. Some neurons with negative DLA still caused positive margin drops when ablated. Some single-neuron ablations changed the margin but barely changed accuracy. That is not a contradiction. It means:
+This is polysemanticity:
 
 ```text
-current direct write direction
-  is not the same thing as
-causal role inside the whole network
+one neuron can participate in more than one feature or role
 ```
 
-So the research cannot stop at:
+Our own results show this. Some neurons with weak or negative direct readout are still causally important. Some early MLP effects are huge under ablation but badly explained by Direct Logit Attribution. That is not a contradiction. It means the component is shaping later computation rather than directly writing the answer.
+
+## Attention Geometry
+
+For this task, a useful route needs at least two things:
 
 ```text
-find important neurons
+retrieval:
+  the read/prediction position must identify the correct support value
+  over distractor values
+
+write/readout:
+  the retrieved value must move the residual stream toward the correct answer token
 ```
 
-It must ask:
+For an attention head:
 
 ```text
-which residual directions, attention routes, MLP updates, and readout directions
-jointly implement the task relation?
+QK decides where to read from.
+OV decides what gets written after reading.
 ```
 
-This is why the later tools moved toward QK/OV geometry, direct logit attribution, controlled patching, route competition, and actual update attribution.
-
-## Geometry: What The Model Must Build
-
-For this task, a successful internal computation needs at least two pieces:
+The support-vs-distractor score is:
 
 ```text
-1. Retrieval geometry:
-   the read position must attend to the correct support value
-   more than to distractor values.
-
-2. Write/readout geometry:
-   the retrieved value must move the residual stream toward
-   the correct output token.
+support retrieval separation
+  = score(prediction position, support value position)
+    - mean score(prediction position, distractor value positions)
 ```
 
-For a head, the QK part controls routing:
-
-```text
-score(i, j, h)
-  = h_i^T W_QK^h h_j / sqrt(d_head)
-
-W_QK^h = W_Q^h (W_K^h)^T
-```
-
-The retrieval margin is:
-
-```text
-QK separation
-  = score(prediction_position, support_value_position)
-    - mean score(prediction_position, distractor_value_positions)
-```
-
-The OV/readout part controls what gets written:
-
-```text
-head output -> residual stream -> unembedding -> value logits
-```
-
-So a useful support-value route should show:
-
-```text
-QK support-vs-distractor separation rises.
-Attention mass on the support value rises.
-OV/value margin rises.
-Direct logit attribution rises.
-Answer margin improves.
-```
-
-## Attention Geometry Result
-
-The attention geometry trace identified L2H1 as the strongest late support-value retrieval/write head.
+The attention geometry trace identified `L2H1` as the strongest late support-value retrieval/write head.
 
 At final traced step `8250`:
 
@@ -506,819 +344,514 @@ At final traced step `8250`:
 
 <figure class="paper-figure">
   <img src="assets/figures/attention_geometry_checkpoint_summary.svg" alt="Attention geometry checkpoint summary">
-  <figcaption>Attention geometry over checkpoints. L2H1 becomes a strong support-value route, but the figure should be read as route evidence, not as a complete proof of SGD selection.</figcaption>
+  <figcaption><strong>Figure 6. Attention geometry over checkpoints.</strong> L2H1 becomes a strong support-value route. This is route evidence, not by itself a proof of SGD selection.</figcaption>
 </figure>
 
-The first positive joint geometry was:
-
-| head | first step | QK value margin | attention value margin | attended OV margin |
-| --- | ---: | ---: | ---: | ---: |
-| L2H1 | 5250 | 0.009791 | 0.611896 | 1.576235 |
-| L1H2 | 7500 | 0.197961 | 0.561577 | 0.222418 |
-
-Simple reading:
-
-```text
-L2H1 becomes a strong value-write route earlier.
-L1H2 later also has meaningful retrieval geometry.
-```
+<figure class="paper-figure">
+  <img src="assets/figures/attention_retrieval_chain_trajectory.svg" alt="L2H1 retrieval chain trajectory">
+  <figcaption><strong>Figure 7. L2H1 retrieval chain.</strong> During the 5500 to 7500 window, L2H1 increasingly separates the correct support value from value distractors. This is one of the clearest route-level signals found so far.</figcaption>
+</figure>
 
 ## Direct Logit Attribution
 
-Direct logit attribution asks:
+Direct Logit Attribution, or DLA, asks:
 
 ```text
-When a component writes a vector into the residual stream,
-how much does that vector point toward the correct answer logit?
+If this component writes a vector into the residual stream,
+how much does that vector directly increase the correct answer logit?
 ```
 
-For a component write `r_c` and answer-margin gradient `g_margin`:
+For component output `r_component` and correct answer unembedding direction `W_U[y]`:
 
 ```text
-DLA_c(x, y) = r_c(x) . g_margin(x, y)
+DLA(component, y) = r_component dot W_U[y]
 ```
 
-This does not prove causality. It only says the component's write is aligned with the answer direction at the readout.
+DLA is useful because it projects into the model's own output basis. It avoids some problems with fitted feature bases.
 
-The path-logit report found these final positive direct components:
-
-| component | type | DLA mean | positive fraction |
-| --- | --- | ---: | ---: |
-| L2H1 | attention head | 4.674101 | 0.832 |
-| L1H2 | attention head | 2.978323 | 0.724 |
-| L2MLP | MLP block | 1.541451 | 0.600 |
-| L0H0 | attention head | 0.856416 | 0.601 |
+But DLA measures direct writing. It does not measure total causal importance. A component can have low or negative DLA and still be important because it prepares the state used by later components.
 
 <figure class="paper-figure">
   <img src="assets/figures/path_logit_component_trajectory.svg" alt="Path logit component trajectory">
-  <figcaption>Direct logit attribution shows L2H1 as the largest late direct writer, with L1H2, L2MLP, and L0H0 also contributing.</figcaption>
+  <figcaption><strong>Figure 8. Direct output contributions.</strong> Path-logit decomposition shows which components directly write toward the correct answer over training. This is a direct-readout measurement, not a full causal story.</figcaption>
 </figure>
 
-The key warning:
+## Causal Removal And Patching
+
+Two causal tests are central:
 
 ```text
-DLA tells us who writes toward the answer.
-It does not tell us who is necessary, sufficient, or selected by SGD.
+causal removal:
+  remove a component or subspace and measure behavior drop
+
+causal patching:
+  move a component or subspace from one prompt to another and ask
+  whether it transfers the abstract variable
 ```
 
-## Causal Removal And Causal Patching
-
-We used two intervention types.
-
-First, removal:
-
-```text
-z_removed = z - (z B) B^T
-```
-
-This asks:
-
-```text
-If this subspace is removed, does behavior drop?
-```
-
-Second, controlled patching:
-
-```text
-z_patched = z_corrupted - (z_corrupted B) B^T + (z_clean B) B^T
-```
-
-This asks:
-
-```text
-Does this subspace carry transferable abstract content?
-```
-
-Removal found large causal effects:
-
-| intervention | margin drop | accuracy drop |
-| --- | ---: | ---: |
-| remove embedding key identity at query key | 8.368843 | 0.200886 |
-| remove L2H1 QK key-side at support value | 8.484934 | 0.227474 |
-| remove L2H1 OV output at prediction | 3.893747 | 0.081241 |
+Removal asks whether something is necessary. Patching asks whether it carries the right content.
 
 <figure class="paper-figure">
   <img src="assets/figures/l2h1_qk_key_remove_margin_drop.svg" alt="L2H1 QK key removal margin drop">
-  <figcaption>Removing the L2H1 QK key-side subspace causes a large margin drop. This proves the subspace is load-bearing.</figcaption>
+  <figcaption><strong>Figure 9. L2H1 QK key-side removal.</strong> Removing this subspace hurts margin, showing that it is load-bearing. Removal alone does not prove that it carries a specific abstract variable.</figcaption>
 </figure>
 
 <figure class="paper-figure">
   <img src="assets/figures/l2h1_ov_output_remove_margin_drop.svg" alt="L2H1 OV output removal margin drop">
-  <figcaption>Removing the L2H1 OV-output subspace causes a smaller but real drop. This supports the value-write role.</figcaption>
+  <figcaption><strong>Figure 10. L2H1 OV output removal.</strong> Removing this output/write subspace hurts margin. This supports a value-write role.</figcaption>
 </figure>
-
-But controlled patching was mixed:
-
-| patch | pair type | recovery | patched clean-answer fraction |
-| --- | --- | ---: | ---: |
-| L2H1 QK query-side | query key | 0.411789 | 0.336 |
-| L2H1 QK query-side | distractor | 0.114662 | 0.938 |
-| L2H1 QK key-side | query key | -0.049551 | 0.164 |
-| L2H1 QK key-side | distractor | -0.000002 | 0.945 |
 
 <figure class="paper-figure">
   <img src="assets/figures/l2h1_qk_query_patch_recovery_by_pair_type.svg" alt="L2H1 QK query-side patch recovery">
-  <figcaption>Query-side patching transfers some query-key content, but not enough to call it a clean sufficient variable.</figcaption>
+  <figcaption><strong>Figure 11. Controlled query-side patching.</strong> Patch recovery tests whether a subspace carries transferable query-key information rather than merely being important. Distractor controls prevent false positives.</figcaption>
 </figure>
 
-The conclusion is precise:
+## Current Trained-Model Picture
 
-```text
-These subspaces are necessary or load-bearing.
-They are not yet clean standalone causal variables.
-```
-
-That is exactly what a dense circuit should look like.
-
-## Neuron-Level Finding
-
-Prompt-conditioned neuron tracing asked:
-
-```text
-Which MLP neurons write toward or against the answer margin?
-What happens when selected neurons are ablated?
-```
-
-The top absolute-DLA neurons were mostly in layer 2:
-
-| neuron | DLA mean | abs DLA mean | active fraction |
-| --- | ---: | ---: | ---: |
-| L2N180 | -0.058170 | 1.063912 | 0.999 |
-| L2N121 | -0.106536 | 1.057197 | 0.997 |
-| L2N477 | 0.140675 | 0.903545 | 1.000 |
-| L2N372 | -0.115744 | 0.873528 | 1.000 |
-
-Single-neuron ablations had small behavior effects. For example:
-
-| neuron | DLA mean | margin drop | accuracy drop |
-| --- | ---: | ---: | ---: |
-| L2N477 | 0.140675 | 0.353949 | 0.002954 |
-| L1N366 | -0.057806 | 0.192114 | -0.004431 |
-| L2N180 | -0.058170 | 0.192028 | 0.004431 |
-
-Simple reading:
-
-```text
-Individual neurons matter, but the behavior is not bottlenecked through one neuron.
-Some neurons with negative direct attribution can still be causally load-bearing.
-This is another sign of dense, superposed computation.
-```
-
-## Route Competition
-
-After feature families and DLA, we moved to routes.
-
-A route is a candidate information path such as:
-
-```text
-L2H1 OV-input support-value route
-L1H2 QK query route
-full layer1 residual support-value route
-embedding value-identity route
-```
-
-The route score is measured by controlled transfer:
-
-```text
-route_score = patched_transfer_margin - corrupted_transfer_margin
-```
-
-This lets us compare candidate routes directly.
-
-For query-key route comparison at `5000 -> 5250`:
-
-| route | eval actual delta | eval predicted delta |
-| --- | ---: | ---: |
-| L2H1 QK query | 0.8421 | 0.9461 |
-| L1H2 QK query | 0.3871 | 0.4654 |
-| L0H0 QK query | -0.1933 | -0.1774 |
-| embedding key identity | 1.6082 | 2.2511 |
-| full layer1 post-MLP | 2.3723 | 3.3806 |
-
-The isolated head route matters, but the full residual route is larger.
-
-For support-value route transfer in the 50-step traced continuation:
-
-| route | actual route growth | predicted by actual update | sign match |
-| --- | ---: | ---: | ---: |
-| full layer1 support value | 0.913913 | 2.512411 | 47 / 50 |
-| L2H1 OV-input support value | 0.776056 | 1.362492 | 49 / 50 |
-| full layer0 support value | 0.423815 | 3.313448 | 49 / 50 |
-| L0H0 OV-input support value | 0.047569 | 0.828024 | 48 / 50 |
-| embedding value identity | 0.040278 | 0.805444 | 47 / 50 |
-| L1H2 OV-input support value | 0.008181 | 0.735241 | 50 / 50 |
+The best current picture is not a clean serial circuit. It is a dense residual-stream mechanism.
 
 <figure class="paper-figure">
-  <img src="assets/figures/support_value_routes_stepwise_actual_delta.svg" alt="Support value route stepwise actual delta">
-  <figcaption>Support-value route competition over the traced 50-step continuation. L2H1 grows strongly, but broad residual routes are still larger.</figcaption>
+  <img src="assets/figures/dense_residual_mechanism.svg" alt="Dense residual mechanism diagram">
+  <figcaption><strong>Figure 12. Current trained-model picture.</strong> Early components such as L0MLP, L1H3, and L1MLP shape a shared residual state. Later components such as L1H2, L2H1, and L2MLP are closer to direct answer readout. The arrows should be read as supported causal structure, not as a complete closed circuit.</figcaption>
 </figure>
 
-Simple reading:
+Simple version:
 
 ```text
-L2H1 is a major route.
-It is not the whole mechanism.
+Early components do not intentionally prepare a later circuit.
+They get reinforced when their activation pattern helps reduce loss.
+Later, once an attention/write route becomes useful,
+backprop sends credit through that route.
+Some earlier components then receive gradients that shape the residual geometry
+needed by the later route.
 ```
 
-## Attention Retrieval Chain
+That is the plausible formation story. The remaining work is proving it from actual updates rather than only describing it after training.
 
-For L2H1 over `5500 -> 7500`, we measured a chain of internal quantities:
+## Recent Causal Accounting Update
 
-| quantity | total change |
-| --- | ---: |
-| QK separation | +1.598671 |
-| attention separation | +0.049371 |
-| attended support OV value margin | +1.249723 |
-| head value-margin DLA | +1.292189 |
-| answer margin | +1.624128 |
-| answer loss reduction | +0.219068 |
+The most recent tools tested whether trained-model component effects are direct, mediated, or hidden in residual state.
+
+### Component Causal Validation
+
+This experiment compared DLA against causal ablation for output-facing components over `512000` rows.
+
+Late components had better DLA/causal agreement:
+
+| component | scalar | causal effect | DLA | sign agreement | corr | R2 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| L2MLP | fixed-source margin | 3.364054 | 1.850016 | 0.880 | 0.985 | 0.897 |
+| L2MLP | fixed-target margin | 3.358048 | 1.844964 | 0.881 | 0.985 | 0.898 |
+| L2H1 | fixed-source margin | 7.345897 | 5.444075 | 0.921 | 0.881 | 0.626 |
+| L2H1 | fixed-target margin | 7.347727 | 5.444509 | 0.921 | 0.881 | 0.626 |
+| L1H2 | fixed-source margin | 6.553232 | 3.990044 | 0.922 | 0.725 | 0.293 |
+| L1H2 | fixed-target margin | 6.549956 | 3.987632 | 0.922 | 0.727 | 0.295 |
+
+Early components were causally huge but not direct answer writers:
+
+| component | scalar | causal effect | DLA | sign agreement |
+| --- | --- | ---: | ---: | ---: |
+| L0MLP | correct-value logit | 27.738898 | -7.652493 | 0.162 |
+| L1H3 | correct-value logit | 21.515125 | -2.711512 | 0.318 |
+| L1MLP | correct-value logit | 15.712419 | -0.387060 | 0.495 |
 
 <figure class="paper-figure">
-  <img src="assets/figures/attention_retrieval_chain_trajectory.svg" alt="Attention retrieval chain trajectory">
-  <figcaption>The L2H1 chain improves in aggregate: QK support-vs-distractor separation, attention separation, OV/value terms, DLA, answer margin, and loss.</figcaption>
+  <img src="assets/figures/output_component_causal_validation_top_effects.svg" alt="Output component causal validation top effects">
+  <figcaption><strong>Figure 13. Direct attribution versus causal effect.</strong> Late components behave more like direct answer writers. Early components have large causal effects but poor direct attribution, which means their main role is upstream state shaping.</figcaption>
 </figure>
 
-However, the interval correlations are not a clean single-line story:
-
-| relation | correlation |
-| --- | ---: |
-| QK change to attention change | 0.540 |
-| attention change to head-margin DLA change | -0.297 |
-| head-margin DLA change to answer-margin change | -0.530 |
-| answer-margin change to loss reduction | 0.685 |
-
-This is important. The aggregate chain improves, but the local substeps are coupled and sometimes anti-correlated.
-
-Simple reading:
+This is one of the clearest findings so far:
 
 ```text
-The model is not improving by turning one knob.
-Several interacting quantities move together and against each other.
+late components are closer to direct output routes
+early components are load-bearing infrastructure
+```
+
+### Mediation Through Later Components
+
+The next question was whether early components act through later components.
+
+For target-endpoint correct-value logit:
+
+| source | total causal effect | direct DLA | mediated through selected later components | direct + mediated | explained fraction |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| L0MLP | 27.738898 | -7.652493 | 16.124124 | 8.471631 | 0.305 |
+| L1H3 | 21.515125 | -2.711512 | 12.577657 | 9.866145 | 0.459 |
+| L1MLP | 15.712419 | -0.387060 | 11.584630 | 11.197570 | 0.713 |
+
+Strong mediated paths included:
+
+| path | mediated correct-logit effect |
+| --- | ---: |
+| L0MLP -> L2H1 | 7.4515 |
+| L0MLP -> L1H2 | 5.1969 |
+| L0MLP -> L2MLP | 3.1648 |
+| L1H3 -> L2H1 | 6.5816 |
+| L1H3 -> L2MLP | 3.3300 |
+| L1MLP -> L2MLP | 6.1051 |
+| L1MLP -> L2H1 | 2.8337 |
+
+<figure class="paper-figure">
+  <img src="assets/figures/output_mediated_causal_decomposition_source_mediation.svg" alt="Output mediated causal decomposition source mediation">
+  <figcaption><strong>Figure 14. Source-level mediation.</strong> Some early-component effects flow through later components, especially L2H1, L1H2, and L2MLP. The mediation is real but incomplete.</figcaption>
+</figure>
+
+<figure class="paper-figure">
+  <img src="assets/figures/output_mediated_causal_decomposition_downstream_mediation.svg" alt="Output mediated causal decomposition downstream mediation">
+  <figcaption><strong>Figure 15. Downstream mediation.</strong> The downstream routes do not simply add up into a clean chain. Some later components help, some oppose, and some interact through the shared residual state.</figcaption>
+</figure>
+
+### All-Later Mediation Did Not Close The Gap
+
+We then tested whether the missing mediation was just because too few downstream components were included. That hypothesis failed.
+
+Adding all later components did not improve closure:
+
+| source | narrow explained fraction | all-later explained fraction | scalar |
+| --- | ---: | ---: | --- |
+| L0MLP | 0.305 | 0.147 | correct-value logit |
+| L1H3 | 0.459 | 0.452 | correct-value logit |
+| L1MLP | 0.713 | 0.629 | correct-value logit |
+
+For `L0MLP -> correct_value_logit`, later components had conflicting signs:
+
+| positive paths | effect |
+| --- | ---: |
+| L2H1 | +7.451 |
+| L1H2 | +5.197 |
+| L2MLP | +3.165 |
+
+| negative paths | effect |
+| --- | ---: |
+| L1H3 | -2.744 |
+| L1H0 | -0.837 |
+| L1MLP | -0.458 |
+| L1H1 | -0.364 |
+
+This means the trained model is not a clean additive chain. It is a dense, sign-conflicted system.
+
+### Residual-State Rescue
+
+Residual-state rescue asked:
+
+```text
+If removing an early component damages behavior,
+can we rescue behavior by patching the full residual state after that component?
+```
+
+The answer was yes, exactly at the expected stage boundary:
+
+| source | first stage that rescues target correct logit | rescue fraction |
+| --- | --- | ---: |
+| L0MLP | layer_0_post_mlp | 1.000 |
+| L1H3 | layer_1_post_attn | 1.000 |
+| L1MLP | layer_1_post_mlp | 1.000 |
+
+<figure class="paper-figure">
+  <img src="assets/figures/residual_state_rescue_fraction.svg" alt="Residual state rescue fraction">
+  <figcaption><strong>Figure 16. Residual rescue fraction.</strong> Full residual patching rescues the damage once the patch is placed after the source component. This localizes where the missing information enters the residual stream.</figcaption>
+</figure>
+
+<figure class="paper-figure">
+  <img src="assets/figures/residual_state_rescue_unrecovered.svg" alt="Residual state rescue unrecovered effect">
+  <figcaption><strong>Figure 17. Unrecovered residual effect.</strong> Once the full post-source residual state is patched, the unrecovered effect largely disappears. This proves the damage is in the residual state, but full-state patching does not identify the exact direction or variable inside that state.</figcaption>
+</figure>
+
+This is important but also limited:
+
+```text
+Full residual rescue proves where the information is.
+It does not prove what the information is.
 ```
 
 ## Actual Optimizer Trace
 
-Static checkpoint reports are not enough. To study SGD, we need actual updates.
+The project then moved from trained-model causality to update attribution.
 
-We traced an instrumented continuation:
-
-```text
-resume checkpoint: step_005500.pt
-traced steps:      5500 -> 5550
-checkpoint interval: 1
-recorded batches: 50
-saved checkpoints: 51
-```
-
-The trace status is:
+The question became:
 
 ```text
-instrumented_continuation_not_historical_replay
+Does the actual optimizer update move the model in a direction that increases a measured route?
 ```
 
-Reason:
+For a route scalar `C`:
 
 ```text
-Old checkpoints save model and optimizer state,
-but not the DataLoader iterator position or RNG stream.
+actual route change:
+  C(theta_{t+1}) - C(theta_t)
+
+first-order predicted route change:
+  grad C(theta_t) dot Delta theta_actual
 ```
 
-So this trace is a real continuation from the checkpoint, not an exact replay of the original historical 5500 to 5550 training segment.
-
-Summary:
-
-| measurement | value |
-| --- | ---: |
-| steps traced | 50 |
-| mean loss | 1.16623 |
-| mean token accuracy | 0.701193 |
-| mean parameter update L2 | 0.0566402 |
-
-This matters because now we can measure:
-
-```text
-actual batch
-  -> actual gradient
-  -> actual optimizer update
-  -> actual route movement
-```
-
-## Stepwise Retrieval-Separation Attribution
-
-The stepwise retrieval-separation reports compare:
-
-```text
-actual_delta = score(theta_{t+1}) - score(theta_t)
-predicted_delta = grad score(theta_t) . (theta_{t+1} - theta_t)
-```
-
-For support-value QK retrieval separation from `5500 -> 5550`:
-
-| head | actual score growth | predicted growth | sign match |
-| --- | ---: | ---: | ---: |
-| L2H1 | +0.086687 | +0.160357 | 50 / 50 |
-| L1H2 | +0.128266 | +0.141779 | 50 / 50 |
-| L0H0 | +0.045533 | +0.046169 | 49 / 50 |
+The stepwise retrieval-separation result for `L2H1` was much cleaner when measured as support-minus-distractor separation than when measuring raw score alone.
 
 <figure class="paper-figure">
-  <img src="assets/figures/l2h1_retrieval_sep_stepwise_actual_vs_predicted.svg" alt="L2H1 retrieval separation actual vs predicted">
-  <figcaption>At one-step resolution, first-order update attribution tracks L2H1 retrieval-separation movement much better than coarse checkpoint intervals.</figcaption>
+  <img src="assets/figures/l2h1_retrieval_sep_stepwise_actual_vs_predicted.svg" alt="L2H1 retrieval separation stepwise attribution">
+  <figcaption><strong>Figure 18. L2H1 stepwise retrieval-separation attribution.</strong> On short intervals, first-order attribution often gets the sign and direction of route movement right. This is evidence that actual updates are linked to route growth.</figcaption>
 </figure>
 
-The important correction:
+However, first-order prediction often overpredicts magnitude. That means the local gradient direction is informative, but it does not close the full nonlinear behavior change.
+
+## Answer Scalar Residual Diagnosis
+
+The answer-margin scalar itself can be tricky because the best wrong competitor token can switch.
+
+The diagnosis compared:
+
+- moving answer margin
+- fixed-source-competitor margin
+- fixed-target-competitor margin
+- correct-value logit
+- source best-wrong logit
+- target best-wrong logit
+- negative answer loss
+
+<figure class="paper-figure">
+  <img src="assets/figures/answer_scalar_residual_summary.svg" alt="Answer scalar residual diagnosis summary">
+  <figcaption><strong>Figure 19. Scalar residual diagnosis.</strong> First-order update attribution often captures direction better than magnitude. The residual is partly a scalar-definition issue and partly a nonlinear-training issue.</figcaption>
+</figure>
+
+<figure class="paper-figure">
+  <img src="assets/figures/answer_margin_branch_aware_closure.svg" alt="Answer margin branch-aware closure">
+  <figcaption><strong>Figure 20. Branch-aware margin closure.</strong> Moving-margin errors can come from active competitor switching. Fixed-competitor margins are cleaner local proof targets than the raw moving max margin.</figcaption>
+</figure>
+
+Simple version:
 
 ```text
-L2H1 is strongest in absolute retrieval separation.
-But L1H2 sharpens more during this short 50-step continuation.
+The update often points in the right direction.
+But the output scalar is nonlinear.
+The best wrong token can change.
+Several components move together.
+So a first-order route story does not automatically close the full answer margin.
 ```
 
-For L2H1, the QK decomposition shows:
+## Route-To-Output Closure
 
-| side | actual growth | predicted growth | sign match |
-| --- | ---: | ---: | ---: |
-| query side | +0.155511 | +0.157958 | 50 / 50 |
-| key side | -0.076688 | +0.002399 | 48 / 50 |
-
-Simple reading:
+Closure asks:
 
 ```text
-For L2H1 in this window, useful QK improvement is mostly query-side.
-The support/key side partially moves against the total.
+Do the measured route changes explain the output-scalar change?
 ```
 
-This supports a dense-residual interpretation:
+If closure is high, we can say:
 
 ```text
-The model is shaping what the prediction/query position looks like,
-not only changing the stored support-value vectors.
+This set of routes explains most of the behavioral improvement.
 ```
 
-## Actual-Batch Route Attribution
+If closure is low or unstable, then our route set is missing part of the mechanism.
 
-This is the newest missing-link result.
+<figure class="paper-figure">
+  <img src="assets/figures/output_route_closure_r_squared.svg" alt="Output route closure R squared">
+  <figcaption><strong>Figure 21. Output route closure.</strong> Route-to-output closure tests whether measured component changes explain scalar output changes. The current result is informative but not yet a complete answer-margin closure proof.</figcaption>
+</figure>
 
-The actual-batch route attribution report uses the recorded batch at each traced step and computes:
+Current interpretation:
 
 ```text
-actual_route_delta_t =
-  route(theta_{t+1}; source_basis_t) - route(theta_t; source_basis_t)
-
-actual_update_predicted_route_delta_t =
-  grad route(theta_t) . (theta_{t+1} - theta_t)
-
-actual_batch_route_support_t =
-  < -grad loss_batch_t(theta_t), grad route(theta_t) >
-
-actual_batch_update_alignment_t =
-  < -grad loss_batch_t(theta_t), theta_{t+1} - theta_t >
+We have partial route-to-output accounting.
+We do not yet have full answer-margin closure from a small route set.
 ```
 
-Integrity check:
+## Why This Is So Hard
+
+This task is small, but the mechanism is not simple.
+
+<figure class="paper-figure">
+  <img src="assets/figures/why_small_model_is_hard.svg" alt="Why a small symbolic model is still hard">
+  <figcaption><strong>Figure 22. Why small does not mean clean.</strong> A simple external rule becomes vectors, shared residual state, superposed neurons, interacting components, and logits. The learned implementation is distributed even in a toy model.</figcaption>
+</figure>
+
+The difficulty has several layers.
+
+First, the symbolic rule is discrete, but the implementation is geometric:
 
 ```text
-max absolute loss mismatch against optimizer trace: 0
+latest write for K03
 ```
 
-So the batch-gradient recomputation matched the recorded optimizer-trace loss.
-
-The route summary:
-
-| route | actual route delta | predicted by actual update | actual-batch route support | local SGD route delta | sign match |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| full layer1 support value | 0.913913 | 2.51241 | 76.4356 | 0.0305742 | 0.940 |
-| L2H1 OV-input support value | 0.776056 | 1.36249 | 26.8469 | 0.0107387 | 0.980 |
-| full layer0 support value | 0.423815 | 3.31345 | 140.974 | 0.0563898 | 0.980 |
-| L0H0 OV-input support value | 0.0475691 | 0.828024 | 39.4372 | 0.0157749 | 0.960 |
-| embedding value identity | 0.0402784 | 0.805444 | 38.6213 | 0.0154485 | 0.940 |
-| L1H2 OV-input support value | 0.00818082 | 0.735241 | 36.3225 | 0.014529 | 1.000 |
-
-This result is subtle.
-
-Ranked by actual route growth:
+becomes directions in:
 
 ```text
-1. full layer1 support-value route
-2. L2H1 OV-input support-value route
-3. full layer0 support-value route
+embedding space
+QK attention space
+OV write space
+MLP activation space
+residual stream
+unembedding space
 ```
 
-Ranked by actual-batch route support:
+Second, the residual stream is a shared workspace. Many components read and write to the same vector. That makes it hard to say one component owns one variable.
+
+Third, neurons are not clean variables. A neuron can help multiple features, and a feature can be spread across many neurons.
+
+Fourth, ablation is off-manifold. Removing a component creates a state the later network may not normally see.
+
+Fifth, SGD does not choose named circuits. It only follows loss gradients. Every update changes many weights at once. A later route can grow because earlier components already created a useful residual geometry, and earlier components can later receive credit because the later route uses them.
+
+So the hard part is not computing one more metric. The hard part is identifying the right internal variable:
 
 ```text
-1. full layer0 support-value route
-2. full layer1 support-value route
-3. L0H0 OV-input support-value route
-4. embedding value identity
-5. L1H2 OV-input support-value route
-6. L2H1 OV-input support-value route
+C(theta)
 ```
 
-This means:
+and proving that its growth is caused by actual optimizer updates and explains behavior.
 
-```text
-The actual batches do support L2H1.
-But they support broad residual/value routes even more.
-And support ranking is not identical to realized route-growth ranking.
-```
+## How Deep Can We Dig?
 
-That is a key constraint on the next explanation. Gradient support is necessary, but it is not the whole story. Architecture, current geometry, nonlinear interactions, optimizer state, and interference decide how support becomes realized growth.
+There are several depths of explanation:
 
-## What We Know Mathematically
-
-Some parts of the story are not mysterious.
-
-We know the optimizer changes parameters using the loss gradient. For simple SGD:
-
-```text
-theta_{t+1} = theta_t - eta grad_theta L_batch(theta_t)
-```
-
-For AdamW or another adaptive optimizer, the exact update has extra state, but the update is still computed from loss gradients, optimizer moments, weight decay, and learning-rate schedule.
-
-We know how attention scores are computed:
-
-```text
-q_i = W_Q h_i
-k_j = W_K h_j
-score(i, j) = q_i . k_j / sqrt(d_head)
-attention(i, j) = softmax_j(score(i, j))
-```
-
-We know how a head writes information:
-
-```text
-v_j = W_V h_j
-head_write_i = sum_j attention(i, j) v_j W_O
-```
-
-We know how logits are read from the residual stream:
-
-```text
-logits = W_U final_residual
-```
-
-And for a small update, we can approximate any scalar route score with a first-order Taylor expansion:
-
-```text
-C(theta + Delta theta)
-  ~= C(theta) + grad_theta C(theta) . Delta theta
-```
-
-This is why our update-attribution tools are meaningful. They are not arbitrary scores. They are measuring a concrete local derivative:
-
-```text
-Does the real parameter update point in the direction that increases this route?
-```
-
-What remains hard is not the update rule. The hard part is the competition among many coupled route scores.
-
-One parameter update changes all of these at once:
-
-```text
-embeddings
-layer norms
-Q projections
-K projections
-V projections
-O projections
-MLP input weights
-MLP output weights
-unembedding/readout
-```
-
-Those changes interact through softmax, residual addition, nonlinear MLP activations, and layer norm. So even if:
-
-```text
-< -grad L_batch, grad C_P > > 0
-```
-
-route `P` might not grow the most, because other routes also receive support, interfere less, start from a better geometry, or have lower nonlinear residual error.
-
-## Current Mechanistic Picture
-
-The best current explanation is:
-
-```text
-The data relation pushes the model to distinguish support values from distractors.
-Early layers and MLPs shape the residual stream into a useful geometry.
-L1H2 and L0H0 participate in retrieval geometry.
-L2H1 becomes a strong late route that retrieves support-value information
-and writes in a direction that helps the answer logit.
-The route is useful, but embedded in a larger dense infrastructure.
-```
-
-In simple terms:
-
-```text
-The model is not building a wire.
-It is building a landscape.
-
-L2H1 is one major road through that landscape.
-But the land underneath it is shaped by earlier layers, MLPs, embeddings,
-and full residual-stream directions.
-```
-
-This also explains why the early neuron story was confusing:
-
-```text
-Early neurons do not intentionally prepare a later circuit.
-They get reinforced when their activation pattern helps reduce loss.
-Later, once an attention route becomes useful, backprop sends credit through that route,
-and some earlier neurons start receiving gradients that shape the residual geometry
-needed by the later route.
-```
-
-## Where The Research Is Stuck
-
-The current bottleneck is:
-
-```text
-actual batch-gradient support
-  -> realized route selection
-```
-
-The actual-batch attribution result is the clearest example.
-
-For support-value routes from `5500 -> 5550`, the recorded batches supported L2H1:
-
-```text
-L2H1 actual-batch route support: +26.8469
-L2H1 actual route growth:        +0.776056
-```
-
-But the batches supported broad residual routes even more:
-
-```text
-full layer0 support: +140.974
-full layer1 support:  +76.4356
-```
-
-And the ranking by support did not equal the ranking by realized route growth:
-
-```text
-highest batch support:
-  full layer0
-
-highest realized route growth:
-  full layer1
-
-strong isolated head growth:
-  L2H1
-```
-
-So the missing explanation is not:
-
-```text
-Does the batch gradient support L2H1?
-```
-
-It does.
-
-The missing explanation is:
-
-```text
-Why does this supported route become a strong realized route,
-while other supported directions become broad infrastructure,
-auxiliary support, or interference?
-```
-
-Likely missing factors:
-
-| factor | why it matters |
-| --- | --- |
-| current geometry | a route that already has useful alignment can amplify faster |
-| softmax nonlinearity | small score changes can have different attention effects depending on saturation |
-| layer norm | scaling and centering can change the effect of residual directions |
-| optimizer state | Adam-style moments can rotate or rescale the raw gradient effect |
-| route basis drift | the subspace being measured can change as weights change |
-| second-order terms | first-order attribution can overpredict when updates are not infinitesimal |
-| interference | one update can increase one route while weakening another |
-| architecture constraints | some routes have shorter or easier paths to the answer logit |
-
-This is why the proof is hard even in a tiny model.
-
-The model is small enough to inspect, but the mechanism is not a sparse symbolic program. It is a learned dynamical system where many parameters change together and several routes are partially correct at the same time.
-
-## What We Know Versus What We Do Not Know
-
-| category | known from this project | still unknown |
+| depth | what it tells us | current status |
 | --- | --- | --- |
-| dataset | the target relation is latest-write lookup; heldout pairs are separated | whether this exact geometry generalizes to larger symbolic tasks |
-| behavior | the model learns strong heldout retrieval | whether the same formation path appears across seeds |
-| features | family7 is more useful/generalizing than family4 | whether family7 is a natural mechanism unit |
-| neurons | neuron support is dense and shared | how to decompose all neuron-level effects without double-counting superposed features |
-| attention | L2H1 is a major late support-value route; L1H2 and L0H0 also matter | why the architecture assigns these roles to these heads in this seed |
-| causality | QK/OV/key-identity removals cause large drops | clean sufficient variable transfer is still incomplete |
-| updates | one-step actual updates predict local route movement well | first-order predictions still overestimate some route changes |
-| actual batches | recorded batches support tested support-value routes | support ranking does not yet explain realized route ranking |
-| final proof | local pieces are measurable | the full data-to-answer-margin derivation is not closed |
+| behavior | the model gets answers right | strong |
+| logits | correct token wins over wrong tokens | strong |
+| DLA | which components directly write to output | strong for late components |
+| causal ablation | which components are load-bearing | strong |
+| causal patching | which subspaces carry transferable content | partial |
+| mediation | how early effects pass through later components | partial and sign-conflicted |
+| residual rescue | where missing information enters the residual stream | strong but coarse |
+| update attribution | whether actual updates grow routes | partial |
+| closure | whether route growth explains margin growth | not complete |
+| cross-seed role replication | whether the role is stable beyond seed 7 | not done |
+| exact historical trace | full original training stream from step 0 | not done |
+
+We can dig below neurons into weights and gradients, but that creates a combinatorial problem. The model has many weights, and each update moves many of them. The right next step is not to inspect every weight. It is to pick one validated route scalar and close the chain around it.
 
 ## What Is Supported
 
-Supported:
+Current supported claims:
 
-| claim | evidence |
+| claim | status |
 | --- | --- |
-| The model learns the task. | best checkpoint heldout-pairs accuracy around 0.872 |
-| The task relation is controlled and explicit. | dataset geometry report |
-| Feature-family analysis found meaningful candidates. | family7/family4 mechanism report |
-| The first birth model failed. | family4 predicted above family7 |
-| The mechanism is dense. | coalition map, neuron tracing, full-residual route growth |
-| L2H1 is a major late direct writer. | DLA and attention geometry |
-| L2H1 QK/OV subspaces are load-bearing. | geometry removal interventions |
-| L2H1 query-side carries partial transferable query-key content. | causal variable patch |
-| One-step actual updates predict route movement better than coarse intervals. | optimizer trace and stepwise attribution |
-| Actual recorded batches support tested support-value routes. | actual-batch route attribution |
+| The model learns the symbolic KV task above chance | supported |
+| Heldout-pair behavior is meaningful because heldout pair overlap with train is zero in the dataset report | supported |
+| L2H1 develops strong late support-value retrieval/write geometry | supported |
+| L2H1, L2MLP, and L1H2 behave closer to direct output/readout routes | supported |
+| L0MLP, L1H3, and L1MLP are causally essential upstream infrastructure | supported |
+| Early-component effects are partly mediated through later components | supported but incomplete |
+| All-later mediation does not close the early-component effect | supported |
+| Full residual patching rescues early-component damage at the expected stage boundary | supported |
+| The trained mechanism is dense and sign-conflicted | supported |
+| Short-step update attribution captures some route-movement directions | supported |
 
 ## What Is Not Yet Proven
 
-Not proven:
+Current unsupported or incomplete claims:
 
-| missing claim | why it is missing |
+| claim | status |
 | --- | --- |
-| SGD uniquely selected L2H1 over all alternatives. | broad residual routes and other heads also receive support |
-| L2H1 alone implements the algorithm. | full residual routes are larger; causal patching is partial |
-| Feature family7 is the final natural circuit atom. | family basis is an analysis coordinate and coalitions are dense |
-| We can derive answer-margin improvement end to end. | route-to-answer chain has mixed local correlations |
-| The result is seed-stable. | cross-seed repeat is still missing |
-| We have exact historical replay. | original checkpoints did not save dataloader/RNG state |
-| First-order attribution fully explains growth. | predicted deltas often overestimate actual deltas |
+| SGD selected exactly L2H1 for a unique reason | not proven |
+| A small set of routes fully closes answer-margin growth | not proven |
+| The exact abstract variable inside early residual state is identified | not proven |
+| Neuron-level growth is the right proof object | not supported |
+| Feature families are natural circuit atoms | not supported |
+| Current results generalize across seeds | not tested |
+| We have reconstructed the original historical training stream from step 0 | not done |
 
-## The Research Has Moved
-
-The project began with:
+The main gap:
 
 ```text
-Which components and neurons changed?
+trained-model causal accounting is strong
+SGD-formation proof is still incomplete
 ```
 
-Then it moved to:
+## Next Finite Proof Unit
+
+The next step should stop expanding the tool list and choose one variable:
 
 ```text
-Which feature families formed?
+C(theta) = one candidate internal mechanism scalar
 ```
 
-That hit the dense-superposition wall.
-
-The current project is now asking:
+Good candidates are:
 
 ```text
-Can we account for route growth from actual optimizer updates?
-Can we account for those updates from actual data batches?
-Can we connect route growth to answer-margin improvement?
+L2H1 support-value retrieval separation
 ```
 
-That is a stronger and more mathematical target.
-
-The practical difference is:
+or:
 
 ```text
-old evidence:
-  this component matters
-
-new evidence:
-  this actual update moved this route by this amount,
-  and this recorded batch gradient had this alignment with that route
+fixed-competitor output contribution from the validated late route set
 ```
 
-But the new evidence also makes the problem harder, because it shows that SGD does not only support one route. It supports a field of possible improvements. Circuit formation is the realized trajectory through that field.
+The proof unit is:
 
-## Next Experiments
+<figure class="paper-figure">
+  <img src="assets/figures/finite_proof_unit.svg" alt="Finite proof unit diagram">
+  <figcaption><strong>Figure 23. The next finite proof unit.</strong> Pick one internal scalar `C(theta)`, measure its actual change, predict that change from the actual optimizer update, connect it to behavior change, compare against alternatives, and then repeat across seeds.</figcaption>
+</figure>
 
-The next stage should not add another broad observational dashboard. It should close specific proof gaps.
-
-### 1. Actual-Batch Query-Key Attribution
-
-We have actual-batch attribution for support-value routes. We still need the same treatment for query-key routes:
+Concretely:
 
 ```text
-recorded batch
-  -> gradient
-  -> actual update
-  -> query-key route growth
+1. Measure C(theta_t)
+2. Measure C(theta_{t+1})
+3. Compute Delta C_actual
+4. Compute grad C(theta_t) dot Delta theta_actual
+5. Show the actual batch update predicts Delta C
+6. Show Delta C predicts answer-margin or loss improvement
+7. Compare against competing routes
+8. Repeat across seeds
 ```
 
-This checks whether the same recorded batches that support value routes also support retrieval-key geometry.
-
-### 2. Actual-Batch Route Competition Across More Candidates
-
-The support-value actual-batch report compared a small candidate set. The next comparison should include:
-
-```text
-L2H1 support-value route
-L1H2 support-value route
-L0H0 support-value route
-full residual routes
-query-key QK routes
-OV-output prediction routes
-embedding key/value identity routes
-```
-
-This is needed because route selection is comparative. A positive support number for one route is not enough. We need to know whether it is larger, cleaner, more stable, or more causally connected than alternatives.
-
-### 3. Route-To-Answer Closure
-
-We need to connect:
-
-```text
-route growth -> answer margin growth
-```
-
-in the same traced window. Right now, L2H1 route measures improve, but answer-margin movement is still affected by other components and nonlinear interactions.
-
-### 4. Second-Order Residual Accounting
-
-The first-order equation:
-
-```text
-Delta C_P ~= grad C_P . Delta theta
-```
-
-is useful, but overpredicts some route changes. We need to measure:
-
-```text
-residual = actual_delta - first_order_prediction
-```
-
-and decide whether that residual is caused by:
-
-- checkpoint interval size
-- softmax nonlinearities
-- layer norm effects
-- optimizer state
-- route basis drift
-- interactions between changing Q, K, V, O, MLP, and residual vectors
-
-### 5. Superposition-Aware Decomposition
-
-Neuron-level decomposition should not simply rank neurons. It should avoid double-counting shared features.
-
-The next useful version should decompose:
-
-```text
-residual directions
-feature directions
-MLP neuron writes
-attention QK/OV subspaces
-unembedding readout directions
-```
-
-and ask where the same information is shared across them.
-
-### 6. Cross-Seed Repeat
-
-A final paper claim cannot depend on seed 7 only. The key question is whether the same role-level geometry appears across seeds, even if head identity changes.
-
-### 7. Exact Future Training Trace
-
-For future runs, the batch stream should be recorded from the beginning. Then we can avoid the current limitation:
-
-```text
-instrumented continuation, not exact historical replay
-```
+Only after that can the project honestly claim a closed SGD circuit-formation result.
 
 ## Current Bottom Line
 
-The project has not solved SGD circuit selection yet.
-
-But it has moved from observation to local mathematical accounting.
-
-The current strongest statement is:
+The central result so far is:
 
 ```text
-In this symbolic KV transformer, the learned mechanism is dense.
-L2H1 is a major late support-value retrieval/write route.
-Actual optimizer updates predict local route movement at one-step resolution.
-Actual recorded batches support the tested support-value routes.
-But route selection is not explained by one head, one feature family, or one neuron group.
-The remaining problem is to explain how batch-gradient support, residual geometry,
-and nonlinear route interactions combine to make one route grow more than another.
+The trained model implements symbolic lookup through a dense residual-stream mechanism.
+Late components provide more direct answer readout.
+Early components are causally essential infrastructure.
+Their effects are partly mediated through later routes,
+but not in a clean additive chain.
 ```
 
-The current central unresolved sentence is:
+The central open problem is:
 
 ```text
-We know the update rule, and we can measure many local consequences of that rule.
-We do not yet have a closed theory that predicts the realized route competition
-from the data distribution and architecture alone.
+Find one validated internal scalar C(theta)
+whose growth is caused by actual optimizer updates
+and whose growth explains output improvement.
 ```
 
-That is the honest state of the research.
+That is the path from:
+
+```text
+this component matters
+```
+
+to:
+
+```text
+this is how SGD built the lookup mechanism
+```
 
 ## Main Artifact Sources
 
-| artifact | path |
+Primary artifacts:
+
+| artifact group | path |
 | --- | --- |
-| dataset geometry | `artifacts/runs/symbolic_kv_reference_formation/analysis/dataset_geometry/dataset_geometry_report.md` |
-| candidate mechanism | `artifacts/runs/symbolic_kv_reference_formation/analysis/traced_candidates/layer2_family7_family4/mechanism_report/candidate_mechanism_report.md` |
-| candidate birth model | `artifacts/runs/symbolic_kv_reference_formation/analysis/traced_candidates/layer2_family7_family4/birth_model/candidate_birth_model_report.md` |
-| coalition map | `artifacts/runs/symbolic_kv_reference_formation/analysis/traced_candidates/layer2_family7_family4/coalition_map_early/candidate_coalition_map_report.md` |
-| causal variable patch query-side | `artifacts/runs/symbolic_kv_reference_formation/analysis/causal_variable_patch/l2h1_qk_query_side_query_key/causal_variable_patch_report.md` |
-| causal variable patch key-side | `artifacts/runs/symbolic_kv_reference_formation/analysis/causal_variable_patch/l2h1_qk_key_side_query_key/causal_variable_patch_report.md` |
-| geometry interventions | `artifacts/runs/symbolic_kv_reference_formation/analysis/geometry_interventions/` |
-| attention geometry | `artifacts/runs/symbolic_kv_reference_formation/analysis/attention_geometry/l2h1_value_write_timeline/attention_geometry_trace_report.md` |
-| path-logit decomposition | `artifacts/runs/symbolic_kv_reference_formation/analysis/path_logit_decomposition/l2h1_value_write_timeline/path_logit_decomposition_report.md` |
-| prompt-neuron trace | `artifacts/runs/symbolic_kv_reference_formation/analysis/prompt_neuron_trace_probe/prompt_neuron_trace_report.md` |
-| retrieval chain | `artifacts/runs/symbolic_kv_reference_formation/analysis/attention_retrieval_chain/l2h1_support_value_minus_distractors_5500_7500_neighbor_intervals/attention_retrieval_chain_report.md` |
-| optimizer trace | `artifacts/runs/symbolic_kv_reference_formation/analysis/optimizer_update_trace/l2h1_support_value_5500_5550_stepwise/optimizer_update_trace_report.md` |
-| actual-batch route attribution | `artifacts/runs/symbolic_kv_reference_formation/analysis/actual_batch_route_attribution/support_value_routes_5500_5550_stepwise/actual_batch_route_attribution_report.md` |
+| dataset geometry | `artifacts/runs/symbolic_kv_reference_formation/analysis/dataset_geometry/` |
+| attention geometry | `artifacts/runs/symbolic_kv_reference_formation/analysis/attention_geometry/` |
+| path logit decomposition | `artifacts/runs/symbolic_kv_reference_formation/analysis/path_logit_decomposition/` |
+| causal variable patching | `artifacts/runs/symbolic_kv_reference_formation/analysis/causal_variable_patch/` |
+| route competition | `artifacts/runs/symbolic_kv_reference_formation/analysis/route_competition/` |
+| actual update attribution | `artifacts/runs/symbolic_kv_reference_formation/analysis/checkpoint_update_attribution/` |
+| attention retrieval update attribution | `artifacts/runs/symbolic_kv_reference_formation/analysis/attention_retrieval_separation_update_attribution/` |
+| answer scalar residual diagnosis | `artifacts/runs/symbolic_kv_reference_formation/analysis/answer_scalar_residual_diagnosis/` |
+| output route closure | `artifacts/runs/symbolic_kv_reference_formation/analysis/output_route_closure/` |
+| output component causal validation | `artifacts/runs/symbolic_kv_reference_formation/analysis/output_component_causal_validation/` |
+| output mediated causal decomposition | `artifacts/runs/symbolic_kv_reference_formation/analysis/output_mediated_causal_decomposition/` |
+| residual state rescue | `artifacts/runs/symbolic_kv_reference_formation/analysis/residual_state_rescue/` |
+
+Supporting plans:
+
+- [Checkpoint Analysis Plan](checkpoint_analysis_plan.md)
+- [Shared Feature Dynamics Plan](shared_feature_dynamics_plan.md)
+
