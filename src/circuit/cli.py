@@ -73,6 +73,10 @@ from circuit.analysis.shared_feature_dynamics import (
     subset_birth_analyze,
     subset_trajectory,
 )
+from circuit.analysis.svd_task_alignment import run_svd_task_alignment
+from circuit.analysis.contextual_svd_alignment import run_contextual_svd_alignment
+from circuit.analysis.weight_svd_patterns import run_weight_svd_patterns
+from circuit.analysis.weight_svd_trace import run_weight_svd_trace
 from circuit.config import TrainSpec
 from circuit.data.symbolic_kv import generate_symbolic_kv_benchmark
 from circuit.data.symbolic_kv_stream import generate_symbolic_kv_stream_benchmark
@@ -1066,6 +1070,68 @@ def main() -> None:
     answer_branch_parser.add_argument("--switch-bucket", type=str, action="append", default=None)
     answer_branch_parser.add_argument("--reconstruction-tolerance", type=float, default=1.0e-5)
     answer_branch_parser.add_argument("--overwrite", action="store_true")
+
+    weight_svd_parser = subparsers.add_parser("weight-svd-trace")
+    weight_svd_parser.add_argument("--config", type=Path, required=True)
+    weight_svd_parser.add_argument("--checkpoint-dir", type=Path, required=True)
+    weight_svd_parser.add_argument("--checkpoint", type=Path, action="append", default=None)
+    weight_svd_parser.add_argument("--output-dir", type=Path, required=True)
+    weight_svd_parser.add_argument("--device", type=str, default="cpu")
+    weight_svd_parser.add_argument("--max-singular-values", type=int, default=None)
+    weight_svd_parser.add_argument("--top-vector-ranks", type=int, default=1)
+    weight_svd_parser.add_argument("--overwrite", action="store_true")
+
+    weight_svd_patterns_parser = subparsers.add_parser("weight-svd-patterns")
+    weight_svd_patterns_parser.add_argument("--singular-values", type=Path, required=True)
+    weight_svd_patterns_parser.add_argument("--top-singular-vectors", type=Path, required=True)
+    weight_svd_patterns_parser.add_argument("--output-dir", type=Path, required=True)
+    weight_svd_patterns_parser.add_argument("--max-vector-rank", type=int, default=1)
+    weight_svd_patterns_parser.add_argument("--final-alignment-threshold", type=float, default=0.95)
+    weight_svd_patterns_parser.add_argument("--adjacent-stability-threshold", type=float, default=0.99)
+    weight_svd_patterns_parser.add_argument("--stability-patience", type=int, default=3)
+    weight_svd_patterns_parser.add_argument("--markdown-top-k", type=int, default=16)
+    weight_svd_patterns_parser.add_argument("--overwrite", action="store_true")
+
+    svd_task_alignment_parser = subparsers.add_parser("svd-task-alignment")
+    svd_task_alignment_parser.add_argument("--config", type=Path, required=True)
+    svd_task_alignment_parser.add_argument("--checkpoint-dir", type=Path, required=True)
+    svd_task_alignment_parser.add_argument("--checkpoint", type=Path, action="append", default=None)
+    svd_task_alignment_parser.add_argument("--output-dir", type=Path, required=True)
+    svd_task_alignment_parser.add_argument("--device", type=str, default="cpu")
+    svd_task_alignment_parser.add_argument("--head-layer", type=int, required=True)
+    svd_task_alignment_parser.add_argument("--head", type=int, required=True)
+    svd_task_alignment_parser.add_argument("--top-ranks", type=int, default=4)
+    svd_task_alignment_parser.add_argument("--pca-rank", type=int, default=2)
+    svd_task_alignment_parser.add_argument("--behavior-rows", type=Path, default=None)
+    svd_task_alignment_parser.add_argument("--behavior-split", type=str, default="__all__")
+    svd_task_alignment_parser.add_argument("--behavior-margin-field", type=str, default="baseline_margin_mean")
+    svd_task_alignment_parser.add_argument("--behavior-accuracy-field", type=str, default="baseline_accuracy")
+    svd_task_alignment_parser.add_argument("--top-k-tokens", type=int, default=8)
+    svd_task_alignment_parser.add_argument("--overwrite", action="store_true")
+
+    contextual_svd_alignment_parser = subparsers.add_parser("contextual-svd-alignment")
+    contextual_svd_alignment_parser.add_argument("--config", type=Path, required=True)
+    contextual_svd_alignment_parser.add_argument("--probe-set", type=Path, required=True)
+    contextual_svd_alignment_parser.add_argument("--checkpoint-dir", type=Path, required=True)
+    contextual_svd_alignment_parser.add_argument("--checkpoint", type=Path, action="append", default=None)
+    contextual_svd_alignment_parser.add_argument("--output-dir", type=Path, required=True)
+    contextual_svd_alignment_parser.add_argument("--device", type=str, default="cpu")
+    contextual_svd_alignment_parser.add_argument("--head-layer", type=int, required=True)
+    contextual_svd_alignment_parser.add_argument("--head", type=int, required=True)
+    contextual_svd_alignment_parser.add_argument("--context-stage", type=str, required=True)
+    contextual_svd_alignment_parser.add_argument("--role", type=str, action="append", default=None)
+    contextual_svd_alignment_parser.add_argument("--role-spec", type=str, action="append", default=None)
+    contextual_svd_alignment_parser.add_argument("--plot-left-role", type=str, required=True)
+    contextual_svd_alignment_parser.add_argument("--plot-right-role", type=str, required=True)
+    contextual_svd_alignment_parser.add_argument("--top-ranks", type=int, default=4)
+    contextual_svd_alignment_parser.add_argument("--pca-rank", type=int, default=4)
+    contextual_svd_alignment_parser.add_argument("--batch-size", type=int, default=16)
+    contextual_svd_alignment_parser.add_argument("--split", type=str, action="append", default=None)
+    contextual_svd_alignment_parser.add_argument("--behavior-rows", type=Path, default=None)
+    contextual_svd_alignment_parser.add_argument("--behavior-split", type=str, default="__all__")
+    contextual_svd_alignment_parser.add_argument("--behavior-margin-field", type=str, default="baseline_margin_mean")
+    contextual_svd_alignment_parser.add_argument("--behavior-accuracy-field", type=str, default="baseline_accuracy")
+    contextual_svd_alignment_parser.add_argument("--overwrite", action="store_true")
 
     args = parser.parse_args()
     if args.command == "generate-benchmark":
@@ -2483,6 +2549,152 @@ def main() -> None:
                 "markdown": str(markdown_path),
                 "branch_rows": str(branch_rows_path),
                 "branch_aware_rows": None if branch_aware_rows_path is None else str(branch_aware_rows_path),
+                "plots": {key: str(value) for key, value in plot_paths.items()},
+            }
+        )
+        return
+    if args.command == "weight-svd-trace":
+        (
+            report_path,
+            markdown_path,
+            singular_values_jsonl_path,
+            singular_values_csv_path,
+            top_vectors_jsonl_path,
+        ) = run_weight_svd_trace(
+            config_path=args.config,
+            checkpoint_dir=args.checkpoint_dir,
+            output_dir=args.output_dir,
+            device_name=args.device,
+            checkpoint_paths=args.checkpoint,
+            max_singular_values=args.max_singular_values,
+            top_vector_ranks=args.top_vector_ranks,
+            overwrite=args.overwrite,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "singular_values_jsonl": str(singular_values_jsonl_path),
+                "singular_values_csv": str(singular_values_csv_path),
+                "top_singular_vectors_jsonl": str(top_vectors_jsonl_path),
+            }
+        )
+        return
+    if args.command == "weight-svd-patterns":
+        (
+            report_path,
+            markdown_path,
+            matrix_summary_rows_path,
+            matrix_summary_csv_path,
+            vector_alignment_rows_path,
+            interval_event_rows_path,
+            coordination_window_rows_path,
+        ) = run_weight_svd_patterns(
+            singular_values_path=args.singular_values,
+            top_singular_vectors_path=args.top_singular_vectors,
+            output_dir=args.output_dir,
+            max_vector_rank=args.max_vector_rank,
+            final_alignment_threshold=args.final_alignment_threshold,
+            adjacent_stability_threshold=args.adjacent_stability_threshold,
+            stability_patience=args.stability_patience,
+            markdown_top_k=args.markdown_top_k,
+            overwrite=args.overwrite,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "matrix_summary_rows": str(matrix_summary_rows_path),
+                "matrix_summary_csv": str(matrix_summary_csv_path),
+                "vector_alignment_rows": str(vector_alignment_rows_path),
+                "interval_event_rows": str(interval_event_rows_path),
+                "coordination_window_rows": str(coordination_window_rows_path),
+            }
+        )
+        return
+    if args.command == "svd-task-alignment":
+        (
+            report_path,
+            markdown_path,
+            alignment_rows_path,
+            alignment_csv_path,
+            subspace_rows_path,
+            token_alignment_rows_path,
+            plot_paths,
+        ) = run_svd_task_alignment(
+            config_path=args.config,
+            checkpoint_dir=args.checkpoint_dir,
+            output_dir=args.output_dir,
+            checkpoint_paths=args.checkpoint,
+            device_name=args.device,
+            head_layer=args.head_layer,
+            head=args.head,
+            top_ranks=args.top_ranks,
+            pca_rank=args.pca_rank,
+            behavior_rows_path=args.behavior_rows,
+            behavior_split=args.behavior_split,
+            behavior_margin_field=args.behavior_margin_field,
+            behavior_accuracy_field=args.behavior_accuracy_field,
+            top_k_tokens=args.top_k_tokens,
+            overwrite=args.overwrite,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "alignment_rows": str(alignment_rows_path),
+                "alignment_csv": str(alignment_csv_path),
+                "subspace_rows": str(subspace_rows_path),
+                "token_alignment_rows": str(token_alignment_rows_path),
+                "plots": {key: str(value) for key, value in plot_paths.items()},
+            }
+        )
+        return
+    if args.command == "contextual-svd-alignment":
+        (
+            report_path,
+            markdown_path,
+            alignment_rows_path,
+            alignment_csv_path,
+            rank_aggregate_rows_path,
+            rank_aggregate_csv_path,
+            subspace_rows_path,
+            role_vector_rows_path,
+            plot_paths,
+        ) = run_contextual_svd_alignment(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            checkpoint_dir=args.checkpoint_dir,
+            output_dir=args.output_dir,
+            checkpoint_paths=args.checkpoint,
+            device_name=args.device,
+            head_layer=args.head_layer,
+            head=args.head,
+            context_stage=args.context_stage,
+            roles=args.role,
+            role_specs_text=args.role_spec,
+            plot_left_role=args.plot_left_role,
+            plot_right_role=args.plot_right_role,
+            top_ranks=args.top_ranks,
+            pca_rank=args.pca_rank,
+            batch_size=args.batch_size,
+            split_filter=args.split,
+            behavior_rows_path=args.behavior_rows,
+            behavior_split=args.behavior_split,
+            behavior_margin_field=args.behavior_margin_field,
+            behavior_accuracy_field=args.behavior_accuracy_field,
+            overwrite=args.overwrite,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "alignment_rows": str(alignment_rows_path),
+                "alignment_csv": str(alignment_csv_path),
+                "rank_aggregate_rows": str(rank_aggregate_rows_path),
+                "rank_aggregate_csv": str(rank_aggregate_csv_path),
+                "subspace_rows": str(subspace_rows_path),
+                "role_vector_rows": str(role_vector_rows_path),
                 "plots": {key: str(value) for key, value in plot_paths.items()},
             }
         )

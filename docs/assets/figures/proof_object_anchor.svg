@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="430" viewBox="0 0 960 430" role="img" aria-labelledby="title desc">
+  <title id="title">Proof object anchor</title>
+  <desc id="desc">Discovery evidence flows into a candidate route scalar, which anchors deeper decomposition into matrices, neurons, updates, and data gradients.</desc>
+  <rect width="960" height="430" fill="#fbfbf7"/>
+  <text x="480" y="42" text-anchor="middle" font-family="Georgia, serif" font-size="28" font-weight="700" fill="#171615">Why use a candidate route scalar?</text>
+  <text x="480" y="73" text-anchor="middle" font-family="Georgia, serif" font-size="17" fill="#4a4741">It is not the stopping point. It is the anchor that makes deeper decomposition meaningful.</text>
+
+  <g font-family="Georgia, serif">
+    <rect x="55" y="126" width="210" height="178" rx="8" fill="#f7f1e3" stroke="#9a7a31" stroke-width="2"/>
+    <text x="160" y="160" text-anchor="middle" font-size="22" font-weight="700" fill="#5e4a1d">discovery signals</text>
+    <text x="160" y="198" text-anchor="middle" font-size="17" fill="#5e4a1d">neurons</text>
+    <text x="160" y="224" text-anchor="middle" font-size="17" fill="#5e4a1d">feature families</text>
+    <text x="160" y="250" text-anchor="middle" font-size="17" fill="#5e4a1d">ablations</text>
+    <text x="160" y="276" text-anchor="middle" font-size="17" fill="#5e4a1d">DLA / mediation</text>
+
+    <rect x="350" y="120" width="260" height="190" rx="8" fill="#e9f5f0" stroke="#22745a" stroke-width="2.5"/>
+    <text x="480" y="154" text-anchor="middle" font-size="22" font-weight="700" fill="#184f40">candidate scalar</text>
+    <text x="480" y="194" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="18" fill="#184f40">C(theta)</text>
+    <text x="480" y="224" text-anchor="middle" font-size="17" fill="#184f40">L2H1 support-value</text>
+    <text x="480" y="248" text-anchor="middle" font-size="17" fill="#184f40">retrieval separation</text>
+    <text x="480" y="282" text-anchor="middle" font-size="15" fill="#184f40">task-meaningful, causal, differentiable</text>
+
+    <rect x="695" y="126" width="210" height="178" rx="8" fill="#eef3fa" stroke="#356aa0" stroke-width="2"/>
+    <text x="800" y="160" text-anchor="middle" font-size="22" font-weight="700" fill="#254e77">decompose downward</text>
+    <text x="800" y="198" text-anchor="middle" font-size="17" fill="#254e77">QK / OV matrices</text>
+    <text x="800" y="224" text-anchor="middle" font-size="17" fill="#254e77">residual directions</text>
+    <text x="800" y="250" text-anchor="middle" font-size="17" fill="#254e77">MLP neurons</text>
+    <text x="800" y="276" text-anchor="middle" font-size="17" fill="#254e77">updates and data gradients</text>
+  </g>
+
+  <g stroke="#333" stroke-width="2.5" fill="none">
+    <path d="M265 215 H350"/>
+    <path d="M610 215 H695"/>
+  </g>
+  <g fill="#333">
+    <polygon points="350,215 340,210 340,220"/>
+    <polygon points="695,215 685,210 685,220"/>
+  </g>
+
+  <rect x="185" y="346" width="590" height="44" rx="8" fill="#fff" stroke="#333" stroke-width="1.5"/>
+  <text x="480" y="374" text-anchor="middle" font-family="Georgia, serif" font-size="18" font-weight="700" fill="#171615">Without an anchor, neuron-level detail becomes a list. With an anchor, each detail answers why C(theta) moves.</text>
+</svg>

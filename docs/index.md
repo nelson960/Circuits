@@ -38,6 +38,14 @@ We have a strong causal map of the trained model. The model uses a dense residua
 
 We do not yet have a complete proof that SGD selected this mechanism over all alternatives. The missing object is a small, validated internal scalar `C(theta)` whose growth can be traced from actual optimizer updates to behavior improvement and compared against competing routes.
 
+Current proposed proof object:
+
+```text
+C(theta) = L2H1 support-value retrieval separation
+```
+
+This scalar asks whether `L2H1`, at the prediction position, scores the correct support value above distractor values. It is not the whole mechanism. It is the current best anchor because it has task meaning, can be causally tested, can be differentiated against actual optimizer updates, and can be compared against alternative routes.
+
 In one sentence:
 
 ```text
@@ -201,6 +209,25 @@ The levels are:
 
 Most early experiments were below the closure level. The current work is now near update attribution and partial closure, but not yet cross-seed replication.
 
+The proof object matters. Different internal objects are useful for different levels of the ladder:
+
+| object | why useful | why not enough alone |
+| --- | --- | --- |
+| single neuron | concrete unit inside the model | often polysemantic and shared |
+| activation-feature family | finds structured activation directions | fitted basis, not automatically a model variable |
+| full residual state | causally strong and easy to patch | too broad; hides which variable mattered |
+| attention head | interpretable QK/OV role | head identity can be seed-specific |
+| route scalar `C(theta)` | task-meaningful, causal, differentiable | still needs margin closure and cross-seed replication |
+
+Candidate-level route analysis is not a step away from depth. It is the anchor that makes deeper analysis possible. Once a route scalar is validated, we can decompose it downward into QK/OV matrices, residual directions, MLP neurons, parameter tensors, actual optimizer updates, and data-example gradients.
+
+But routes are still a map, not the deepest object of explanation. A route tells us where computation seems to flow after the system has started working. The harder question is how SGD, acting only through loss and weight updates, shapes a dense shared residual system of polysemantic units into something that behaves like a retrieval circuit. That is the real research target, and it is only partially solved here.
+
+<figure class="paper-figure">
+  <img src="assets/figures/proof_object_anchor.svg" alt="Proof object anchor diagram">
+  <figcaption><strong>Figure 6. Why use a candidate route scalar?</strong> Neurons, feature families, ablations, DLA, and mediation are discovery signals. The route scalar is the anchor. Once the anchor is validated, deeper neuron- and weight-level decomposition has a target.</figcaption>
+</figure>
+
 ## What Existing Work Contributes
 
 This project uses several ideas from mechanistic interpretability:
@@ -216,6 +243,13 @@ This project is narrower than those papers. It asks:
 ```text
 In this symbolic KV task, which internal route grows under actual SGD updates,
 and how much of the behavioral improvement does that growth explain?
+```
+
+That route question is a tractable handle, not the final philosophical answer. The deeper target is:
+
+```text
+How do many small SGD updates reorganize shared residual geometry
+so that a useful retrieval route becomes possible at all?
 ```
 
 ## First Attempt: Feature Families
@@ -244,6 +278,8 @@ But the transparent birth model failed. It predicted family4 over family7 from s
 | family7 top2 | 0 | 2 | 2250 |
 
 This was a useful negative result. It showed that feature-family score drive was not enough to explain why the more generalizing route emerged earlier.
+
+The feature-family phase is still important, but its role has changed. It is now treated as candidate-discovery evidence rather than the final proof object. Feature families helped reveal where structure was forming and where neurons were shared, but the final explanation needs a scalar with direct task meaning, causal testability, and update attribution.
 
 ## Why Feature Families Hit A Wall
 
@@ -344,12 +380,12 @@ At final traced step `8250`:
 
 <figure class="paper-figure">
   <img src="assets/figures/attention_geometry_checkpoint_summary.svg" alt="Attention geometry checkpoint summary">
-  <figcaption><strong>Figure 6. Attention geometry over checkpoints.</strong> L2H1 becomes a strong support-value route. This is route evidence, not by itself a proof of SGD selection.</figcaption>
+  <figcaption><strong>Figure 7. Attention geometry over checkpoints.</strong> L2H1 becomes a strong support-value route. This is route evidence, not by itself a proof of SGD selection.</figcaption>
 </figure>
 
 <figure class="paper-figure">
   <img src="assets/figures/attention_retrieval_chain_trajectory.svg" alt="L2H1 retrieval chain trajectory">
-  <figcaption><strong>Figure 7. L2H1 retrieval chain.</strong> During the 5500 to 7500 window, L2H1 increasingly separates the correct support value from value distractors. This is one of the clearest route-level signals found so far.</figcaption>
+  <figcaption><strong>Figure 8. L2H1 retrieval chain.</strong> During the 5500 to 7500 window, L2H1 increasingly separates the correct support value from value distractors. This is one of the clearest route-level signals found so far.</figcaption>
 </figure>
 
 ## Direct Logit Attribution
@@ -373,7 +409,7 @@ But DLA measures direct writing. It does not measure total causal importance. A 
 
 <figure class="paper-figure">
   <img src="assets/figures/path_logit_component_trajectory.svg" alt="Path logit component trajectory">
-  <figcaption><strong>Figure 8. Direct output contributions.</strong> Path-logit decomposition shows which components directly write toward the correct answer over training. This is a direct-readout measurement, not a full causal story.</figcaption>
+  <figcaption><strong>Figure 9. Direct output contributions.</strong> Path-logit decomposition shows which components directly write toward the correct answer over training. This is a direct-readout measurement, not a full causal story.</figcaption>
 </figure>
 
 ## Causal Removal And Patching
@@ -393,17 +429,17 @@ Removal asks whether something is necessary. Patching asks whether it carries th
 
 <figure class="paper-figure">
   <img src="assets/figures/l2h1_qk_key_remove_margin_drop.svg" alt="L2H1 QK key removal margin drop">
-  <figcaption><strong>Figure 9. L2H1 QK key-side removal.</strong> Removing this subspace hurts margin, showing that it is load-bearing. Removal alone does not prove that it carries a specific abstract variable.</figcaption>
+  <figcaption><strong>Figure 10. L2H1 QK key-side removal.</strong> Removing this subspace hurts margin, showing that it is load-bearing. Removal alone does not prove that it carries a specific abstract variable.</figcaption>
 </figure>
 
 <figure class="paper-figure">
   <img src="assets/figures/l2h1_ov_output_remove_margin_drop.svg" alt="L2H1 OV output removal margin drop">
-  <figcaption><strong>Figure 10. L2H1 OV output removal.</strong> Removing this output/write subspace hurts margin. This supports a value-write role.</figcaption>
+  <figcaption><strong>Figure 11. L2H1 OV output removal.</strong> Removing this output/write subspace hurts margin. This supports a value-write role.</figcaption>
 </figure>
 
 <figure class="paper-figure">
   <img src="assets/figures/l2h1_qk_query_patch_recovery_by_pair_type.svg" alt="L2H1 QK query-side patch recovery">
-  <figcaption><strong>Figure 11. Controlled query-side patching.</strong> Patch recovery tests whether a subspace carries transferable query-key information rather than merely being important. Distractor controls prevent false positives.</figcaption>
+  <figcaption><strong>Figure 12. Controlled query-side patching.</strong> Patch recovery tests whether a subspace carries transferable query-key information rather than merely being important. Distractor controls prevent false positives.</figcaption>
 </figure>
 
 ## Current Trained-Model Picture
@@ -412,7 +448,7 @@ The best current picture is not a clean serial circuit. It is a dense residual-s
 
 <figure class="paper-figure">
   <img src="assets/figures/dense_residual_mechanism.svg" alt="Dense residual mechanism diagram">
-  <figcaption><strong>Figure 12. Current trained-model picture.</strong> Early components such as L0MLP, L1H3, and L1MLP shape a shared residual state. Later components such as L1H2, L2H1, and L2MLP are closer to direct answer readout. The arrows should be read as supported causal structure, not as a complete closed circuit.</figcaption>
+  <figcaption><strong>Figure 13. Current trained-model picture.</strong> Early components such as L0MLP, L1H3, and L1MLP shape a shared residual state. Later components such as L1H2, L2H1, and L2MLP are closer to direct answer readout. The arrows should be read as supported causal structure, not as a complete closed circuit.</figcaption>
 </figure>
 
 Simple version:
@@ -457,7 +493,7 @@ Early components were causally huge but not direct answer writers:
 
 <figure class="paper-figure">
   <img src="assets/figures/output_component_causal_validation_top_effects.svg" alt="Output component causal validation top effects">
-  <figcaption><strong>Figure 13. Direct attribution versus causal effect.</strong> Late components behave more like direct answer writers. Early components have large causal effects but poor direct attribution, which means their main role is upstream state shaping.</figcaption>
+  <figcaption><strong>Figure 14. Direct attribution versus causal effect.</strong> Late components behave more like direct answer writers. Early components have large causal effects but poor direct attribution, which means their main role is upstream state shaping.</figcaption>
 </figure>
 
 This is one of the clearest findings so far:
@@ -493,12 +529,12 @@ Strong mediated paths included:
 
 <figure class="paper-figure">
   <img src="assets/figures/output_mediated_causal_decomposition_source_mediation.svg" alt="Output mediated causal decomposition source mediation">
-  <figcaption><strong>Figure 14. Source-level mediation.</strong> Some early-component effects flow through later components, especially L2H1, L1H2, and L2MLP. The mediation is real but incomplete.</figcaption>
+  <figcaption><strong>Figure 15. Source-level mediation.</strong> Some early-component effects flow through later components, especially L2H1, L1H2, and L2MLP. The mediation is real but incomplete.</figcaption>
 </figure>
 
 <figure class="paper-figure">
   <img src="assets/figures/output_mediated_causal_decomposition_downstream_mediation.svg" alt="Output mediated causal decomposition downstream mediation">
-  <figcaption><strong>Figure 15. Downstream mediation.</strong> The downstream routes do not simply add up into a clean chain. Some later components help, some oppose, and some interact through the shared residual state.</figcaption>
+  <figcaption><strong>Figure 16. Downstream mediation.</strong> The downstream routes do not simply add up into a clean chain. Some later components help, some oppose, and some interact through the shared residual state.</figcaption>
 </figure>
 
 ### All-Later Mediation Did Not Close The Gap
@@ -549,12 +585,12 @@ The answer was yes, exactly at the expected stage boundary:
 
 <figure class="paper-figure">
   <img src="assets/figures/residual_state_rescue_fraction.svg" alt="Residual state rescue fraction">
-  <figcaption><strong>Figure 16. Residual rescue fraction.</strong> Full residual patching rescues the damage once the patch is placed after the source component. This localizes where the missing information enters the residual stream.</figcaption>
+  <figcaption><strong>Figure 17. Residual rescue fraction.</strong> Full residual patching rescues the damage once the patch is placed after the source component. This localizes where the missing information enters the residual stream.</figcaption>
 </figure>
 
 <figure class="paper-figure">
   <img src="assets/figures/residual_state_rescue_unrecovered.svg" alt="Residual state rescue unrecovered effect">
-  <figcaption><strong>Figure 17. Unrecovered residual effect.</strong> Once the full post-source residual state is patched, the unrecovered effect largely disappears. This proves the damage is in the residual state, but full-state patching does not identify the exact direction or variable inside that state.</figcaption>
+  <figcaption><strong>Figure 18. Unrecovered residual effect.</strong> Once the full post-source residual state is patched, the unrecovered effect largely disappears. This proves the damage is in the residual state, but full-state patching does not identify the exact direction or variable inside that state.</figcaption>
 </figure>
 
 This is important but also limited:
@@ -588,7 +624,7 @@ The stepwise retrieval-separation result for `L2H1` was much cleaner when measur
 
 <figure class="paper-figure">
   <img src="assets/figures/l2h1_retrieval_sep_stepwise_actual_vs_predicted.svg" alt="L2H1 retrieval separation stepwise attribution">
-  <figcaption><strong>Figure 18. L2H1 stepwise retrieval-separation attribution.</strong> On short intervals, first-order attribution often gets the sign and direction of route movement right. This is evidence that actual updates are linked to route growth.</figcaption>
+  <figcaption><strong>Figure 19. L2H1 stepwise retrieval-separation attribution.</strong> On short intervals, first-order attribution often gets the sign and direction of route movement right. This is evidence that actual updates are linked to route growth.</figcaption>
 </figure>
 
 However, first-order prediction often overpredicts magnitude. That means the local gradient direction is informative, but it does not close the full nonlinear behavior change.
@@ -609,12 +645,12 @@ The diagnosis compared:
 
 <figure class="paper-figure">
   <img src="assets/figures/answer_scalar_residual_summary.svg" alt="Answer scalar residual diagnosis summary">
-  <figcaption><strong>Figure 19. Scalar residual diagnosis.</strong> First-order update attribution often captures direction better than magnitude. The residual is partly a scalar-definition issue and partly a nonlinear-training issue.</figcaption>
+  <figcaption><strong>Figure 20. Scalar residual diagnosis.</strong> First-order update attribution often captures direction better than magnitude. The residual is partly a scalar-definition issue and partly a nonlinear-training issue.</figcaption>
 </figure>
 
 <figure class="paper-figure">
   <img src="assets/figures/answer_margin_branch_aware_closure.svg" alt="Answer margin branch-aware closure">
-  <figcaption><strong>Figure 20. Branch-aware margin closure.</strong> Moving-margin errors can come from active competitor switching. Fixed-competitor margins are cleaner local proof targets than the raw moving max margin.</figcaption>
+  <figcaption><strong>Figure 21. Branch-aware margin closure.</strong> Moving-margin errors can come from active competitor switching. Fixed-competitor margins are cleaner local proof targets than the raw moving max margin.</figcaption>
 </figure>
 
 Simple version:
@@ -645,7 +681,7 @@ If closure is low or unstable, then our route set is missing part of the mechani
 
 <figure class="paper-figure">
   <img src="assets/figures/output_route_closure_r_squared.svg" alt="Output route closure R squared">
-  <figcaption><strong>Figure 21. Output route closure.</strong> Route-to-output closure tests whether measured component changes explain scalar output changes. The current result is informative but not yet a complete answer-margin closure proof.</figcaption>
+  <figcaption><strong>Figure 22. Output route closure.</strong> Route-to-output closure tests whether measured component changes explain scalar output changes. The current result is informative but not yet a complete answer-margin closure proof.</figcaption>
 </figure>
 
 Current interpretation:
@@ -661,7 +697,7 @@ This task is small, but the mechanism is not simple.
 
 <figure class="paper-figure">
   <img src="assets/figures/why_small_model_is_hard.svg" alt="Why a small symbolic model is still hard">
-  <figcaption><strong>Figure 22. Why small does not mean clean.</strong> A simple external rule becomes vectors, shared residual state, superposed neurons, interacting components, and logits. The learned implementation is distributed even in a toy model.</figcaption>
+  <figcaption><strong>Figure 23. Why small does not mean clean.</strong> A simple external rule becomes vectors, shared residual state, superposed neurons, interacting components, and logits. The learned implementation is distributed even in a toy model.</figcaption>
 </figure>
 
 The difficulty has several layers.
@@ -719,6 +755,10 @@ There are several depths of explanation:
 
 We can dig below neurons into weights and gradients, but that creates a combinatorial problem. The model has many weights, and each update moves many of them. The right next step is not to inspect every weight. It is to pick one validated route scalar and close the chain around it.
 
+So candidate-level analysis is the spine, not the stopping point. Without a route anchor, neuron-level analysis becomes a long list of important units with no clear reason why they matter. With the anchor, we can ask which neurons, matrices, parameter tensors, and data examples specifically increase `C(theta)`.
+
+The deeper direction is still below the route. Once a route is located, the next question is what changes inside the shared residual system made the route usable: which residual directions became available, which MLP neurons shaped those directions, which attention matrices learned to read them, and which data examples pushed the updates that made this happen.
+
 ## What Is Supported
 
 Current supported claims:
@@ -759,45 +799,52 @@ SGD-formation proof is still incomplete
 
 ## Next Finite Proof Unit
 
-The next step should stop expanding the tool list and choose one variable:
+The next step should stop expanding the tool list and test the current primary variable:
 
 ```text
-C(theta) = one candidate internal mechanism scalar
+C_retrieval(theta)
+  = E[
+      score_L2H1(prediction, correct_support_value)
+      - mean score_L2H1(prediction, distractor_values)
+    ]
 ```
 
-Good candidates are:
+This is the current strongest proof object because it corresponds directly to one algorithmic step:
 
 ```text
-L2H1 support-value retrieval separation
+find the stored value that answers the read query
 ```
 
-or:
+The behavior scalar should avoid moving-max instability:
 
 ```text
-fixed-competitor output contribution from the validated late route set
+B(theta)
+  = E[logit_correct - logit_fixed_wrong]
 ```
 
 The proof unit is:
 
 <figure class="paper-figure">
   <img src="assets/figures/finite_proof_unit.svg" alt="Finite proof unit diagram">
-  <figcaption><strong>Figure 23. The next finite proof unit.</strong> Pick one internal scalar `C(theta)`, measure its actual change, predict that change from the actual optimizer update, connect it to behavior change, compare against alternatives, and then repeat across seeds.</figcaption>
+  <figcaption><strong>Figure 24. The next finite proof unit.</strong> Pick one internal scalar `C(theta)`, measure its actual change, predict that change from the actual optimizer update, connect it to behavior change, compare against alternatives, and then repeat across seeds.</figcaption>
 </figure>
 
 Concretely:
 
 ```text
-1. Measure C(theta_t)
-2. Measure C(theta_{t+1})
-3. Compute Delta C_actual
-4. Compute grad C(theta_t) dot Delta theta_actual
-5. Show the actual batch update predicts Delta C
-6. Show Delta C predicts answer-margin or loss improvement
-7. Compare against competing routes
-8. Repeat across seeds
+1. Measure C_retrieval(theta_t)
+2. Measure C_retrieval(theta_{t+1})
+3. Compute Delta C_retrieval_actual
+4. Compute grad C_retrieval(theta_t) dot Delta theta_actual
+5. Show the actual batch update predicts Delta C_retrieval
+6. Show Delta C_retrieval predicts fixed-competitor margin or log-prob improvement
+7. Show competing route scalars explain less
+8. Repeat the role-level result across seeds
 ```
 
-Only after that can the project honestly claim a closed SGD circuit-formation result.
+If this scalar fails, that is also useful. It would mean the real proof object is broader than `L2H1` and must be a residual/readout route rather than a single-head retrieval route.
+
+Either way, the route scalar is a handle on a deeper question. The goal is not merely to name a route. The goal is to explain how the optimizer shaped dense residual geometry until a retrieval-like route emerged.
 
 ## Current Bottom Line
 
@@ -814,9 +861,20 @@ but not in a clean additive chain.
 The central open problem is:
 
 ```text
-Find one validated internal scalar C(theta)
-whose growth is caused by actual optimizer updates
-and whose growth explains output improvement.
+Validate or falsify the proposed scalar:
+
+C(theta) = L2H1 support-value retrieval separation
+
+by showing whether actual optimizer updates grow it,
+whether its growth explains output improvement,
+and whether alternative route scalars explain less.
+```
+
+This is still a proxy for the deeper formation question:
+
+```text
+How does SGD reshape a dense residual system of polysemantic components
+into machinery that behaves like lookup?
 ```
 
 That is the path from:
@@ -854,4 +912,3 @@ Supporting plans:
 
 - [Checkpoint Analysis Plan](checkpoint_analysis_plan.md)
 - [Shared Feature Dynamics Plan](shared_feature_dynamics_plan.md)
-

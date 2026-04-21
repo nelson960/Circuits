@@ -5150,3 +5150,414 @@ Pick one internal variable C.
 Did actual SGD updates create and amplify C,
 and does C growth explain behavior better than alternatives?
 ```
+
+## Weight-Space SVD Pivot: Looking For Formation In The Raw Parameters
+
+After the route, residual, and causal-patching work, the project hit a clear limit:
+
+```text
+we could show which components and routes matter,
+but not yet how the route became a stable object under SGD.
+```
+
+The next direction is therefore weight-space dynamics.
+
+Instead of only asking:
+
+```text
+which activation route is useful after training?
+```
+
+we now also ask:
+
+```text
+which raw weight directions rotate, stabilize, grow, or shrink during training?
+```
+
+This matters because the model is not made of clean symbolic variables. It is made of tensors.
+
+If SGD forms a retrieval circuit, that formation should leave traces in the actual matrices:
+
+```text
+W_Q
+W_K
+W_V
+W_O
+MLP W_in
+MLP W_out
+```
+
+The goal of this pivot is not to replace route-level causal analysis.
+
+The goal is to connect:
+
+```text
+loss gradient
+parameter update
+weight-space geometry change
+route growth
+answer-margin improvement
+```
+
+### New Tooling
+
+We added a raw weight SVD extraction tool:
+
+```text
+circuit.cli weight-svd-trace
+```
+
+It extracts, for every checkpoint:
+
+```text
+attention head W_QK = W_Q^T W_K
+attention head W_OV = W_V^T W_O^T
+MLP W_in
+MLP W_out
+```
+
+For each matrix it records:
+
+```text
+full singular value spectrum
+top singular vectors
+effective rank = (sum singular values)^2 / sum(singular values^2)
+top-3 spectral mass = sum(top 3 singular values) / sum(all singular values)
+```
+
+We also added a second-stage pattern reader:
+
+```text
+circuit.cli weight-svd-patterns
+```
+
+This does not rerun model checkpoints.
+
+It reads the SVD rows and reports:
+
+```text
+which matrices grew
+which matrices became more concentrated
+which singular vectors rotated toward their final direction
+which intervals show coordinated movement across matrices
+```
+
+Primary artifacts:
+
+```text
+artifacts/runs/symbolic_kv_reference_formation/analysis/weight_svd_trace/phase1_000250_5500_top16/
+artifacts/runs/symbolic_kv_reference_formation/analysis/weight_svd_patterns/phase1_000250_5500_top16/
+```
+
+The earliest saved checkpoint available in this run is `step_000250.pt`, not step zero.
+
+So this is:
+
+```text
+250 -> 5500
+```
+
+not a true from-initialization trace.
+
+### Main SVD Result
+
+The strongest weight-space formation signal is `L2H1 W_QK`.
+
+From `step_000250 -> step_005500`:
+
+```text
+L2H1 W_QK top singular value: 0.6667 -> 3.5004
+delta:                         +2.8336
+relative growth:                +425%
+effective rank:                 27.62 -> 17.21
+top-3 spectral mass:             0.164 -> 0.323
+```
+
+This is not just general weight growth.
+
+It means:
+
+```text
+the matrix becomes more concentrated into a smaller number of directions.
+```
+
+That is exactly the kind of signature we expected if a route is forming in weight space.
+
+The top selective-concentration scores were:
+
+```text
+L2H1 W_QK   0.4496
+L1H2 W_QK   0.3163
+L2H0 W_QK   0.2434
+L2H2 W_QK   0.1276
+L2H3 W_QK   0.1148
+```
+
+So the strongest formation signature is in QK routing geometry.
+
+It is not primarily in OV.
+
+### Direction Birth In L2H1 W_QK
+
+The final `L2H1 W_QK` direction was not cleanly present at the earliest saved checkpoint.
+
+For the rank-1 query-side singular vector:
+
+```text
+step 250:  final-direction cosine 0.188
+step 750:  final-direction cosine 0.588
+step 2250: final-direction cosine 0.845
+step 3500: final-direction cosine 0.952
+step 4250: final-direction cosine 0.987
+step 5500: final-direction cosine 1.000
+```
+
+For the rank-1 key-side singular vector:
+
+```text
+step 250:  final-direction cosine 0.079
+step 750:  final-direction cosine 0.405
+step 2250: final-direction cosine 0.848
+step 3750: final-direction cosine 0.953
+step 4250: final-direction cosine 0.983
+step 5500: final-direction cosine 1.000
+```
+
+Simple interpretation:
+
+```text
+L2H1 W_QK starts weak and mixed.
+It rotates toward its final route during early training.
+Then it stabilizes and grows.
+```
+
+This changes the story.
+
+Earlier route tools made `5500 -> 7500` look like the main emergence window.
+
+The SVD trace suggests:
+
+```text
+by step 5500, much of the L2H1 QK geometry is already built.
+```
+
+The likely birth window for this route is earlier:
+
+```text
+roughly 1750 -> 3000
+```
+
+### Coordinated Movement Windows
+
+The strongest broad movement happens very early:
+
+```text
+250 -> 500
+```
+
+That interval has:
+
+```text
+28 / 30 matrices with positive top-singular-value growth
+29 / 30 matrices with positive top-3 mass growth
+```
+
+This is probably broad early training movement, not yet a clean retrieval circuit.
+
+The more relevant route-formation window is:
+
+```text
+1750 -> 3000
+```
+
+Important intervals:
+
+```text
+1750 -> 2000
+2000 -> 2250
+2250 -> 2500
+2500 -> 2750
+2750 -> 3000
+```
+
+`L2H1 W_QK` growth inside that window:
+
+```text
+2000 -> 2250: +0.314
+2250 -> 2500: +0.533
+2500 -> 2750: +0.388
+2750 -> 3000: +0.176
+```
+
+This looks like:
+
+```text
+the route direction is being carved out and amplified before the later route-level measurements.
+```
+
+### Comparison With Other Components
+
+`L1H2 W_QK` also grows strongly:
+
+```text
+0.8332 -> 3.4977
+delta +2.6645
+relative growth +319.8%
+effective rank 26.33 -> 16.74
+top-3 spectral mass 0.187 -> 0.306
+```
+
+But `L1H2` is more aligned with its final direction at the earliest saved checkpoint than `L2H1`.
+
+That suggests `L1H2` may be a more available or earlier route, while `L2H1` looks more like a direction that is built/rotated into place.
+
+`L2H0 W_QK` also shows strong concentration:
+
+```text
+0.6767 -> 2.3487
+effective rank 27.37 -> 17.91
+top-3 spectral mass 0.171 -> 0.317
+```
+
+This may be a competing or supporting route, but its task role is not yet proven by this SVD run alone.
+
+`L0MLP W_out` behaves differently.
+
+Its top singular value does not simply grow:
+
+```text
+2.2767 -> 2.1484
+```
+
+But its top output direction rotates strongly toward the final direction:
+
+```text
+step 250:  final-direction cosine 0.224
+step 2000: final-direction cosine 0.592
+step 2250: final-direction cosine 0.824
+step 2500: final-direction cosine 0.893
+step 3500: final-direction cosine 0.968
+```
+
+This supports the earlier causal story:
+
+```text
+L0MLP may be shaping the residual stream rather than directly growing as an answer writer.
+```
+
+### Important Negative Result: OV Is Not Clean
+
+The cleanest signal is QK, not OV.
+
+For `L2H1 W_OV`, earlier SVD checks showed only small top singular value growth and more distributed structure:
+
+```text
+top singular value changes only weakly
+effective rank increases
+top-3 mass decreases
+```
+
+That means the value/write side does not look like one clean low-rank object.
+
+This matches the superposition problem:
+
+```text
+routing can become relatively clean in QK,
+while value writing and output readout remain distributed across OV, MLPs, and residual directions.
+```
+
+So the project should not expect the entire algorithm to appear as one neat singular vector.
+
+### What This Adds To The Research Story
+
+Before this SVD pivot, the strongest story was:
+
+```text
+L2H1 is a useful route.
+L0MLP and other early components are load-bearing.
+The residual stream is dense and shared.
+```
+
+But that still sounded like trained-model observation.
+
+The SVD trace adds a more formation-specific statement:
+
+```text
+L2H1 W_QK becomes a more concentrated, stable routing matrix during training.
+Its final top direction is weak early, rotates into place, and then amplifies.
+```
+
+This is closer to the SGD-formation question because it is about the actual parameters, not only activations.
+
+The current best simple story is:
+
+```text
+Early training changes broad residual and MLP geometry.
+Around 1750 -> 3000, L2H1 QK rotates toward a stable retrieval-routing direction.
+That QK direction becomes more low-rank/concentrated.
+By 3500 -> 4250, the direction is mostly locked in.
+After that, later training mostly amplifies/refines an already-built route.
+The value/output side stays more distributed and superposed.
+```
+
+### What This Still Does Not Prove
+
+The SVD results prove a weight-space formation pattern.
+
+They do not yet prove the semantic content of that pattern.
+
+Specifically, we still need to show:
+
+```text
+the growing L2H1 W_QK directions align with query-key / support-key task geometry
+the growing directions predict route score growth
+the growing directions predict answer-margin improvement
+competing QK directions do not explain the same behavior as well
+the same role-level pattern appears across seeds
+```
+
+So the next proof target becomes:
+
+```text
+SVD direction -> task geometry -> route score -> answer margin
+```
+
+In simple words:
+
+```text
+We found weight directions that form.
+Now we must prove those directions are the lookup directions.
+```
+
+### Updated Research Direction
+
+The candidate proof variable should shift from a broad activation route to a weight-space route geometry variable.
+
+Candidate:
+
+```text
+C(theta) = alignment / strength of the top L2H1 W_QK singular subspace
+           with the dataset key-retrieval geometry
+```
+
+The next proof unit should measure:
+
+```text
+C(theta_t)
+C(theta_{t+1})
+actual Delta C
+gradient/update prediction for Delta C
+alignment of C with query-key and support-key geometry
+correlation of C with route score
+correlation of C with answer margin
+comparison against L1H2 W_QK, L2H0 W_QK, and other QK routes
+```
+
+This does not abandon the route-level work.
+
+It makes the route-level work more grounded:
+
+```text
+routes tell us what computation is used.
+SVD tells us how the weights are becoming able to implement that route.
+```
