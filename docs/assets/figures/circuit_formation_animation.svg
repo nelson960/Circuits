@@ -1,0 +1,166 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="680" viewBox="0 0 1180 680" role="img" aria-labelledby="title desc">
+  <title id="title">From dense motion to a retrieval role</title>
+  <desc id="desc">Conceptual formation map showing AdamW pressure, dense shared neurons, feature-family competition, route-level consolidation, low-rank QK birth, and final support-value lookup behavior.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#2f2c28"/>
+    </marker>
+    <style>
+      .bg{fill:#fffdf8}
+      .title{font:700 25px Georgia,serif;fill:#171615}
+      .subtitle{font:15px Georgia,serif;fill:#4a4741}
+      .band-label{font:700 13px Georgia,serif;fill:#5b5146}
+      .head{font:700 15px Georgia,serif;fill:#201f1d}
+      .label{font:13px Georgia,serif;fill:#2d2a27}
+      .small{font:12px Georgia,serif;fill:#514b43}
+      .tiny{font:10.5px Georgia,serif;fill:#62594d}
+      .mono{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;fill:#2d2a27}
+      .band{fill:#fbf7ee;stroke:#d6cbbb;stroke-width:1;rx:8}
+      .callout{fill:#fffdf8;stroke:#a99d8c;stroke-width:1.2;rx:8}
+      .axis{stroke:#6e6458;stroke-width:1.4;marker-end:url(#arrow)}
+      .flow{fill:none;stroke-linecap:round;stroke-linejoin:round;marker-end:url(#arrow)}
+      .flow-gray{stroke:#b8ad9d;stroke-width:2.2;opacity:.55}
+      .flow-fade{stroke:#b8ad9d;stroke-width:2;opacity:.22}
+      .flow-yellow{stroke:#d49b36;stroke-width:5;opacity:.82}
+      .flow-green{stroke:#2f7b61;stroke-width:7;opacity:.94}
+      .flow-red{stroke:#aa5d56;stroke-width:4;opacity:.46;stroke-dasharray:8 8}
+      .flow-blue{stroke:#3b74a5;stroke-width:5;opacity:.88}
+      .node-gray{fill:#ded6ca;stroke:#9c9183;stroke-width:1}
+      .node-fade{fill:#e9e2d7;stroke:#bfb5a7;stroke-width:1;opacity:.55}
+      .node-yellow{fill:#f2c75c;stroke:#a97d2d;stroke-width:1.2}
+      .node-green{fill:#4f9b79;stroke:#2f765c;stroke-width:1.2}
+      .node-red{fill:#bf746d;stroke:#98534d;stroke-width:1.2}
+      .node-blue{fill:#3d75a8;stroke:#2f5b83;stroke-width:1.2}
+      .split-base{fill:#f2c75c;stroke:#826f5a;stroke-width:1.2}
+      .split-half{fill:#4f9b79}
+      .split-red{fill:#bf746d}
+      .bar-bg{fill:#e7dfd1;stroke:#aa9f8e;stroke-width:1;rx:4}
+      .bar-green{fill:#347f68;rx:4}
+      .bar-pale{fill:#9fc8b8;rx:4}
+      .bar-blue{fill:#3d75a8;rx:4}
+      .dash{stroke:#d1c6b6;stroke-width:1;stroke-dasharray:4 4}
+    </style>
+  </defs>
+
+  <rect class="bg" width="1180" height="680"/>
+  <text x="34" y="40" class="title">From dense motion to a retrieval role</text>
+  <text x="34" y="65" class="subtitle">The research story is not that one neuron becomes the lookup table. Many shared units move; a role-level route emerges from that dense substrate.</text>
+
+  <rect x="34" y="92" width="1112" height="80" class="band"/>
+  <rect x="34" y="198" width="1112" height="126" class="band"/>
+  <rect x="34" y="350" width="1112" height="96" class="band"/>
+  <rect x="34" y="472" width="1112" height="126" class="band"/>
+
+  <text x="54" y="116" class="band-label">optimizer</text>
+  <text x="54" y="223" class="band-label">neuron / feature substrate</text>
+  <text x="54" y="376" class="band-label">route level</text>
+  <text x="54" y="498" class="band-label">weight and behavior</text>
+
+  <line x1="150" y1="634" x2="1030" y2="634" class="axis"/>
+  <text x="150" y="656" class="tiny" text-anchor="middle">init</text>
+  <text x="360" y="656" class="tiny" text-anchor="middle">early movement</text>
+  <text x="570" y="656" class="tiny" text-anchor="middle">candidate competition</text>
+  <text x="790" y="656" class="tiny" text-anchor="middle">route birth</text>
+  <text x="1030" y="656" class="tiny" text-anchor="middle">trained lookup</text>
+
+  <rect x="140" y="113" width="160" height="38" class="callout"/>
+  <text x="220" y="137" class="head" text-anchor="middle">loss signal</text>
+  <path d="M305 132 C410 112, 520 112, 640 132" class="flow flow-yellow"/>
+  <rect x="650" y="111" width="230" height="42" class="callout"/>
+  <text x="765" y="129" class="head" text-anchor="middle">AdamW update state</text>
+  <text x="765" y="146" class="tiny" text-anchor="middle">current gradient + momentum + preconditioning</text>
+  <path d="M880 132 C940 132, 990 142, 1030 158" class="flow flow-yellow"/>
+  <text x="966" y="116" class="small">small signals accumulate</text>
+
+  <path d="M175 260 C260 215, 360 215, 455 255" class="flow flow-gray"/>
+  <path d="M178 280 C284 325, 390 312, 500 275" class="flow flow-gray"/>
+  <path d="M190 238 C310 250, 410 225, 535 238" class="flow flow-fade"/>
+
+  <circle cx="160" cy="252" r="8" class="node-gray"/>
+  <circle cx="208" cy="228" r="8" class="node-gray"/>
+  <circle cx="246" cy="278" r="8" class="node-gray"/>
+  <circle cx="302" cy="236" r="8" class="node-gray"/>
+  <circle cx="340" cy="289" r="8" class="node-gray"/>
+  <circle cx="394" cy="240" r="8" class="node-gray"/>
+  <circle cx="440" cy="276" r="8" class="node-gray"/>
+  <text x="258" y="310" class="tiny" text-anchor="middle">dense substrate: many units move, most are not clean variables</text>
+
+  <g>
+    <circle cx="498" cy="230" r="10" class="split-base"/>
+    <path d="M498 220 A10 10 0 0 1 498 240 Z" class="split-half"/>
+    <circle cx="498" cy="230" r="10" fill="none" stroke="#826f5a" stroke-width="1.2"/>
+  </g>
+  <g>
+    <circle cx="540" cy="288" r="10" class="split-base"/>
+    <path d="M540 278 A10 10 0 0 1 540 298 Z" class="split-red"/>
+    <circle cx="540" cy="288" r="10" fill="none" stroke="#826f5a" stroke-width="1.2"/>
+  </g>
+  <circle cx="582" cy="246" r="9" class="node-yellow"/>
+  <circle cx="624" cy="286" r="9" class="node-green"/>
+  <text x="560" y="216" class="head" text-anchor="middle">shared coalitions</text>
+  <text x="560" y="315" class="tiny" text-anchor="middle">some units support multiple candidate families</text>
+
+  <path d="M612 238 C690 212, 748 215, 820 238" class="flow flow-red"/>
+  <path d="M616 286 C704 300, 780 276, 858 254" class="flow flow-green"/>
+  <path d="M620 264 C700 252, 760 250, 820 270" class="flow flow-fade"/>
+  <text x="715" y="217" class="small">family4: early signal, wrong winner prediction</text>
+  <text x="718" y="305" class="small">family7: stronger candidate path</text>
+  <text x="805" y="315" class="tiny">many candidates fade</text>
+
+  <circle cx="842" cy="238" r="8" class="node-red"/>
+  <circle cx="874" cy="254" r="10" class="node-green"/>
+  <circle cx="828" cy="270" r="7" class="node-fade"/>
+
+  <path d="M198 402 C345 374, 508 385, 650 404" class="flow flow-fade"/>
+  <path d="M458 402 C560 363, 674 362, 784 392" class="flow flow-yellow"/>
+  <path d="M618 402 C730 397, 830 395, 940 398" class="flow flow-green"/>
+
+  <rect x="135" y="381" width="150" height="44" class="callout"/>
+  <text x="210" y="400" class="head" text-anchor="middle">neuron facts</text>
+  <text x="210" y="417" class="tiny" text-anchor="middle">shared, polysemantic, unstable</text>
+
+  <rect x="430" y="381" width="170" height="44" class="callout"/>
+  <text x="515" y="400" class="head" text-anchor="middle">feature candidates</text>
+  <text x="515" y="417" class="tiny" text-anchor="middle">useful for discovery, not atoms</text>
+
+  <rect x="710" y="374" width="245" height="58" class="callout"/>
+  <text x="832" y="397" class="head" text-anchor="middle">support-value retrieval role</text>
+  <text x="832" y="416" class="tiny" text-anchor="middle">the stable proof object is a route, not a neuron family</text>
+
+  <path d="M955 402 C1002 414, 1030 450, 1050 508" class="flow flow-green"/>
+
+  <rect x="100" y="510" width="230" height="44" class="callout"/>
+  <text x="215" y="537" class="mono" text-anchor="middle">C(theta): support &gt; distractors</text>
+  <path d="M215 556 C285 590, 405 592, 500 578" class="flow flow-green"/>
+
+  <rect x="506" y="492" width="225" height="92" class="callout"/>
+  <text x="611" y="518" class="head" text-anchor="middle">low-rank W_QK birth</text>
+  <rect x="538" y="548" width="18" height="18" class="bar-green"/>
+  <rect x="565" y="554" width="18" height="12" class="bar-pale"/>
+  <rect x="592" y="558" width="18" height="8" class="bar-pale"/>
+  <rect x="619" y="561" width="18" height="5" class="bar-pale"/>
+  <text x="611" y="578" class="tiny" text-anchor="middle">rank-8 matcher</text>
+
+  <path d="M734 582 C790 596, 836 588, 872 566" class="flow flow-green"/>
+  <line x1="896" y1="504" x2="896" y2="568" class="dash"/>
+  <circle cx="896" cy="512" r="8" class="node-green"/>
+  <circle cx="878" cy="554" r="6" class="node-red"/>
+  <circle cx="903" cy="560" r="6" class="node-red"/>
+  <circle cx="928" cy="550" r="6" class="node-red"/>
+  <text x="950" y="516" class="tiny">support</text>
+  <text x="950" y="558" class="tiny">distractors</text>
+
+  <path d="M945 530 C980 522, 1010 519, 1038 517" class="flow flow-blue"/>
+  <circle cx="1060" cy="517" r="10" class="node-blue"/>
+  <rect x="1017" y="552" width="92" height="11" class="bar-bg"/>
+  <rect x="1017" y="552" width="70" height="11" class="bar-blue"/>
+  <text x="1062" y="583" class="tiny" text-anchor="middle">answer margin</text>
+
+  <rect x="934" y="202" width="180" height="92" class="callout"/>
+  <text x="1024" y="225" class="head" text-anchor="middle">across seeds</text>
+  <text x="1024" y="247" class="tiny" text-anchor="middle">same role pattern</text>
+  <text x="1024" y="264" class="tiny" text-anchor="middle">different head address</text>
+  <text x="1024" y="282" class="mono" text-anchor="middle">L2H1, L2H0, L2H2...</text>
+
+  <text x="34" y="618" class="small">Reading order: training pressure moves a superposed substrate; candidate feature families compete; the explanation lifts to a route; weight-space evidence shows low-rank QK birth; behavior improves.</text>
+</svg>

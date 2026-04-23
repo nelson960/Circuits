@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="470" viewBox="0 0 980 470" role="img">
+<defs>
+<marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+<path d="M0,0 L0,6 L9,3 z" fill="#343434" />
+</marker>
+<style>
+.title{font:700 22px Georgia,serif;fill:#171615}.subtitle{font:15px Georgia,serif;fill:#4a4741}.label{font:14px Georgia,serif;fill:#2a2927}.small{font:12px Georgia,serif;fill:#5a5247}.tiny{font:10.5px Georgia,serif;fill:#5a5247}.axis{stroke:#4a4741;stroke-width:1}.grid{stroke:#ddd6c8;stroke-width:1}.box{fill:#fffdf8;stroke:#9b8f7e;stroke-width:1.4;rx:8}.ok{fill:#e7f3ed;stroke:#4f8f6f}.warn{fill:#fff4dc;stroke:#b78b3b}.open{fill:#f8e8e6;stroke:#aa615b}</style>
+</defs>
+<text x="32.0" y="36.0" class="title" text-anchor="start">Cross-seed validation: role repeats, head address changes</text>
+<text x="32.0" y="61.0" class="subtitle" text-anchor="start">Each seed scans all heads, then checks winner / runner-up / bottom with exact Adam-state attribution.</text>
+<text x="55.0" y="92.0" class="small" text-anchor="start">seed</text>
+<text x="135.0" y="92.0" class="small" text-anchor="start">winner</text>
+<text x="295.0" y="92.0" class="small" text-anchor="start">runner-up</text>
+<text x="455.0" y="92.0" class="small" text-anchor="start">bottom</text>
+<text x="620.0" y="92.0" class="small" text-anchor="start">actual route growth</text>
+<line x1="740.0" y1="92.0" x2="740.0" y2="368.0" stroke="#4a4741" stroke-width="1"/>
+<text x="55.0" y="108.0" class="label" text-anchor="start">11</text>
+<text x="135.0" y="108.0" class="small" text-anchor="start">L2H0 (+1.45)</text>
+<text x="295.0" y="108.0" class="small" text-anchor="start">L2H2 (+0.51)</text>
+<text x="455.0" y="108.0" class="small" text-anchor="start">L0H0 (-0.19)</text>
+<rect x="740.0" y="94.0" width="79.7" height="8" fill="#4f7f54" opacity="0.9"/>
+<rect x="740.0" y="106.0" width="28.0" height="8" fill="#d69b3a" opacity="0.9"/>
+<rect x="729.6" y="118.0" width="10.4" height="8" fill="#b95f56" opacity="0.9"/>
+<text x="55.0" y="160.0" class="label" text-anchor="start">13</text>
+<text x="135.0" y="160.0" class="small" text-anchor="start">L2H2 (+1.45)</text>
+<text x="295.0" y="160.0" class="small" text-anchor="start">L1H2 (+0.72)</text>
+<text x="455.0" y="160.0" class="small" text-anchor="start">L1H1 (-0.23)</text>
+<rect x="740.0" y="146.0" width="79.8" height="8" fill="#4f7f54" opacity="0.9"/>
+<rect x="740.0" y="158.0" width="39.6" height="8" fill="#d69b3a" opacity="0.9"/>
+<rect x="727.3" y="170.0" width="12.7" height="8" fill="#b95f56" opacity="0.9"/>
+<text x="55.0" y="212.0" class="label" text-anchor="start">17</text>
+<text x="135.0" y="212.0" class="small" text-anchor="start">L2H3 (+3.18)</text>
+<text x="295.0" y="212.0" class="small" text-anchor="start">L2H0 (+0.68)</text>
+<text x="455.0" y="212.0" class="small" text-anchor="start">L0H2 (-0.25)</text>
+<rect x="740.0" y="198.0" width="174.8" height="8" fill="#4f7f54" opacity="0.9"/>
+<rect x="740.0" y="210.0" width="37.4" height="8" fill="#d69b3a" opacity="0.9"/>
+<rect x="726.1" y="222.0" width="13.9" height="8" fill="#b95f56" opacity="0.9"/>
+<text x="55.0" y="264.0" class="label" text-anchor="start">23</text>
+<text x="135.0" y="264.0" class="small" text-anchor="start">L2H1 (+1.50)</text>
+<text x="295.0" y="264.0" class="small" text-anchor="start">L2H3 (+1.44)</text>
+<text x="455.0" y="264.0" class="small" text-anchor="start">L1H2 (-0.11)</text>
+<rect x="740.0" y="250.0" width="82.5" height="8" fill="#4f7f54" opacity="0.9"/>
+<rect x="740.0" y="262.0" width="79.0" height="8" fill="#d69b3a" opacity="0.9"/>
+<rect x="733.7" y="274.0" width="6.3" height="8" fill="#b95f56" opacity="0.9"/>
+<text x="55.0" y="316.0" class="label" text-anchor="start">29</text>
+<text x="135.0" y="316.0" class="small" text-anchor="start">L1H2 (+1.44)</text>
+<text x="295.0" y="316.0" class="small" text-anchor="start">L2H0 (+0.71)</text>
+<text x="455.0" y="316.0" class="small" text-anchor="start">L1H0 (-2.58)</text>
+<rect x="740.0" y="302.0" width="79.1" height="8" fill="#4f7f54" opacity="0.9"/>
+<rect x="740.0" y="314.0" width="39.1" height="8" fill="#d69b3a" opacity="0.9"/>
+<rect x="598.2" y="326.0" width="141.8" height="8" fill="#b95f56" opacity="0.9"/>
+<text x="620.0" y="398.0" class="small" text-anchor="start">winner raw-SGD / actual mean: 0.74%</text>
+<text x="620.0" y="421.0" class="small" text-anchor="start">actual-update sign match: 98.3% -&gt; 99.7%</text>
+<text x="32.0" y="448.0" class="small" text-anchor="start">Conclusion: the support-value retrieval role is stable; the named head that implements it is seed-dependent.</text>
+</svg>

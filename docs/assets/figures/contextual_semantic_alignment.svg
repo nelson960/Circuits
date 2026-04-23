@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="390" viewBox="0 0 960 390" role="img">
+<defs>
+<marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+<path d="M0,0 L0,6 L9,3 z" fill="#343434" />
+</marker>
+<style>
+.title{font:700 22px Georgia,serif;fill:#171615}.subtitle{font:15px Georgia,serif;fill:#4a4741}.label{font:14px Georgia,serif;fill:#2a2927}.small{font:12px Georgia,serif;fill:#5a5247}.tiny{font:10.5px Georgia,serif;fill:#5a5247}.axis{stroke:#4a4741;stroke-width:1}.grid{stroke:#ddd6c8;stroke-width:1}.box{fill:#fffdf8;stroke:#9b8f7e;stroke-width:1.4;rx:8}.ok{fill:#e7f3ed;stroke:#4f8f6f}.warn{fill:#fff4dc;stroke:#b78b3b}.open{fill:#f8e8e6;stroke:#aa615b}</style>
+</defs>
+<text x="32.0" y="36.0" class="title" text-anchor="start">Semantic target: contextual residual geometry</text>
+<text x="32.0" y="61.0" class="subtitle" text-anchor="start">The useful QK direction should be read against the representations produced by earlier layers, not only raw token embeddings.</text>
+<line x1="62.0" y1="285.0" x2="850.0" y2="285.0" stroke="#4a4741" stroke-width="1.2"/>
+<rect x="82.0" y="162.0" width="145.0" height="123.0" fill="#4f7f54" opacity="0.88"/>
+<text x="154.5" y="154.0" class="small" text-anchor="middle">0.946</text>
+<text x="154.5" y="313.0" class="tiny" text-anchor="middle">static key</text>
+<text x="154.5" y="328.0" class="tiny" text-anchor="middle">cosine vs margin</text>
+<rect x="269.0" y="285.0" width="145.0" height="39.8" fill="#b95f56" opacity="0.88"/>
+<text x="341.5" y="342.8" class="small" text-anchor="middle">-0.306</text>
+<text x="341.5" y="313.0" class="tiny" text-anchor="middle">static PCA</text>
+<text x="341.5" y="328.0" class="tiny" text-anchor="middle">overlap vs margin</text>
+<rect x="456.0" y="203.3" width="145.0" height="81.7" fill="#4f7f54" opacity="0.88"/>
+<text x="528.5" y="195.3" class="small" text-anchor="middle">0.629</text>
+<text x="528.5" y="313.0" class="tiny" text-anchor="middle">contextual support</text>
+<text x="528.5" y="328.0" class="tiny" text-anchor="middle">cosine vs margin</text>
+<rect x="643.0" y="163.5" width="145.0" height="121.5" fill="#4f7f54" opacity="0.88"/>
+<text x="715.5" y="155.5" class="small" text-anchor="middle">0.934</text>
+<text x="715.5" y="313.0" class="tiny" text-anchor="middle">singular value</text>
+<text x="715.5" y="328.0" class="tiny" text-anchor="middle">vs contextual support</text>
+<line x1="62.0" y1="155.0" x2="850.0" y2="155.0" class="grid" stroke="#ddd6c8" stroke-width="1"/>
+<line x1="62.0" y1="415.0" x2="850.0" y2="415.0" class="grid" stroke="#ddd6c8" stroke-width="1"/>
+<text x="842.0" y="157.0" class="tiny" text-anchor="start">+1</text>
+<text x="842.0" y="419.0" class="tiny" text-anchor="start">-1</text>
+<rect x="660.0" y="86.0" width="250.0" height="78.0" class="box" />
+<text x="785.0" y="113.0" class="small" text-anchor="middle">Layer-1 contextual separability</text>
+<text x="785.0" y="137.0" class="tiny" text-anchor="middle">qk_both window delta: -0.336</text>
+<text x="785.0" y="153.0" class="tiny" text-anchor="middle">end separation ratio: 0.188</text>
+<text x="32.0" y="358.0" class="small" text-anchor="start">Interpretation: static embeddings give some signal, but the route is best treated as reading contextual residual states built by earlier layers.</text>
+</svg>

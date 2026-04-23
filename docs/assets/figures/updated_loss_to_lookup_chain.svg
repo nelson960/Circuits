@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="320" viewBox="0 0 1000 320" role="img">
+<defs>
+<marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+<path d="M0,0 L0,6 L9,3 z" fill="#343434" />
+</marker>
+<style>
+.title{font:700 22px Georgia,serif;fill:#171615}.subtitle{font:15px Georgia,serif;fill:#4a4741}.label{font:14px Georgia,serif;fill:#2a2927}.small{font:12px Georgia,serif;fill:#5a5247}.tiny{font:10.5px Georgia,serif;fill:#5a5247}.axis{stroke:#4a4741;stroke-width:1}.grid{stroke:#ddd6c8;stroke-width:1}.box{fill:#fffdf8;stroke:#9b8f7e;stroke-width:1.4;rx:8}.ok{fill:#e7f3ed;stroke:#4f8f6f}.warn{fill:#fff4dc;stroke:#b78b3b}.open{fill:#f8e8e6;stroke:#aa615b}</style>
+</defs>
+<text x="30.0" y="38.0" class="title" text-anchor="start">From loss to lookup: the measured chain</text>
+<text x="30.0" y="63.0" class="subtitle" text-anchor="start">Current paper claim: a support-value retrieval role is built by actual AdamW updates.</text>
+<rect x="30.0" y="110.0" width="135.0" height="76.0" class="box" />
+<text x="97.5" y="140.0" class="label" text-anchor="middle">Data relation</text>
+<text x="97.5" y="162.0" class="tiny" text-anchor="middle">latest write answers read</text>
+<line x1="169.0" y1="148.0" x2="183.0" y2="148.0" stroke="#343434" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="189.0" y="110.0" width="135.0" height="76.0" class="box" />
+<text x="256.5" y="140.0" class="label" text-anchor="middle">Loss</text>
+<text x="256.5" y="162.0" class="tiny" text-anchor="middle">next-token CE on real batches</text>
+<line x1="328.0" y1="148.0" x2="342.0" y2="148.0" stroke="#343434" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="348.0" y="110.0" width="135.0" height="76.0" class="box" />
+<text x="415.5" y="140.0" class="label" text-anchor="middle">AdamW state</text>
+<text x="415.5" y="162.0" class="tiny" text-anchor="middle">preconditioned current + momentum</text>
+<line x1="487.0" y1="148.0" x2="501.0" y2="148.0" stroke="#343434" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="507.0" y="110.0" width="135.0" height="76.0" class="box" />
+<text x="574.5" y="140.0" class="label" text-anchor="middle">Weight geometry</text>
+<text x="574.5" y="162.0" class="tiny" text-anchor="middle">rank-8 W_QK support matcher</text>
+<line x1="646.0" y1="148.0" x2="660.0" y2="148.0" stroke="#343434" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="666.0" y="110.0" width="135.0" height="76.0" class="box" />
+<text x="733.5" y="140.0" class="label" text-anchor="middle">Route</text>
+<text x="733.5" y="162.0" class="tiny" text-anchor="middle">support value &gt; distractors</text>
+<line x1="805.0" y1="148.0" x2="819.0" y2="148.0" stroke="#343434" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="825.0" y="110.0" width="135.0" height="76.0" class="box" />
+<text x="892.5" y="140.0" class="label" text-anchor="middle">Behavior</text>
+<text x="892.5" y="162.0" class="tiny" text-anchor="middle">answer margin improves</text>
+<text x="30.0" y="235.0" class="small" text-anchor="start">The old question was "which neuron matters?" The current proof object is a differentiable route scalar C(theta).</text>
+<text x="30.0" y="258.0" class="small" text-anchor="start">Supported: route growth, low-rank QK birth, exact AdamW update reconstruction, and 5-seed role replication.</text>
+<text x="30.0" y="281.0" class="small" text-anchor="start">Open: full answer-margin closure and whether the same method scales beyond this symbolic model.</text>
+</svg>

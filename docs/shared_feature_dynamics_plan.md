@@ -23,14 +23,14 @@ The current project position is:
 feature-family analysis found candidate structure,
 but dense neuron sharing and birth-model failure forced a pivot
 toward dataset geometry, QK/OV routes, causal variables,
-actual optimizer updates, and actual-batch route attribution.
+weight-space SVD, actual optimizer updates, and cross-seed role validation.
 ```
 
 So this document should now be read as:
 
 ```text
-the feature-family layer of the research stack,
-not the final full mechanism plan.
+the feature-family diagnostic layer of the research stack,
+not the current proof layer.
 ```
 
 ## Original Goal
@@ -70,7 +70,9 @@ Any feature-family claim must now be tied to:
   causal patching,
   route-level attribution,
   direct logit attribution,
-  and actual update/batch support.
+  weight-level formation,
+  actual optimizer updates,
+  and cross-seed role replication.
 ```
 
 ## Scope
@@ -97,7 +99,7 @@ The current local feature analysis is useful for checkpoint-pair inspection, but
 Without stable feature IDs, we cannot cleanly answer:
 
 - when a feature is born
-- whether a feature is reinforced by SGD
+- whether a feature is reinforced by the actual optimizer update
 - whether two checkpoints share the same mechanism
 - whether heldout gains correspond to specific feature families
 
@@ -159,6 +161,16 @@ They are different projections through a shared dense substrate.
 
 This is the superposition/polysemanticity obstacle in our own run.
 
+This negative result is now part of the main paper story. It explains why the project stopped treating feature IDs or neuron groups as the central proof object and moved to:
+
+```text
+task-meaningful route scalar
+  -> QK/OV and residual geometry
+  -> W_QK SVD birth
+  -> exact AdamW update decomposition
+  -> cross-seed role validation
+```
+
 ## Updated Role In The Research Stack
 
 The feature-family layer should now be used for:
@@ -172,7 +184,7 @@ The feature-family layer should now be used for:
 It should not be used alone for:
 
 - claiming a full circuit
-- claiming SGD selected one mechanism
+- claiming the optimizer selected one mechanism
 - claiming a neuron group is sufficient
 - claiming a feature ID is a natural variable
 
@@ -184,8 +196,10 @@ shared feature family
   -> causal intervention / controlled patch
   -> route competition
   -> actual update attribution
-  -> actual-batch attribution
-  -> answer-margin closure
+  -> weight-level formation analysis
+  -> optimizer-state attribution
+  -> cross-seed role validation
+  -> answer-margin / route-family closure
 ```
 
 ## Core Entities
@@ -740,10 +754,13 @@ This milestone is successful if we can say, for one stage:
 - these are their activation trajectories
 - these are their birth times
 - these are the features that grew from source to target
+- these features generated useful candidate routes or failure evidence for the main route/weight/optimizer analysis
 - these are the features whose causal patching changes behavior
 - these are the heads / MLP blocks / neuron groups most associated with those features
 
-That would be the first genuinely feature-dynamical layer for the repo and a much stronger basis for answering the SGD-selection question.
+It is not successful merely because a feature has a readable label. A feature-family result becomes paper evidence only when it helps explain candidate discovery, superposition, or why route-level analysis was necessary.
+
+That would be the first genuinely feature-dynamical layer for the repo and a much stronger basis for answering the optimizer-selection question.
 
 Updated success criterion after the completed runs:
 

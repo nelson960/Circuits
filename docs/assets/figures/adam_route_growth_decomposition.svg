@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="430" viewBox="0 0 980 430" role="img">
+<defs>
+<marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+<path d="M0,0 L0,6 L9,3 z" fill="#343434" />
+</marker>
+<style>
+.title{font:700 22px Georgia,serif;fill:#171615}.subtitle{font:15px Georgia,serif;fill:#4a4741}.label{font:14px Georgia,serif;fill:#2a2927}.small{font:12px Georgia,serif;fill:#5a5247}.tiny{font:10.5px Georgia,serif;fill:#5a5247}.axis{stroke:#4a4741;stroke-width:1}.grid{stroke:#ddd6c8;stroke-width:1}.box{fill:#fffdf8;stroke:#9b8f7e;stroke-width:1.4;rx:8}.ok{fill:#e7f3ed;stroke:#4f8f6f}.warn{fill:#fff4dc;stroke:#b78b3b}.open{fill:#f8e8e6;stroke:#aa615b}</style>
+</defs>
+<text x="32.0" y="36.0" class="title" text-anchor="start">Exact AdamW update decomposition for seed 7</text>
+<text x="32.0" y="61.0" class="subtitle" text-anchor="start">Rank-8 L2H1 support-value route growth over 0 -&gt; 6000.</text>
+<line x1="70.0" y1="309.5" x2="930.0" y2="309.5" stroke="#4a4741" stroke-width="1.2"/>
+<rect x="70.0" y="159.7" width="92.0" height="149.8" fill="#245f73" opacity="0.9"/>
+<text x="116.0" y="151.7" class="small" text-anchor="middle">+4.115</text>
+<text x="116.0" y="362.0" class="tiny" text-anchor="middle">actual route</text>
+<text x="116.0" y="377.0" class="tiny" text-anchor="middle">growth</text>
+<rect x="190.0" y="119.5" width="92.0" height="190.0" fill="#4f7f54" opacity="0.9"/>
+<text x="236.0" y="111.5" class="small" text-anchor="middle">+5.217</text>
+<text x="236.0" y="362.0" class="tiny" text-anchor="middle">reconstructed AdamW</text>
+<rect x="310.0" y="308.4" width="92.0" height="1.1" fill="#b95f56" opacity="0.9"/>
+<text x="356.0" y="300.4" class="small" text-anchor="middle">+0.031</text>
+<text x="356.0" y="362.0" class="tiny" text-anchor="middle">raw SGD</text>
+<rect x="430.0" y="308.7" width="92.0" height="0.9" fill="#d69b3a" opacity="0.9"/>
+<text x="476.0" y="300.7" class="small" text-anchor="middle">+0.024</text>
+<text x="476.0" y="362.0" class="tiny" text-anchor="middle">clipped SGD</text>
+<rect x="550.0" y="223.1" width="92.0" height="86.5" fill="#7b5ea7" opacity="0.9"/>
+<text x="596.0" y="215.1" class="small" text-anchor="middle">+2.374</text>
+<text x="596.0" y="362.0" class="tiny" text-anchor="middle">Adam current</text>
+<rect x="670.0" y="198.6" width="92.0" height="110.9" fill="#8f5a24" opacity="0.9"/>
+<text x="716.0" y="190.6" class="small" text-anchor="middle">+3.045</text>
+<text x="716.0" y="362.0" class="tiny" text-anchor="middle">Adam momentum</text>
+<rect x="790.0" y="309.5" width="92.0" height="7.4" fill="#777777" opacity="0.9"/>
+<text x="836.0" y="334.9" class="small" text-anchor="middle">-0.202</text>
+<text x="836.0" y="362.0" class="tiny" text-anchor="middle">weight decay</text>
+<text x="32.0" y="407.0" class="small" text-anchor="start">Fractions of actual growth: raw SGD 0.76%, Adam current 57.7%, Adam momentum 74.0%, weight decay -4.9%.</text>
+</svg>

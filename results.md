@@ -5561,3 +5561,1079 @@ It makes the route-level work more grounded:
 routes tell us what computation is used.
 SVD tells us how the weights are becoming able to implement that route.
 ```
+
+---
+
+## Update: From Weight Pattern To Optimizer-Level Formation Explanation
+
+The later experiments filled in the missing link after the SVD result.
+
+The previous section showed that `L2H1 W_QK` becomes more concentrated and stable during training. That was a weight-level formation pattern, but by itself it was not enough. A singular direction can grow without being the task mechanism.
+
+The next question was:
+
+```text
+Is the growing QK direction actually the retrieval direction?
+And if yes, why did the optimizer build that direction?
+```
+
+We now have a much stronger answer for this particular model run, seed 7.
+
+### Current Single-Run Claim
+
+For this seed, the model does not learn lookup as a clean neuron table.
+
+It learns a dense role-level retrieval route:
+
+```text
+prediction position
+  -> L2H1 QK route
+  -> support value position beats value distractors
+  -> value/write path helps the answer margin
+```
+
+The stable object is not one neuron and not one feature family.
+
+The stable object is a geometric route:
+
+```text
+L2H1 W_QK builds a low-rank matcher that scores support values above distractors.
+```
+
+The reason this matters is that it connects four levels:
+
+```text
+behavior level:
+  answer margin improves
+
+route level:
+  L2H1 increasingly separates support values from distractors
+
+weight level:
+  L2H1 W_QK develops a low-rank rank-8 matching direction
+
+optimizer level:
+  the real AdamW update explains the growth of that direction
+```
+
+This is the first point where the research stops being only observational.
+
+We can now say, for this run:
+
+```text
+the optimizer update physically built the measured retrieval geometry.
+```
+
+### The Main Route Variable
+
+The key scalar became:
+
+```text
+C_rank(theta)
+  = mean score_rank(prediction, support_value)
+    - mean score_rank(prediction, value_distractors)
+```
+
+For the strongest result:
+
+```text
+head: L2H1
+matrix: W_QK
+rank: 8
+context stage: layer_1_post_mlp
+query role: prediction
+support role: support_value
+distractor role: value_distractors
+```
+
+In simple words:
+
+```text
+Does the rank-8 part of L2H1 QK make the prediction position match the real support value more than distractor values?
+```
+
+That is a precise route-geometry scalar.
+
+### Formation Window Evidence
+
+The bilinear QK match separation run showed that `L2H1` is not merely growing a random singular direction.
+
+For `750 -> 3500`, `layer_1_post_mlp`, `rank_8`:
+
+```text
+support-value separation delta:  +4.19295
+correlation with singular value: 0.9934
+correlation with answer margin:  0.6664
+```
+
+This means:
+
+```text
+as the low-rank W_QK structure grows,
+the support-value matching behavior grows with it.
+```
+
+That is the semantic bridge missing from the raw SVD story.
+
+The earlier SVD evidence said:
+
+```text
+L2H1 W_QK becomes concentrated.
+```
+
+The bilinear QK evidence says:
+
+```text
+the concentrated direction is useful for support-value retrieval.
+```
+
+### Update Attribution Evidence
+
+The rank-update attribution checked whether actual checkpoint changes move this route scalar.
+
+For the formation window:
+
+```text
+path:
+artifacts/runs/symbolic_kv_reference_formation/analysis/bilinear_qk_rank_update_attribution/l2h1_rank4_rank8_support_value_minus_distractors_000750_003500_formation/
+```
+
+For rank 8:
+
+```text
+actual route delta:      +2.03547
+predicted route delta:   +2.21138
+sign match:              11 / 11 intervals
+```
+
+This says:
+
+```text
+the actual parameter movement points in the direction that grows the retrieval matcher.
+```
+
+That still did not answer why, because "actual update" is not the same thing as raw SGD gradient.
+
+So we decomposed the update.
+
+### Important Negative Result: Raw Batch Gradient Is Not Enough
+
+The actual-batch attribution on `750 -> 1000` showed:
+
+```text
+actual route growth:             +0.0275398
+actual-update predicted growth:  +0.0263239
+actual-batch route support:      +0.0654552
+SGD-equivalent contribution:     +0.00002618
+```
+
+That SGD-equivalent contribution is only about:
+
+```text
+0.095% of actual route growth
+```
+
+This was a critical result.
+
+It means the naive explanation is wrong:
+
+```text
+wrong story:
+  the current batch gradient directly pushes the route hard enough to build it
+```
+
+The real story must involve optimizer dynamics.
+
+### Exact From-Initialization Optimizer Trace
+
+To remove the historical replay concern, we ran a new exact instrumented trace from initialization:
+
+```text
+optimizer trace:
+artifacts/runs/symbolic_kv_reference_formation/analysis/optimizer_update_trace/from_init_seed7_0000_6000_stepwise
+
+Adam-state attribution:
+artifacts/runs/symbolic_kv_reference_formation/analysis/bilinear_qk_rank_adam_state_attribution/from_init_l2h1_rank8_support_value_0000_6000_stepwise/
+```
+
+This trace records the batch stream and optimizer updates from step 0.
+
+The report status is:
+
+```text
+instrumented_from_initialization_exact_for_this_trace
+```
+
+So this is not a guessed replay from old checkpoints. It is exact for this traced run.
+
+### Main Optimizer Result
+
+Across `0 -> 6000`:
+
+```text
+actual route growth:             +4.11462
+actual-update prediction:        +5.21768
+reconstructed AdamW prediction:  +5.21734
+reconstruction sign match:       6000 / 6000
+```
+
+The AdamW decomposition:
+
+```text
+raw SGD:                    +0.03136
+clipped SGD:                +0.02404
+Adam current gradient:      +2.37417
+Adam historical momentum:   +3.04547
+Adam preconditioned total:  +5.41964
+weight decay:               -0.20230
+```
+
+As a fraction of actual route growth:
+
+```text
+raw SGD:                    0.76%
+clipped SGD:                0.58%
+Adam current gradient:      57.7%
+Adam historical momentum:   74.0%
+weight decay:              -4.9%
+```
+
+This is the strongest "why" result so far.
+
+For this model:
+
+```text
+the support-value retrieval route is not built by a large immediate raw gradient.
+It is built by Adam's preconditioned update, especially accumulated optimizer momentum.
+```
+
+### Phase Structure Of Formation
+
+The full `0 -> 6000` trace is not one uniform story.
+
+It has phases.
+
+#### 0 -> 750: early weak setup
+
+```text
+actual growth:        +0.07007
+predicted growth:     +0.06651
+raw SGD:              -0.00142
+current gradient:     -0.00101
+historical momentum:  +0.06746
+```
+
+Even this early, the useful movement is mostly momentum.
+
+#### 750 -> 2500: clean momentum-driven route formation
+
+```text
+actual growth:        +1.66529
+predicted growth:     +1.59974
+raw SGD:              -0.00302
+current gradient:     +0.00495
+historical momentum:  +1.60536
+weight decay:         -0.01058
+```
+
+This is the cleanest formation window.
+
+The simple interpretation:
+
+```text
+many small gradients are accumulated by Adam,
+and the accumulated optimizer state repeatedly pushes the QK matcher into place.
+```
+
+The current batch gradient alone is basically not the explanation here.
+
+#### 2500 -> 3500: current gradient and momentum both push
+
+```text
+actual growth:        +1.67303
+predicted growth:     +2.25247
+raw SGD:              +0.01987
+current gradient:     +1.16475
+historical momentum:  +1.13675
+weight decay:         -0.04911
+```
+
+Now the current preconditioned gradient becomes large.
+
+This looks like the route has become useful enough that fresh gradients also reinforce it.
+
+#### 3500 -> 6000: optimizer still pushes, realized growth saturates
+
+```text
+actual growth:        +0.70622
+predicted growth:     +1.29897
+raw SGD:              +0.01593
+current gradient:     +1.20549
+historical momentum:  +0.23590
+weight decay:         -0.14267
+```
+
+Here the first-order update still points toward route growth, but actual route growth is smaller.
+
+This likely means the route is becoming constrained by nonlinear geometry, basis drift, interaction with other routes, or saturation.
+
+So the best current phase story is:
+
+```text
+0 -> 750:
+  weak early setup
+
+750 -> 2500:
+  Adam momentum builds the QK support-value matcher
+
+2500 -> 3500:
+  fresh gradients and momentum jointly amplify it
+
+3500 -> 6000:
+  the optimizer still pushes the route, but realized growth is partly limited by nonlinear/dense interactions
+```
+
+### Dense-Circuit Interpretation
+
+This is still not a clean neuron story.
+
+The evidence points to dense circuit formation:
+
+```text
+QK routing becomes relatively low-rank and measurable.
+OV/value writing remains distributed.
+MLPs and early residual components are load-bearing but not clean answer writers.
+Feature families are useful diagnostics but not stable proof objects.
+```
+
+In simple terms:
+
+```text
+the model is not writing "K03 maps to V14" into one neuron.
+It is shaping a shared residual workspace so that a later attention head can route from prediction positions to support-value positions.
+```
+
+This also explains why the research has been hard.
+
+We kept looking for one object:
+
+```text
+one neuron
+one feature family
+one head
+one clean OV vector
+```
+
+But the model uses overlapping objects:
+
+```text
+many neurons
+shared residual directions
+low-rank QK routing
+distributed value/write effects
+optimizer state accumulated across many steps
+```
+
+The cleanest object is not a neuron.
+
+The cleanest object is:
+
+```text
+a role-level route geometry plus the optimizer update that grows it.
+```
+
+### What We Can Honestly Claim Now
+
+For this one seed and traced run, we can say:
+
+```text
+1. A support-value retrieval route forms.
+2. The route is visible in L2H1 W_QK as a low-rank matcher.
+3. The matcher separates support values from distractors.
+4. Actual parameter updates grow the matcher.
+5. AdamW update decomposition reconstructs that growth.
+6. Raw SGD is far too small to explain it.
+7. Adam momentum dominates early formation.
+8. Later, current preconditioned gradients and momentum jointly amplify the route.
+```
+
+This gives a proof-style causal accounting for one model:
+
+```text
+loss gradients
+  -> Adam optimizer state
+  -> parameter update
+  -> W_QK low-rank route growth
+  -> support-value retrieval separation
+  -> answer-margin improvement
+```
+
+The word "proof" should still be used carefully.
+
+This is not a theorem about all transformers.
+
+It is a detailed mechanistic accounting for one trained model and one exact from-initialization trace.
+
+### What We Still Do Not Know
+
+The remaining open questions are:
+
+```text
+Does the same role appear across random seeds?
+Does it always appear in L2H1, or does another head implement the same role?
+Does Adam momentum always dominate early formation?
+Would SGD build the same route more slowly, differently, or not at all?
+How much of the later answer margin is closed by this route versus distributed OV/MLP effects?
+Can this method scale beyond a small symbolic model?
+```
+
+The main missing validation is cross-seed replication.
+
+Right now the strongest claim is:
+
+```text
+this is how this seed builds the route.
+```
+
+The stronger paper claim would be:
+
+```text
+this task/architecture reliably induces a support-value retrieval role,
+even if the exact head identity changes.
+```
+
+### Why This Matters Beyond This Toy Model
+
+The practical value is not that this tiny model performs symbolic lookup.
+
+The practical value is the method:
+
+```text
+watch a circuit form in weight space
+connect the weight change to route behavior
+decompose the optimizer update that caused it
+check whether the same role repeats across seeds
+```
+
+Most interpretability work can say:
+
+```text
+this component matters in the trained model
+```
+
+This work is moving toward:
+
+```text
+this optimizer update wrote this route into these weight directions during training
+```
+
+That is a different kind of understanding.
+
+If this method generalizes, it could help with:
+
+```text
+detecting shortcut circuits during training
+tracking when factual-recall routes form
+studying refusal or safety circuits under fine-tuning
+checking whether a model learned the intended mechanism or a brittle alternative
+preserving useful circuits across training changes
+```
+
+### The Three Big Walls
+
+There are three major limitations between this result and broad neural network control.
+
+#### 1. Scale
+
+This model is small enough that we can scan heads, SVD matrices, and run one-step optimizer attribution.
+
+Large models have many more layers, heads, parameters, and simultaneous behaviors.
+
+The method would need much stronger candidate selection before it can scale.
+
+#### 2. Superposition
+
+Even here, neurons are polysemantic and the OV/write side is distributed.
+
+In larger models, more of the mechanism may be spread across overlapping directions.
+
+That means we should not expect clean single-neuron or single-vector explanations.
+
+#### 3. Task Overlap
+
+This symbolic KV task has one clean algorithm.
+
+Language models learn many algorithms at once.
+
+A weight direction that helps one behavior may also participate in unrelated behaviors.
+
+So route-level and optimizer-level explanations may need to be conditional on data slice, context, and task role.
+
+### Cross-Seed Validation Plan
+
+The next stage is not to create more tools for this same seed.
+
+The next stage is to test whether this role-level story repeats.
+
+#### Step 1: Keep the dataset fixed and vary training seed
+
+Use the same benchmark/data first.
+
+Change the model/training seed:
+
+```text
+seed 11
+seed 13
+seed 17
+seed 23
+```
+
+The goal is to ask:
+
+```text
+Does the same support-value retrieval role form under different initialization/training randomness?
+```
+
+#### Step 2: Do not require the same head identity
+
+The replication target is not:
+
+```text
+L2H1 always wins.
+```
+
+The replication target is:
+
+```text
+some head develops a support-value-over-distractor QK route
+using contextual residual states.
+```
+
+So for each seed we should scan all heads:
+
+```text
+L0H0 ... L0H3
+L1H0 ... L1H3
+L2H0 ... L2H3
+```
+
+#### Step 3: Use a cheap-to-expensive funnel
+
+Do not run exact optimizer decomposition on every head first.
+
+Use this order:
+
+```text
+cheap:
+  bilinear QK match separation across all heads
+  weight SVD pattern scan
+
+medium:
+  rank-update attribution on candidate heads
+  contextual separability/alignment checks
+
+expensive:
+  exact optimizer trace and Adam-state attribution on the winning role/head
+```
+
+#### Step 4: Compare role-level metrics
+
+For each seed, record:
+
+```text
+seed
+best support-value retrieval head
+formation window
+rank-8 support-value separation growth
+top W_QK singular value growth
+effective rank drop
+answer-margin correlation
+actual route delta
+actual-update predicted delta
+raw SGD contribution
+Adam current-gradient contribution
+Adam momentum contribution
+weight decay contribution
+```
+
+#### Step 5: Interpret outcomes
+
+Possible outcomes:
+
+```text
+same role, same head:
+  architecture strongly biases the role into L2H1
+
+same role, different heads:
+  the role is stable but head identity is seed-specific
+
+no consistent role:
+  the current result is mostly seed-specific and should be presented as a deep case study
+
+same role but different optimizer split:
+  the task induces the same computation, but optimizer dynamics vary by seed
+```
+
+### Current Bottom Line
+
+The best current conclusion is:
+
+```text
+In one small transformer trained on symbolic KV lookup,
+we can trace a dense retrieval circuit from behavior,
+to route geometry,
+to low-rank QK weight formation,
+to exact AdamW update components.
+```
+
+And the best current explanation for why the route forms is:
+
+```text
+the loss supplies many small, noisy gradient signals;
+Adam accumulates and preconditions those signals;
+the accumulated optimizer state repeatedly pushes L2H1 W_QK
+toward a support-value retrieval matcher;
+once the route becomes useful, fresh gradients also reinforce it.
+```
+
+This is not yet a universal theory.
+
+But it is now a concrete single-run mechanism.
+
+The next question is whether the same role-level mechanism appears again when we train more seeds.
+
+---
+
+## Cross-Seed Validation Results: Role Pattern Replicates, Head Identity Does Not
+
+We then ran the cross-seed validation plan.
+
+The validation goal was not:
+
+```text
+Does L2H1 win every time?
+```
+
+That would be the wrong replication target.
+
+The real target was:
+
+```text
+Does a support-value retrieval role form across seeds?
+Does it have the same geometric and optimizer-level signature?
+```
+
+We varied training/model seeds while keeping the same task/data setup:
+
+```text
+seed 11
+seed 13
+seed 17
+seed 23
+seed 29
+```
+
+The output root is:
+
+```text
+artifacts/runs/symbolic_kv_cross_seed_adam/
+```
+
+Important artifacts:
+
+```text
+head scan reports:
+artifacts/runs/symbolic_kv_cross_seed_adam/seed_*/analysis/bilinear_qk_match_separation/
+
+winner/runner-up/bottom selections:
+artifacts/runs/symbolic_kv_cross_seed_adam/seed_*/analysis/cross_seed_head_selection.json
+
+Adam attribution reports:
+artifacts/runs/symbolic_kv_cross_seed_adam/seed_*/analysis/bilinear_qk_rank_adam_state_attribution/
+```
+
+One bookkeeping note:
+
+```text
+cross_seed_winners.csv was overwritten by a later seed-29-only command.
+The per-seed cross_seed_head_selection.json files are the reliable source of truth.
+```
+
+### Cross-Seed Procedure
+
+For each seed:
+
+```text
+1. train from initialization with recorded optimizer trace
+2. save cheap scan checkpoints every 250 steps
+3. scan all 12 heads:
+   L0H0 ... L2H3
+4. score each head by rank-8 QK support-value-over-distractor growth
+   during 750 -> 3500
+5. select:
+   winner
+   runner-up
+   bottom-control head
+6. run exact Adam-state attribution for 750 -> 2500
+   on winner, runner-up, and bottom control
+```
+
+The scalar was the same one used in the single-seed analysis:
+
+```text
+C_rank(theta)
+  = mean score_rank(prediction, support_value)
+    - mean score_rank(prediction, value_distractors)
+```
+
+with:
+
+```text
+rank: 8
+context stage: layer_1_post_mlp
+query role: prediction
+support role: support_value
+distractor role: value_distractors
+analysis window for Adam attribution: 750 -> 2500
+```
+
+### Result 1: Same Role, Different Head Address
+
+The winning head changed across seeds:
+
+| seed | winning head | scan score | sep vs singular value | sep vs answer margin | support-win delta |
+|---:|---|---:|---:|---:|---:|
+| 11 | `L2H0` | 2.815 | 0.882 | 0.668 | 0.157 |
+| 13 | `L2H2` | 2.727 | 0.956 | 0.670 | 0.523 |
+| 17 | `L2H3` | 1.463 | 0.484 | 0.561 | 0.183 |
+| 23 | `L2H1` | 6.361 | 0.868 | 0.918 | 0.843 |
+| 29 | `L1H2` | 2.428 | 0.502 | 0.891 | 0.248 |
+
+This means:
+
+```text
+4 / 5 seeds put the strongest support-value retrieval role in layer 2.
+1 / 5 seeds put it in layer 1.
+The original seed-7 head identity, L2H1, is not stable across seeds.
+```
+
+That is not a failure.
+
+It is the expected result if the computation is stable but the address is random.
+
+The better claim is:
+
+```text
+the circuit is stable as a role pattern,
+not stable as a named head.
+```
+
+### Result 2: Winner Beats Runner-Up And Bottom Controls
+
+We then compared winner, runner-up, and bottom-control heads using exact Adam-state attribution on the same window:
+
+```text
+750 -> 2500
+```
+
+Actual route growth:
+
+| seed | winner | winner actual | runner-up | runner-up actual | bottom | bottom actual |
+|---:|---|---:|---|---:|---|---:|
+| 11 | `L2H0` | 1.448 | `L2H2` | 0.509 | `L0H0` | -0.190 |
+| 13 | `L2H2` | 1.451 | `L1H2` | 0.719 | `L1H1` | -0.230 |
+| 17 | `L2H3` | 3.178 | `L2H0` | 0.680 | `L0H2` | -0.254 |
+| 23 | `L2H1` | 1.500 | `L2H3` | 1.437 | `L1H2` | -0.114 |
+| 29 | `L1H2` | 1.439 | `L2H0` | 0.712 | `L1H0` | -2.577 |
+
+This gives a useful control result:
+
+```text
+winner actual growth is positive in all 5 seeds
+runner-up actual growth is also positive in all 5 seeds
+bottom-control actual growth is negative in all 5 seeds
+```
+
+So the metric is not simply saying:
+
+```text
+all heads grow
+```
+
+It distinguishes support-value retrieval heads from weak/wrong heads.
+
+The runner-up result is also important.
+
+Since runner-up heads often grow too, the model is not always building one isolated route.
+
+It often builds a route family:
+
+```text
+one dominant support-value retrieval head
+plus one or more partially participating heads
+```
+
+Seed 23 is the clearest example:
+
+```text
+winner L2H1 actual growth:    1.500
+runner-up L2H3 actual growth: 1.437
+```
+
+That seed looks less like a single winner and more like a shared layer-2 retrieval family.
+
+### Result 3: Raw SGD Is Tiny Across Winners
+
+For winner heads, raw SGD as a fraction of actual route growth:
+
+| seed | winner | raw SGD / actual | clipped SGD / actual |
+|---:|---|---:|---:|
+| 11 | `L2H0` | -0.13% | -0.65% |
+| 13 | `L2H2` | 0.83% | 0.55% |
+| 17 | `L2H3` | 1.26% | 1.31% |
+| 23 | `L2H1` | 1.15% | 1.04% |
+| 29 | `L1H2` | 0.60% | 0.75% |
+
+Mean raw SGD contribution:
+
+```text
+0.74% of actual route growth
+```
+
+Mean clipped SGD contribution:
+
+```text
+0.60% of actual route growth
+```
+
+This strongly replicates the seed-7 finding:
+
+```text
+the immediate raw per-batch gradient is far too small to explain route formation.
+```
+
+So a naive SGD story is not enough.
+
+The optimizer state matters.
+
+### Result 4: Adam State Carries The Formation Update
+
+For winner heads:
+
+| seed | winner | current-gradient / actual | momentum / actual | sign match |
+|---:|---|---:|---:|---:|
+| 11 | `L2H0` | 39.0% | 79.7% | 99.7% |
+| 13 | `L2H2` | 63.8% | 62.5% | 99.7% |
+| 17 | `L2H3` | 101.3% | 47.8% | 98.3% |
+| 23 | `L2H1` | 91.0% | 55.4% | 99.4% |
+| 29 | `L1H2` | 52.8% | 66.9% | 99.3% |
+
+Across winners:
+
+```text
+Adam current-gradient contribution: 39% -> 101%
+Adam historical momentum:           48% -> 80%
+actual/predicted sign match:        98.3% -> 99.7%
+```
+
+This supports the refined optimizer story:
+
+```text
+Adam's preconditioned update state carries the useful route-growth direction.
+```
+
+Momentum is always large, but not always the largest component.
+
+The balance varies by seed:
+
+```text
+seed 11: momentum dominates
+seed 13: current gradient and momentum are balanced
+seed 17: current gradient dominates
+seed 23: current gradient dominates
+seed 29: momentum is slightly larger
+```
+
+So the cross-seed result is not:
+
+```text
+momentum always dominates exactly.
+```
+
+The correct result is:
+
+```text
+raw SGD is consistently tiny;
+Adam preconditioned state consistently carries route growth;
+the split between current gradient and historical momentum is seed-dependent.
+```
+
+### Result 5: Bottom Controls Move The Opposite Way
+
+Bottom-control heads:
+
+| seed | bottom head | scan score | actual route delta | predicted delta |
+|---:|---|---:|---:|---:|
+| 11 | `L0H0` | -0.225 | -0.190 | -0.317 |
+| 13 | `L1H1` | -0.260 | -0.230 | -0.372 |
+| 17 | `L0H2` | -0.521 | -0.254 | -0.448 |
+| 23 | `L1H2` | -0.279 | -0.114 | -0.221 |
+| 29 | `L1H0` | -2.653 | -2.577 | -3.033 |
+
+This is a strong negative control:
+
+```text
+bottom scan scores are negative
+bottom actual route deltas are negative
+bottom predicted deltas are negative
+```
+
+That means the method is not just measuring global training progress.
+
+It is sensitive to the direction of the role.
+
+In simple terms:
+
+```text
+the heads selected as support-value retrieval routes grow in that direction;
+the heads selected as bottom controls move away from that direction.
+```
+
+### Cross-Seed Interpretation
+
+The original seed-7 story was:
+
+```text
+L2H1 builds a rank-8 QK support-value matcher.
+Raw SGD is too small.
+Adam momentum/current-gradient drive the route.
+```
+
+The cross-seed story is stronger and more general:
+
+```text
+a support-value QK matcher appears across seeds;
+the exact head changes;
+the route's geometric growth is positive for winners;
+bottom controls move in the opposite direction;
+raw SGD is consistently tiny;
+Adam preconditioned update state consistently explains route formation.
+```
+
+This supports the central theory:
+
+```text
+SGD/Adam does not reliably select one named component.
+It reliably builds a role-level retrieval pattern somewhere in the network.
+```
+
+The role is:
+
+```text
+prediction-position QK matching to support-value positions
+over value-distractor positions
+```
+
+The repeated formation signature is:
+
+```text
+1. support-value-over-distractor QK separation rises
+2. the rise correlates with W_QK singular geometry
+3. actual optimizer updates grow the route scalar
+4. raw SGD is too small
+5. Adam preconditioned current/momentum components carry the growth
+6. weak-control heads move in the wrong direction
+```
+
+### Updated Claim After Cross-Seed Validation
+
+The strongest defensible claim is now:
+
+```text
+In this symbolic KV setting, training repeatedly forms a dense support-value retrieval role.
+The role is not tied to one head identity.
+Across seeds, different heads instantiate the role, usually in late layers.
+The role has a repeated weight/route signature:
+rank-8 QK support-value matching grows during formation.
+The growth is explained by actual AdamW updates,
+while raw per-batch SGD is far too small to account for it.
+```
+
+This is stronger than the earlier single-run result.
+
+It moves the work from:
+
+```text
+this is how seed 7 built L2H1
+```
+
+to:
+
+```text
+this task tends to induce the same retrieval role,
+but random initialization chooses the address.
+```
+
+### What This Still Does Not Prove
+
+The cross-seed result still has boundaries.
+
+It does not prove:
+
+```text
+the same role appears for every possible seed
+SGD without Adam would build the same route
+the value/write side is equally clean
+the method scales directly to large language models
+```
+
+It also suggests the circuit is not always a single clean route.
+
+Runner-up heads often show positive growth:
+
+```text
+winner mean actual growth:    1.803
+runner-up mean actual growth: 0.811
+bottom mean actual growth:   -0.673
+```
+
+So the better mechanistic object is probably:
+
+```text
+a role family with one dominant route,
+not a single isolated head.
+```
+
+That matches the broader dense-circuit picture:
+
+```text
+the computation is stable,
+but its physical implementation is distributed and seed-dependent.
+```
+
+### Revised Bottom Line
+
+The best current conclusion is now:
+
+```text
+We can trace the formation of a dense retrieval role across seeds.
+
+The role repeatedly appears as a low-rank QK support-value matcher.
+
+The exact head changes with random seed.
+
+Winner heads grow in the support-value retrieval direction.
+
+Bottom-control heads move in the opposite direction.
+
+The immediate raw gradient is too small to explain this formation.
+
+Adam's preconditioned optimizer state carries the useful update direction.
+```
+
+In simple words:
+
+```text
+the circuit is stable as a pattern,
+but unstable as an address.
+```

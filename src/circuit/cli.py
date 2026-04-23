@@ -74,7 +74,13 @@ from circuit.analysis.shared_feature_dynamics import (
     subset_trajectory,
 )
 from circuit.analysis.svd_task_alignment import run_svd_task_alignment
+from circuit.analysis.bilinear_qk_match_separation import run_bilinear_qk_match_separation
+from circuit.analysis.bilinear_qk_rank_actual_batch_attribution import run_bilinear_qk_rank_actual_batch_attribution
+from circuit.analysis.bilinear_qk_rank_adam_state_attribution import run_bilinear_qk_rank_adam_state_attribution
+from circuit.analysis.bilinear_qk_rank_data_attribution import run_bilinear_qk_rank_data_attribution
+from circuit.analysis.bilinear_qk_rank_update_attribution import run_bilinear_qk_rank_update_attribution
 from circuit.analysis.contextual_svd_alignment import run_contextual_svd_alignment
+from circuit.analysis.contextual_key_separability import run_contextual_key_separability
 from circuit.analysis.weight_svd_patterns import run_weight_svd_patterns
 from circuit.analysis.weight_svd_trace import run_weight_svd_trace
 from circuit.config import TrainSpec
@@ -881,7 +887,9 @@ def main() -> None:
 
     optimizer_trace_parser = subparsers.add_parser("optimizer-update-trace")
     optimizer_trace_parser.add_argument("--config", type=Path, required=True)
-    optimizer_trace_parser.add_argument("--resume-checkpoint", type=Path, required=True)
+    optimizer_trace_start = optimizer_trace_parser.add_mutually_exclusive_group(required=True)
+    optimizer_trace_start.add_argument("--resume-checkpoint", type=Path)
+    optimizer_trace_start.add_argument("--from-initialization", action="store_true")
     optimizer_trace_parser.add_argument("--output-dir", type=Path, required=True)
     optimizer_trace_parser.add_argument("--device", type=str, default=None)
     optimizer_trace_end = optimizer_trace_parser.add_mutually_exclusive_group(required=True)
@@ -889,6 +897,7 @@ def main() -> None:
     optimizer_trace_end.add_argument("--num-steps", type=int)
     optimizer_trace_parser.add_argument("--train-split", type=str, default="train")
     optimizer_trace_parser.add_argument("--checkpoint-every", type=int, required=True)
+    optimizer_trace_parser.add_argument("--checkpoint-start-step", type=int, default=None)
     optimizer_trace_parser.add_argument("--progress-every", type=int, default=10)
     optimizer_trace_parser.add_argument("--top-k-parameters", type=int, default=24)
     optimizer_trace_parser.add_argument("--overwrite", action="store_true")
@@ -1132,6 +1141,168 @@ def main() -> None:
     contextual_svd_alignment_parser.add_argument("--behavior-margin-field", type=str, default="baseline_margin_mean")
     contextual_svd_alignment_parser.add_argument("--behavior-accuracy-field", type=str, default="baseline_accuracy")
     contextual_svd_alignment_parser.add_argument("--overwrite", action="store_true")
+
+    contextual_key_separability_parser = subparsers.add_parser("contextual-key-separability")
+    contextual_key_separability_parser.add_argument("--config", type=Path, required=True)
+    contextual_key_separability_parser.add_argument("--probe-set", type=Path, required=True)
+    contextual_key_separability_parser.add_argument("--checkpoint-dir", type=Path, required=True)
+    contextual_key_separability_parser.add_argument("--checkpoint", type=Path, action="append", default=None)
+    contextual_key_separability_parser.add_argument("--output-dir", type=Path, required=True)
+    contextual_key_separability_parser.add_argument("--device", type=str, default="cpu")
+    contextual_key_separability_parser.add_argument("--head-layer", type=int, required=True)
+    contextual_key_separability_parser.add_argument("--head", type=int, required=True)
+    contextual_key_separability_parser.add_argument("--context-stage", type=str, action="append", required=True)
+    contextual_key_separability_parser.add_argument("--context-role", type=str, default="prediction")
+    contextual_key_separability_parser.add_argument("--group-by", type=str, default="query_key")
+    contextual_key_separability_parser.add_argument("--projection-rank", type=int, default=4)
+    contextual_key_separability_parser.add_argument("--batch-size", type=int, default=16)
+    contextual_key_separability_parser.add_argument("--split", type=str, action="append", default=None)
+    contextual_key_separability_parser.add_argument("--include-full-residual", action="store_true")
+    contextual_key_separability_parser.add_argument("--behavior-rows", type=Path, default=None)
+    contextual_key_separability_parser.add_argument("--behavior-split", type=str, default="__all__")
+    contextual_key_separability_parser.add_argument("--behavior-margin-field", type=str, default="baseline_margin_mean")
+    contextual_key_separability_parser.add_argument("--behavior-accuracy-field", type=str, default="baseline_accuracy")
+    contextual_key_separability_parser.add_argument("--window-start", type=int, default=None)
+    contextual_key_separability_parser.add_argument("--window-end", type=int, default=None)
+    contextual_key_separability_parser.add_argument("--overwrite", action="store_true")
+
+    bilinear_qk_parser = subparsers.add_parser("bilinear-qk-match-separation")
+    bilinear_qk_parser.add_argument("--config", type=Path, required=True)
+    bilinear_qk_parser.add_argument("--probe-set", type=Path, required=True)
+    bilinear_qk_parser.add_argument("--checkpoint-dir", type=Path, required=True)
+    bilinear_qk_parser.add_argument("--checkpoint", type=Path, action="append", default=None)
+    bilinear_qk_parser.add_argument("--output-dir", type=Path, required=True)
+    bilinear_qk_parser.add_argument("--device", type=str, default="cpu")
+    bilinear_qk_parser.add_argument("--head-layer", type=int, required=True)
+    bilinear_qk_parser.add_argument("--head", type=int, required=True)
+    bilinear_qk_parser.add_argument("--context-stage", type=str, action="append", required=True)
+    bilinear_qk_parser.add_argument("--score-query-role", type=str, default="prediction")
+    bilinear_qk_parser.add_argument("--support-role", type=str, required=True)
+    bilinear_qk_parser.add_argument("--distractor-role", type=str, required=True)
+    bilinear_qk_parser.add_argument("--layernorm-mode", type=str, default="head_ln1")
+    bilinear_qk_parser.add_argument("--score-mode", type=str, action="append", default=[])
+    bilinear_qk_parser.add_argument("--rank", type=int, action="append", default=[])
+    bilinear_qk_parser.add_argument("--group-by", type=str, default="query_key")
+    bilinear_qk_parser.add_argument("--batch-size", type=int, default=16)
+    bilinear_qk_parser.add_argument("--split", type=str, action="append", default=None)
+    bilinear_qk_parser.add_argument("--window-start", type=int, default=None)
+    bilinear_qk_parser.add_argument("--window-end", type=int, default=None)
+    bilinear_qk_parser.add_argument("--overwrite", action="store_true")
+
+    bilinear_qk_rank_update_parser = subparsers.add_parser("bilinear-qk-rank-update-attribution")
+    bilinear_qk_rank_update_parser.add_argument("--config", type=Path, required=True)
+    bilinear_qk_rank_update_parser.add_argument("--probe-set", type=Path, required=True)
+    bilinear_qk_rank_update_parser.add_argument("--checkpoint-dir", type=Path, required=True)
+    bilinear_qk_rank_update_parser.add_argument("--output-dir", type=Path, required=True)
+    bilinear_qk_rank_update_parser.add_argument("--device", type=str, default="cpu")
+    bilinear_qk_rank_update_parser.add_argument("--checkpoint", type=Path, action="append", default=None)
+    bilinear_qk_rank_update_parser.add_argument("--head-layer", type=int, required=True)
+    bilinear_qk_rank_update_parser.add_argument("--head", type=int, required=True)
+    bilinear_qk_rank_update_parser.add_argument("--rank", type=int, action="append", required=True)
+    bilinear_qk_rank_update_parser.add_argument("--context-stage", type=str, required=True)
+    bilinear_qk_rank_update_parser.add_argument("--layernorm-mode", type=str, default="head_ln1")
+    bilinear_qk_rank_update_parser.add_argument("--score-query-role", type=str, required=True)
+    bilinear_qk_rank_update_parser.add_argument("--support-key-role", type=str, required=True)
+    bilinear_qk_rank_update_parser.add_argument("--distractor-key-role", type=str, required=True)
+    bilinear_qk_rank_update_parser.add_argument("--record-side", type=str, action="append", default=None)
+    bilinear_qk_rank_update_parser.add_argument("--pair-type", type=str, action="append", required=True)
+    bilinear_qk_rank_update_parser.add_argument("--max-pairs-per-type", type=int, default=64)
+    bilinear_qk_rank_update_parser.add_argument("--min-pairs-per-type", type=int, default=1)
+    bilinear_qk_rank_update_parser.add_argument("--split", type=str, action="append", default=None)
+    bilinear_qk_rank_update_parser.add_argument("--decompose", type=str, action="append", default=None)
+    bilinear_qk_rank_update_parser.add_argument("--top-k-groups", type=int, default=40)
+    bilinear_qk_rank_update_parser.add_argument("--min-error-denominator", type=float, default=1.0e-9)
+
+    bilinear_qk_rank_data_parser = subparsers.add_parser("bilinear-qk-rank-data-attribution")
+    bilinear_qk_rank_data_parser.add_argument("--config", type=Path, required=True)
+    bilinear_qk_rank_data_parser.add_argument("--probe-set", type=Path, required=True)
+    bilinear_qk_rank_data_parser.add_argument("--data-probe-set", type=Path, required=True)
+    bilinear_qk_rank_data_parser.add_argument("--checkpoint-dir", type=Path, required=True)
+    bilinear_qk_rank_data_parser.add_argument("--output-dir", type=Path, required=True)
+    bilinear_qk_rank_data_parser.add_argument("--device", type=str, default="cpu")
+    bilinear_qk_rank_data_parser.add_argument("--checkpoint", type=Path, action="append", default=None)
+    bilinear_qk_rank_data_parser.add_argument("--head-layer", type=int, required=True)
+    bilinear_qk_rank_data_parser.add_argument("--head", type=int, required=True)
+    bilinear_qk_rank_data_parser.add_argument("--rank", type=int, action="append", required=True)
+    bilinear_qk_rank_data_parser.add_argument("--context-stage", type=str, required=True)
+    bilinear_qk_rank_data_parser.add_argument("--layernorm-mode", type=str, default="head_ln1")
+    bilinear_qk_rank_data_parser.add_argument("--score-query-role", type=str, required=True)
+    bilinear_qk_rank_data_parser.add_argument("--support-key-role", type=str, required=True)
+    bilinear_qk_rank_data_parser.add_argument("--distractor-key-role", type=str, required=True)
+    bilinear_qk_rank_data_parser.add_argument("--record-side", type=str, default="clean")
+    bilinear_qk_rank_data_parser.add_argument("--route-pair-type", type=str, required=True)
+    bilinear_qk_rank_data_parser.add_argument("--route-pair-source-type", type=str, action="append", required=True)
+    bilinear_qk_rank_data_parser.add_argument("--route-split", type=str, default="__all__")
+    bilinear_qk_rank_data_parser.add_argument("--route-split-filter", type=str, action="append", default=None)
+    bilinear_qk_rank_data_parser.add_argument("--data-pair-type", type=str, action="append", required=True)
+    bilinear_qk_rank_data_parser.add_argument("--data-split-filter", type=str, action="append", default=None)
+    bilinear_qk_rank_data_parser.add_argument("--data-group-field", type=str, action="append", required=True)
+    bilinear_qk_rank_data_parser.add_argument("--max-route-pairs-per-type", type=int, default=64)
+    bilinear_qk_rank_data_parser.add_argument("--min-route-pairs-per-type", type=int, default=1)
+    bilinear_qk_rank_data_parser.add_argument("--max-data-pairs-per-type", type=int, default=64)
+    bilinear_qk_rank_data_parser.add_argument("--min-data-pairs-per-type", type=int, default=1)
+    bilinear_qk_rank_data_parser.add_argument("--loss-side", type=str, default="clean")
+    bilinear_qk_rank_data_parser.add_argument("--loss-scope", type=str, default="full_lm")
+    bilinear_qk_rank_data_parser.add_argument("--top-k-data-groups", type=int, default=24)
+    bilinear_qk_rank_data_parser.add_argument("--min-error-denominator", type=float, default=1.0e-9)
+
+    bilinear_qk_rank_actual_batch_parser = subparsers.add_parser("bilinear-qk-rank-actual-batch-attribution")
+    bilinear_qk_rank_actual_batch_parser.add_argument("--config", type=Path, required=True)
+    bilinear_qk_rank_actual_batch_parser.add_argument("--probe-set", type=Path, required=True)
+    bilinear_qk_rank_actual_batch_parser.add_argument("--optimizer-trace-dir", type=Path, required=True)
+    bilinear_qk_rank_actual_batch_parser.add_argument("--output-dir", type=Path, required=True)
+    bilinear_qk_rank_actual_batch_parser.add_argument("--device", type=str, default="cpu")
+    bilinear_qk_rank_actual_batch_parser.add_argument("--checkpoint", type=Path, action="append", default=None)
+    bilinear_qk_rank_actual_batch_parser.add_argument("--head-layer", type=int, required=True)
+    bilinear_qk_rank_actual_batch_parser.add_argument("--head", type=int, required=True)
+    bilinear_qk_rank_actual_batch_parser.add_argument("--rank", type=int, action="append", required=True)
+    bilinear_qk_rank_actual_batch_parser.add_argument("--context-stage", type=str, required=True)
+    bilinear_qk_rank_actual_batch_parser.add_argument("--layernorm-mode", type=str, default="head_ln1")
+    bilinear_qk_rank_actual_batch_parser.add_argument("--score-query-role", type=str, required=True)
+    bilinear_qk_rank_actual_batch_parser.add_argument("--support-key-role", type=str, required=True)
+    bilinear_qk_rank_actual_batch_parser.add_argument("--distractor-key-role", type=str, required=True)
+    bilinear_qk_rank_actual_batch_parser.add_argument("--record-side", type=str, default="clean")
+    bilinear_qk_rank_actual_batch_parser.add_argument("--route-pair-type", type=str, required=True)
+    bilinear_qk_rank_actual_batch_parser.add_argument("--route-pair-source-type", type=str, action="append", required=True)
+    bilinear_qk_rank_actual_batch_parser.add_argument("--route-split", type=str, default="__all__")
+    bilinear_qk_rank_actual_batch_parser.add_argument("--route-split-filter", type=str, action="append", default=None)
+    bilinear_qk_rank_actual_batch_parser.add_argument("--train-split", type=str, default="train")
+    bilinear_qk_rank_actual_batch_parser.add_argument("--max-route-pairs-per-type", type=int, default=64)
+    bilinear_qk_rank_actual_batch_parser.add_argument("--min-route-pairs-per-type", type=int, default=1)
+    bilinear_qk_rank_actual_batch_parser.add_argument("--loss-scope", type=str, default="full_lm")
+    bilinear_qk_rank_actual_batch_parser.add_argument("--loss-match-tolerance", type=float, default=1.0e-4)
+    bilinear_qk_rank_actual_batch_parser.add_argument("--top-k-data-groups", type=int, default=24)
+    bilinear_qk_rank_actual_batch_parser.add_argument("--min-error-denominator", type=float, default=1.0e-9)
+    bilinear_qk_rank_actual_batch_parser.add_argument("--overwrite", action="store_true")
+
+    bilinear_qk_rank_adam_state_parser = subparsers.add_parser("bilinear-qk-rank-adam-state-attribution")
+    bilinear_qk_rank_adam_state_parser.add_argument("--config", type=Path, required=True)
+    bilinear_qk_rank_adam_state_parser.add_argument("--probe-set", type=Path, required=True)
+    bilinear_qk_rank_adam_state_parser.add_argument("--optimizer-trace-dir", type=Path, required=True)
+    bilinear_qk_rank_adam_state_parser.add_argument("--output-dir", type=Path, required=True)
+    bilinear_qk_rank_adam_state_parser.add_argument("--device", type=str, default="cpu")
+    bilinear_qk_rank_adam_state_parser.add_argument("--checkpoint", type=Path, action="append", default=None)
+    bilinear_qk_rank_adam_state_parser.add_argument("--head-layer", type=int, required=True)
+    bilinear_qk_rank_adam_state_parser.add_argument("--head", type=int, required=True)
+    bilinear_qk_rank_adam_state_parser.add_argument("--rank", type=int, action="append", required=True)
+    bilinear_qk_rank_adam_state_parser.add_argument("--context-stage", type=str, required=True)
+    bilinear_qk_rank_adam_state_parser.add_argument("--layernorm-mode", type=str, default="head_ln1")
+    bilinear_qk_rank_adam_state_parser.add_argument("--score-query-role", type=str, required=True)
+    bilinear_qk_rank_adam_state_parser.add_argument("--support-key-role", type=str, required=True)
+    bilinear_qk_rank_adam_state_parser.add_argument("--distractor-key-role", type=str, required=True)
+    bilinear_qk_rank_adam_state_parser.add_argument("--record-side", type=str, default="clean")
+    bilinear_qk_rank_adam_state_parser.add_argument("--route-pair-type", type=str, required=True)
+    bilinear_qk_rank_adam_state_parser.add_argument("--route-pair-source-type", type=str, action="append", required=True)
+    bilinear_qk_rank_adam_state_parser.add_argument("--route-split", type=str, default="__all__")
+    bilinear_qk_rank_adam_state_parser.add_argument("--route-split-filter", type=str, action="append", default=None)
+    bilinear_qk_rank_adam_state_parser.add_argument("--train-split", type=str, default="train")
+    bilinear_qk_rank_adam_state_parser.add_argument("--max-route-pairs-per-type", type=int, default=64)
+    bilinear_qk_rank_adam_state_parser.add_argument("--min-route-pairs-per-type", type=int, default=1)
+    bilinear_qk_rank_adam_state_parser.add_argument("--loss-scope", type=str, default="full_lm")
+    bilinear_qk_rank_adam_state_parser.add_argument("--loss-match-tolerance", type=float, default=1.0e-4)
+    bilinear_qk_rank_adam_state_parser.add_argument("--grad-norm-match-tolerance", type=float, default=1.0e-4)
+    bilinear_qk_rank_adam_state_parser.add_argument("--min-error-denominator", type=float, default=1.0e-9)
+    bilinear_qk_rank_adam_state_parser.add_argument("--overwrite", action="store_true")
 
     args = parser.parse_args()
     if args.command == "generate-benchmark":
@@ -2151,24 +2322,29 @@ def main() -> None:
         if args.end_step is not None and args.num_steps is not None:
             raise ValueError("Expected only one of --end-step or --num-steps.")
         if args.end_step is None:
-            from circuit.runtime import load_checkpoint, require_device
+            if args.from_initialization:
+                end_step = int(args.num_steps)
+            else:
+                from circuit.runtime import load_checkpoint, require_device
 
-            from circuit.config import TrainSpec
+                from circuit.config import TrainSpec
 
-            spec = TrainSpec.from_path(args.config)
-            device = require_device(args.device if args.device is not None else spec.device)
-            checkpoint = load_checkpoint(args.resume_checkpoint, device)
-            end_step = int(checkpoint["step"]) + int(args.num_steps)
+                spec = TrainSpec.from_path(args.config)
+                device = require_device(args.device if args.device is not None else spec.device)
+                checkpoint = load_checkpoint(args.resume_checkpoint, device)
+                end_step = int(checkpoint["step"]) + int(args.num_steps)
         else:
             end_step = int(args.end_step)
         report_path, markdown_path, step_rows_path, batch_rows_path, parameter_update_rows_path, checkpoint_dir = run_optimizer_update_trace(
             config_path=args.config,
             resume_checkpoint=args.resume_checkpoint,
+            from_initialization=args.from_initialization,
             output_dir=args.output_dir,
             end_step=end_step,
             device_name=args.device,
             train_split=args.train_split,
             checkpoint_every_steps=args.checkpoint_every,
+            checkpoint_start_step=args.checkpoint_start_step,
             progress_every_steps=args.progress_every,
             top_k_parameters=args.top_k_parameters,
             overwrite=args.overwrite,
@@ -2696,6 +2872,284 @@ def main() -> None:
                 "subspace_rows": str(subspace_rows_path),
                 "role_vector_rows": str(role_vector_rows_path),
                 "plots": {key: str(value) for key, value in plot_paths.items()},
+            }
+        )
+        return
+    if args.command == "contextual-key-separability":
+        (
+            report_path,
+            markdown_path,
+            metric_rows_path,
+            metric_csv_path,
+            group_rows_path,
+            plot_paths,
+        ) = run_contextual_key_separability(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            checkpoint_dir=args.checkpoint_dir,
+            output_dir=args.output_dir,
+            checkpoint_paths=args.checkpoint,
+            device_name=args.device,
+            head_layer=args.head_layer,
+            head=args.head,
+            context_stages=args.context_stage,
+            context_role=args.context_role,
+            group_by=args.group_by,
+            projection_rank=args.projection_rank,
+            batch_size=args.batch_size,
+            split_filter=args.split,
+            include_full_residual=args.include_full_residual,
+            behavior_rows_path=args.behavior_rows,
+            behavior_split=args.behavior_split,
+            behavior_margin_field=args.behavior_margin_field,
+            behavior_accuracy_field=args.behavior_accuracy_field,
+            window_start=args.window_start,
+            window_end=args.window_end,
+            overwrite=args.overwrite,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "metric_rows": str(metric_rows_path),
+                "metric_csv": str(metric_csv_path),
+                "group_rows": str(group_rows_path),
+                "plots": {key: str(value) for key, value in plot_paths.items()},
+            }
+        )
+        return
+    if args.command == "bilinear-qk-match-separation":
+        (
+            report_path,
+            markdown_path,
+            metric_rows_path,
+            metric_csv_path,
+            event_rows_path,
+            group_rows_path,
+            plot_paths,
+        ) = run_bilinear_qk_match_separation(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            checkpoint_dir=args.checkpoint_dir,
+            output_dir=args.output_dir,
+            checkpoint_paths=args.checkpoint,
+            device_name=args.device,
+            head_layer=args.head_layer,
+            head=args.head,
+            context_stages=args.context_stage,
+            score_query_role=args.score_query_role,
+            support_role=args.support_role,
+            distractor_role=args.distractor_role,
+            layernorm_mode=args.layernorm_mode,
+            score_modes=args.score_mode,
+            ranks=args.rank,
+            group_by=args.group_by,
+            batch_size=args.batch_size,
+            split_filter=args.split,
+            window_start=args.window_start,
+            window_end=args.window_end,
+            overwrite=args.overwrite,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "metric_rows": str(metric_rows_path),
+                "metric_csv": str(metric_csv_path),
+                "event_rows": str(event_rows_path),
+                "group_rows": str(group_rows_path),
+                "plots": {key: str(value) for key, value in plot_paths.items()},
+            }
+        )
+        return
+    if args.command == "bilinear-qk-rank-update-attribution":
+        (
+            report_path,
+            markdown_path,
+            metric_rows_path,
+            decomposition_rows_path,
+            group_rows_path,
+            score_rows_path,
+            pair_rows_path,
+            plot_paths,
+        ) = run_bilinear_qk_rank_update_attribution(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            checkpoint_dir=args.checkpoint_dir,
+            output_dir=args.output_dir,
+            checkpoint_paths=args.checkpoint,
+            device_name=args.device,
+            head_layer=args.head_layer,
+            head=args.head,
+            ranks=args.rank,
+            context_stage=args.context_stage,
+            layernorm_mode=args.layernorm_mode,
+            score_query_role=args.score_query_role,
+            support_key_role=args.support_key_role,
+            distractor_key_role=args.distractor_key_role,
+            record_sides=args.record_side,
+            pair_types=args.pair_type,
+            max_pairs_per_type=args.max_pairs_per_type,
+            min_pairs_per_type=args.min_pairs_per_type,
+            split_filter=args.split,
+            decomposition_modes=args.decompose,
+            top_k_groups=args.top_k_groups,
+            min_error_denominator=args.min_error_denominator,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "metric_rows": str(metric_rows_path),
+                "decomposition_rows": str(decomposition_rows_path),
+                "group_rows": str(group_rows_path),
+                "score_rows": str(score_rows_path),
+                "pair_rows": str(pair_rows_path),
+                "plots": {key: str(value) for key, value in plot_paths.items()},
+            }
+        )
+        return
+    if args.command == "bilinear-qk-rank-data-attribution":
+        (
+            report_path,
+            markdown_path,
+            route_rows_path,
+            data_rows_path,
+            route_pair_rows_path,
+            data_pair_rows_path,
+        ) = run_bilinear_qk_rank_data_attribution(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            data_probe_set_path=args.data_probe_set,
+            checkpoint_dir=args.checkpoint_dir,
+            output_dir=args.output_dir,
+            checkpoint_paths=args.checkpoint,
+            device_name=args.device,
+            head_layer=args.head_layer,
+            head=args.head,
+            ranks=args.rank,
+            context_stage=args.context_stage,
+            layernorm_mode=args.layernorm_mode,
+            score_query_role=args.score_query_role,
+            support_key_role=args.support_key_role,
+            distractor_key_role=args.distractor_key_role,
+            record_side=args.record_side,
+            route_pair_types=args.route_pair_source_type,
+            route_pair_type=args.route_pair_type,
+            route_split=args.route_split,
+            route_split_filter=args.route_split_filter,
+            data_pair_types=args.data_pair_type,
+            data_split_filter=args.data_split_filter,
+            data_group_fields=args.data_group_field,
+            max_route_pairs_per_type=args.max_route_pairs_per_type,
+            min_route_pairs_per_type=args.min_route_pairs_per_type,
+            max_data_pairs_per_type=args.max_data_pairs_per_type,
+            min_data_pairs_per_type=args.min_data_pairs_per_type,
+            loss_side=args.loss_side,
+            loss_scope=args.loss_scope,
+            top_k_data_groups=args.top_k_data_groups,
+            min_error_denominator=args.min_error_denominator,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "route_rows": str(route_rows_path),
+                "data_rows": str(data_rows_path),
+                "route_pair_rows": str(route_pair_rows_path),
+                "data_pair_rows": str(data_pair_rows_path),
+            }
+        )
+        return
+    if args.command == "bilinear-qk-rank-actual-batch-attribution":
+        (
+            report_path,
+            markdown_path,
+            route_rows_path,
+            actual_batch_rows_path,
+            route_pair_rows_path,
+        ) = run_bilinear_qk_rank_actual_batch_attribution(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            optimizer_trace_dir=args.optimizer_trace_dir,
+            output_dir=args.output_dir,
+            checkpoint_paths=args.checkpoint,
+            device_name=args.device,
+            head_layer=args.head_layer,
+            head=args.head,
+            ranks=args.rank,
+            context_stage=args.context_stage,
+            layernorm_mode=args.layernorm_mode,
+            score_query_role=args.score_query_role,
+            support_key_role=args.support_key_role,
+            distractor_key_role=args.distractor_key_role,
+            record_side=args.record_side,
+            route_pair_types=args.route_pair_source_type,
+            route_pair_type=args.route_pair_type,
+            route_split=args.route_split,
+            route_split_filter=args.route_split_filter,
+            train_split=args.train_split,
+            max_route_pairs_per_type=args.max_route_pairs_per_type,
+            min_route_pairs_per_type=args.min_route_pairs_per_type,
+            loss_scope=args.loss_scope,
+            loss_match_tolerance=args.loss_match_tolerance,
+            top_k_data_groups=args.top_k_data_groups,
+            min_error_denominator=args.min_error_denominator,
+            overwrite=args.overwrite,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "route_rows": str(route_rows_path),
+                "actual_batch_rows": str(actual_batch_rows_path),
+                "route_pair_rows": str(route_pair_rows_path),
+            }
+        )
+        return
+    if args.command == "bilinear-qk-rank-adam-state-attribution":
+        (
+            report_path,
+            markdown_path,
+            metric_rows_path,
+            component_rows_path,
+            route_pair_rows_path,
+        ) = run_bilinear_qk_rank_adam_state_attribution(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            optimizer_trace_dir=args.optimizer_trace_dir,
+            output_dir=args.output_dir,
+            checkpoint_paths=args.checkpoint,
+            device_name=args.device,
+            head_layer=args.head_layer,
+            head=args.head,
+            ranks=args.rank,
+            context_stage=args.context_stage,
+            layernorm_mode=args.layernorm_mode,
+            score_query_role=args.score_query_role,
+            support_key_role=args.support_key_role,
+            distractor_key_role=args.distractor_key_role,
+            record_side=args.record_side,
+            route_pair_types=args.route_pair_source_type,
+            route_pair_type=args.route_pair_type,
+            route_split=args.route_split,
+            route_split_filter=args.route_split_filter,
+            train_split=args.train_split,
+            max_route_pairs_per_type=args.max_route_pairs_per_type,
+            min_route_pairs_per_type=args.min_route_pairs_per_type,
+            loss_scope=args.loss_scope,
+            loss_match_tolerance=args.loss_match_tolerance,
+            grad_norm_match_tolerance=args.grad_norm_match_tolerance,
+            min_error_denominator=args.min_error_denominator,
+            overwrite=args.overwrite,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "metric_rows": str(metric_rows_path),
+                "component_rows": str(component_rows_path),
+                "route_pair_rows": str(route_pair_rows_path),
             }
         )
         return

@@ -11,7 +11,7 @@ from torch.nn.utils import clip_grad_norm_
 from circuit.config import TrainSpec
 from circuit.io import append_jsonl, write_json
 from circuit.runtime import compute_lm_loss, save_checkpoint, set_seed
-from circuit.train import _resume_training_state, _set_learning_rate, _to_jsonable, make_data_loader
+from circuit.train import build_run_context, _resume_training_state, _set_learning_rate, _to_jsonable, make_data_loader
 from circuit.vocab import Vocabulary
 
 
@@ -149,10 +149,11 @@ def _parameter_update_rows(
 
 
 def _write_markdown_report(path: Path, report: dict[str, Any]) -> None:
+    start_source_label = "resume checkpoint" if report["trace_start_mode"] == "resume_checkpoint" else "start source"
     lines = [
         "# Optimizer Update Trace",
         "",
-        "This artifact records real optimizer steps from a resumed checkpoint.",
+        "This artifact records real optimizer steps from an instrumented training run.",
         "",
         "## Replay Status",
         "",
@@ -161,10 +162,12 @@ def _write_markdown_report(path: Path, report: dict[str, Any]) -> None:
         "",
         "## Trace",
         "",
-        f"- resume checkpoint: `{report['resume_checkpoint']}`",
+        f"- start mode: `{report['trace_start_mode']}`",
+        f"- {start_source_label}: `{report['resume_checkpoint'] if report['trace_start_mode'] == 'resume_checkpoint' else 'initialization'}`",
         f"- checkpoint directory: `{report['checkpoint_dir']}`",
         f"- traced steps: `{report['trace_start_step']} -> {report['trace_end_step']}`",
         f"- checkpoint interval: `{report['checkpoint_every_steps']}`",
+        f"- checkpoint start step: `{report['checkpoint_start_step']}`",
         f"- step rows: `{report['step_rows_path']}`",
         f"- batch rows: `{report['batch_rows_path']}`",
         f"- parameter update rows: `{report['parameter_update_rows_path']}`",
@@ -185,18 +188,22 @@ def _write_markdown_report(path: Path, report: dict[str, Any]) -> None:
 def run_optimizer_update_trace(
     *,
     config_path: Path,
-    resume_checkpoint: Path,
+    resume_checkpoint: Path | None,
+    from_initialization: bool = False,
     output_dir: Path,
     end_step: int,
     device_name: str | None,
     train_split: str,
     checkpoint_every_steps: int,
+    checkpoint_start_step: int | None = None,
     progress_every_steps: int,
     top_k_parameters: int,
     overwrite: bool = False,
     require_historical_replay: bool = False,
 ) -> tuple[Path, Path, Path, Path, Path, Path]:
-    if require_historical_replay:
+    if from_initialization == (resume_checkpoint is not None):
+        raise ValueError("Expected exactly one of resume_checkpoint or from_initialization=True.")
+    if require_historical_replay and not from_initialization:
         raise RuntimeError(_HISTORICAL_REPLAY_BLOCKER)
     if checkpoint_every_steps <= 0:
         raise ValueError("checkpoint_every_steps must be positive.")
@@ -214,18 +221,46 @@ def run_optimizer_update_trace(
     if device_name is not None:
         spec = replace(spec, device=device_name)
     set_seed(spec.seed)
-    context = _resume_training_state(spec=spec, resume_checkpoint=resume_checkpoint)
+    if from_initialization:
+        context = build_run_context(spec)
+        start_step = 0
+        latest_eval: dict[str, Any] = {}
+        trace_start_mode = "from_initialization"
+        replay_status = "instrumented_from_initialization_exact_for_this_trace"
+        replay_blocker = (
+            "This trace starts at initialization and records its own batch stream and optimizer steps. "
+            "It is exact for this traced run; it is not a replay of an older run whose batch/RNG state was not saved."
+        )
+    else:
+        if resume_checkpoint is None:
+            raise ValueError("resume_checkpoint is required unless from_initialization=True.")
+        context = _resume_training_state(spec=spec, resume_checkpoint=resume_checkpoint)
+        start_step = int(context["start_step"])
+        latest_eval = context.get("latest_eval", {})
+        trace_start_mode = "resume_checkpoint"
+        replay_status = "instrumented_continuation_not_historical_replay"
+        replay_blocker = _HISTORICAL_REPLAY_BLOCKER
     metadata = context["metadata"]
     vocab: Vocabulary = context["vocab"]
     device: torch.device = context["device"]
     model: torch.nn.Module = context["model"]
     optimizer: torch.optim.Optimizer = context["optimizer"]
-    start_step = int(context["start_step"])
-    latest_eval = context.get("latest_eval", {})
     if end_step <= start_step:
-        raise ValueError(f"end_step must be greater than resumed step {start_step}, got {end_step}.")
+        raise ValueError(f"end_step must be greater than trace start step {start_step}, got {end_step}.")
     if end_step > spec.num_steps:
         raise ValueError(f"end_step={end_step} exceeds config num_steps={spec.num_steps}.")
+    if checkpoint_start_step is None:
+        resolved_checkpoint_start_step = start_step
+    else:
+        resolved_checkpoint_start_step = int(checkpoint_start_step)
+    if resolved_checkpoint_start_step < start_step:
+        raise ValueError(
+            f"checkpoint_start_step={resolved_checkpoint_start_step} is before trace start step {start_step}."
+        )
+    if resolved_checkpoint_start_step > end_step:
+        raise ValueError(
+            f"checkpoint_start_step={resolved_checkpoint_start_step} is after trace end step {end_step}."
+        )
 
     train_loader = make_data_loader(
         benchmark_dir=spec.benchmark_dir,
@@ -248,17 +283,20 @@ def run_optimizer_update_trace(
 
     trace_config = {
         "config_path": str(config_path),
-        "resume_checkpoint": str(resume_checkpoint),
+        "trace_start_mode": trace_start_mode,
+        "resume_checkpoint": None if resume_checkpoint is None else str(resume_checkpoint),
+        "from_initialization": from_initialization,
         "output_dir": str(output_dir),
         "device": spec.device,
         "train_split": train_split,
         "trace_start_step": start_step,
         "trace_end_step": end_step,
         "checkpoint_every_steps": checkpoint_every_steps,
+        "checkpoint_start_step": resolved_checkpoint_start_step,
         "progress_every_steps": progress_every_steps,
         "top_k_parameters": top_k_parameters,
-        "historical_replay_status": "instrumented_continuation_not_historical_replay",
-        "historical_replay_blocker": _HISTORICAL_REPLAY_BLOCKER,
+        "historical_replay_status": replay_status,
+        "historical_replay_blocker": replay_blocker,
     }
     write_json(trace_config_path, trace_config)
 
@@ -281,7 +319,8 @@ def run_optimizer_update_trace(
         )
         saved_checkpoint_paths.append(str(checkpoint_path))
 
-    save_trace_checkpoint(start_step)
+    if start_step >= resolved_checkpoint_start_step:
+        save_trace_checkpoint(start_step)
     print(
         "[optimizer-update-trace] "
         f"start={start_step} end={end_step} split={train_split} device={device} "
@@ -338,7 +377,7 @@ def run_optimizer_update_trace(
         append_jsonl(step_rows_path, step_row)
         step_rows.append(step_row)
 
-        if step % checkpoint_every_steps == 0 or step == end_step:
+        if step >= resolved_checkpoint_start_step and (step % checkpoint_every_steps == 0 or step == end_step):
             save_trace_checkpoint(step)
         if progress_every_steps and (step == end_step or step % progress_every_steps == 0):
             print(
@@ -354,18 +393,21 @@ def run_optimizer_update_trace(
     report = {
         "trace_config_path": str(trace_config_path),
         "config_path": str(config_path),
-        "resume_checkpoint": str(resume_checkpoint),
+        "trace_start_mode": trace_start_mode,
+        "resume_checkpoint": None if resume_checkpoint is None else str(resume_checkpoint),
+        "from_initialization": from_initialization,
         "checkpoint_dir": str(checkpoint_dir),
         "step_rows_path": str(step_rows_path),
         "batch_rows_path": str(batch_rows_path),
         "parameter_update_rows_path": str(parameter_update_rows_path),
-        "historical_replay_status": "instrumented_continuation_not_historical_replay",
-        "historical_replay_blocker": _HISTORICAL_REPLAY_BLOCKER,
+        "historical_replay_status": replay_status,
+        "historical_replay_blocker": replay_blocker,
         "device": spec.device,
         "train_split": train_split,
         "trace_start_step": start_step,
         "trace_end_step": end_step,
         "checkpoint_every_steps": checkpoint_every_steps,
+        "checkpoint_start_step": resolved_checkpoint_start_step,
         "saved_checkpoints": saved_checkpoint_paths,
         "summary": {
             "num_traced_steps": num_steps,

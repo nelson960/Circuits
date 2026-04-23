@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="490" viewBox="0 0 980 490" role="img">
+<defs>
+<marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+<path d="M0,0 L0,6 L9,3 z" fill="#343434" />
+</marker>
+<style>
+.title{font:700 22px Georgia,serif;fill:#171615}.subtitle{font:15px Georgia,serif;fill:#4a4741}.label{font:14px Georgia,serif;fill:#2a2927}.small{font:12px Georgia,serif;fill:#5a5247}.tiny{font:10.5px Georgia,serif;fill:#5a5247}.axis{stroke:#4a4741;stroke-width:1}.grid{stroke:#ddd6c8;stroke-width:1}.box{fill:#fffdf8;stroke:#9b8f7e;stroke-width:1.4;rx:8}.ok{fill:#e7f3ed;stroke:#4f8f6f}.warn{fill:#fff4dc;stroke:#b78b3b}.open{fill:#f8e8e6;stroke:#aa615b}</style>
+</defs>
+<text x="32.0" y="36.0" class="title" text-anchor="start">Proof status after the current experiments</text>
+<text x="32.0" y="61.0" class="subtitle" text-anchor="start">The result is no longer only a trained-model story, but it is not a universal theorem.</text>
+<rect x="55.0" y="73.0" width="840.0" height="34.0" class="ok" />
+<text x="73.0" y="95.0" class="label" text-anchor="start">Behavior learns lookup</text>
+<text x="445.0" y="95.0" class="small" text-anchor="start">supported</text>
+<text x="640.0" y="95.0" class="small" text-anchor="start">heldout-pair accuracy is high</text>
+<rect x="55.0" y="115.0" width="840.0" height="34.0" class="warn" />
+<text x="73.0" y="137.0" class="label" text-anchor="start">Feature families reveal structure</text>
+<text x="445.0" y="137.0" class="small" text-anchor="start">supported as diagnostic</text>
+<text x="640.0" y="137.0" class="small" text-anchor="start">not natural atoms</text>
+<rect x="55.0" y="157.0" width="840.0" height="34.0" class="ok" />
+<text x="73.0" y="179.0" class="label" text-anchor="start">Route scalar C(theta)</text>
+<text x="445.0" y="179.0" class="small" text-anchor="start">supported</text>
+<text x="640.0" y="179.0" class="small" text-anchor="start">support-value separation</text>
+<rect x="55.0" y="199.0" width="840.0" height="34.0" class="ok" />
+<text x="73.0" y="221.0" class="label" text-anchor="start">Weight-level QK birth</text>
+<text x="445.0" y="221.0" class="small" text-anchor="start">supported</text>
+<text x="640.0" y="221.0" class="small" text-anchor="start">low-rank W_QK growth</text>
+<rect x="55.0" y="241.0" width="840.0" height="34.0" class="ok" />
+<text x="73.0" y="263.0" class="label" text-anchor="start">Optimizer-level why</text>
+<text x="445.0" y="263.0" class="small" text-anchor="start">supported for AdamW</text>
+<text x="640.0" y="263.0" class="small" text-anchor="start">raw SGD tiny, Adam state large</text>
+<rect x="55.0" y="283.0" width="840.0" height="34.0" class="ok" />
+<text x="73.0" y="305.0" class="label" text-anchor="start">Cross-seed role replication</text>
+<text x="445.0" y="305.0" class="small" text-anchor="start">supported</text>
+<text x="640.0" y="305.0" class="small" text-anchor="start">5 seeds, address changes</text>
+<rect x="55.0" y="325.0" width="840.0" height="34.0" class="open" />
+<text x="73.0" y="347.0" class="label" text-anchor="start">Full answer-margin closure</text>
+<text x="445.0" y="347.0" class="small" text-anchor="start">open</text>
+<text x="640.0" y="347.0" class="small" text-anchor="start">route family / OV side incomplete</text>
+<rect x="55.0" y="367.0" width="840.0" height="34.0" class="open" />
+<text x="73.0" y="389.0" class="label" text-anchor="start">Scaling to LLMs</text>
+<text x="445.0" y="389.0" class="small" text-anchor="start">open</text>
+<text x="640.0" y="389.0" class="small" text-anchor="start">requires candidate filtering</text>
+<text x="55.0" y="455.0" class="small" text-anchor="start">The paper should claim a detailed mechanistic accounting for this task, not a theorem about all transformers.</text>
+</svg>

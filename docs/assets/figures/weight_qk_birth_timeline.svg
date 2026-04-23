@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="430" viewBox="0 0 980 430" role="img">
+<defs>
+<marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+<path d="M0,0 L0,6 L9,3 z" fill="#343434" />
+</marker>
+<style>
+.title{font:700 22px Georgia,serif;fill:#171615}.subtitle{font:15px Georgia,serif;fill:#4a4741}.label{font:14px Georgia,serif;fill:#2a2927}.small{font:12px Georgia,serif;fill:#5a5247}.tiny{font:10.5px Georgia,serif;fill:#5a5247}.axis{stroke:#4a4741;stroke-width:1}.grid{stroke:#ddd6c8;stroke-width:1}.box{fill:#fffdf8;stroke:#9b8f7e;stroke-width:1.4;rx:8}.ok{fill:#e7f3ed;stroke:#4f8f6f}.warn{fill:#fff4dc;stroke:#b78b3b}.open{fill:#f8e8e6;stroke:#aa615b}</style>
+</defs>
+<text x="32.0" y="34.0" class="title" text-anchor="start">L2H1 W_QK forms a concentrated support-value matcher</text>
+<text x="32.0" y="58.0" class="subtitle" text-anchor="start">All curves are artifact-backed and min-max normalized for shape comparison.</text>
+<line x1="74.0" y1="368.0" x2="948.0" y2="368.0" class="grid" stroke="#ddd6c8" stroke-width="1"/>
+<text x="54.0" y="372.0" class="tiny" text-anchor="end">0.00</text>
+<line x1="74.0" y1="296.5" x2="948.0" y2="296.5" class="grid" stroke="#ddd6c8" stroke-width="1"/>
+<text x="54.0" y="300.5" class="tiny" text-anchor="end">0.25</text>
+<line x1="74.0" y1="225.0" x2="948.0" y2="225.0" class="grid" stroke="#ddd6c8" stroke-width="1"/>
+<text x="54.0" y="229.0" class="tiny" text-anchor="end">0.50</text>
+<line x1="74.0" y1="153.5" x2="948.0" y2="153.5" class="grid" stroke="#ddd6c8" stroke-width="1"/>
+<text x="54.0" y="157.5" class="tiny" text-anchor="end">0.75</text>
+<line x1="74.0" y1="82.0" x2="948.0" y2="82.0" class="grid" stroke="#ddd6c8" stroke-width="1"/>
+<text x="54.0" y="86.0" class="tiny" text-anchor="end">1.00</text>
+<line x1="74.0" y1="368.0" x2="948.0" y2="368.0" class="axis" stroke="#4a4741" stroke-width="1.2"/>
+<line x1="74.0" y1="82.0" x2="74.0" y2="368.0" class="axis" stroke="#4a4741" stroke-width="1.2"/>
+<line x1="74.0" y1="368.0" x2="74.0" y2="374.0" stroke="#4a4741" stroke-width="1"/>
+<text x="74.0" y="390.0" class="tiny" text-anchor="middle">250</text>
+<line x1="157.2" y1="368.0" x2="157.2" y2="374.0" stroke="#4a4741" stroke-width="1"/>
+<text x="157.2" y="390.0" class="tiny" text-anchor="middle">750</text>
+<line x1="448.6" y1="368.0" x2="448.6" y2="374.0" stroke="#4a4741" stroke-width="1"/>
+<text x="448.6" y="390.0" class="tiny" text-anchor="middle">2500</text>
+<line x1="615.0" y1="368.0" x2="615.0" y2="374.0" stroke="#4a4741" stroke-width="1"/>
+<text x="615.0" y="390.0" class="tiny" text-anchor="middle">3500</text>
+<line x1="948.0" y1="368.0" x2="948.0" y2="374.0" stroke="#4a4741" stroke-width="1"/>
+<text x="948.0" y="390.0" class="tiny" text-anchor="middle">5500</text>
+<text x="511.0" y="412.0" class="small" text-anchor="middle">training step</text>
+<text x="20.0" y="225.0" class="small" text-anchor="middle">min-max normalized</text>
+<line x1="157.2" y1="82.0" x2="157.2" y2="368.0" stroke="#a67c00" stroke-width="1.2"/>
+<line x1="615.0" y1="82.0" x2="615.0" y2="368.0" stroke="#a67c00" stroke-width="1.2"/>
+<text x="224.0" y="72.0" class="small" text-anchor="start">main formation window: 750 -&gt; 3500</text>
+<polyline fill="none" stroke="#245f73" stroke-width="2.5" points="74.0,368.0 115.6,364.4 157.2,360.0 198.9,352.7 240.5,345.9 282.1,331.0 323.7,314.9 365.3,303.3 407.0,271.7 448.6,217.9 490.2,178.8 531.8,161.0 573.4,150.6 615.0,150.0 656.7,153.3 698.3,146.7 739.9,138.1 781.5,126.1 823.1,115.1 864.8,104.5 906.4,91.5 948.0,82.0" />
+<line x1="688.0" y1="86.0" x2="720.0" y2="86.0" stroke="#245f73" stroke-width="3"/>
+<text x="728.0" y="90.0" class="small" text-anchor="start">W_QK top singular value</text>
+<polyline fill="none" stroke="#8f5a24" stroke-width="2.5" points="74.0,368.0 115.6,360.4 157.2,348.8 198.9,338.1 240.5,328.7 282.1,312.7 323.7,291.1 365.3,272.4 407.0,220.2 448.6,137.8 490.2,101.1 531.8,87.3 573.4,82.0 615.0,87.9 656.7,107.9 698.3,110.0 739.9,109.6 781.5,108.0 823.1,106.8 864.8,107.5 906.4,106.5 948.0,107.4" />
+<line x1="688.0" y1="108.0" x2="720.0" y2="108.0" stroke="#8f5a24" stroke-width="3"/>
+<text x="728.0" y="112.0" class="small" text-anchor="start">effective-rank compression</text>
+<polyline fill="none" stroke="#4f7f54" stroke-width="2.5" points="74.0,368.0 115.6,356.2 157.2,338.3 198.9,324.2 240.5,315.0 282.1,303.5 323.7,287.2 365.3,271.1 407.0,220.6 448.6,133.4 490.2,102.4 531.8,89.0 573.4,82.0 615.0,86.5 656.7,109.5 698.3,109.3 739.9,107.2 781.5,105.3 823.1,104.6 864.8,106.7 906.4,105.8 948.0,108.4" />
+<line x1="688.0" y1="130.0" x2="720.0" y2="130.0" stroke="#4f7f54" stroke-width="3"/>
+<text x="728.0" y="134.0" class="small" text-anchor="start">top-3 spectral mass</text>
+<polyline fill="none" stroke="#8b3f58" stroke-width="2.5" points="74.0,366.6 115.6,368.0 157.2,367.7 198.9,366.4 240.5,364.6 282.1,358.7 323.7,342.7 365.3,340.7 407.0,300.8 448.6,225.5 490.2,175.1 531.8,154.3 573.4,143.9 615.0,155.9 656.7,132.9 698.3,131.5 739.9,139.8 781.5,117.8 823.1,96.2 864.8,101.8 906.4,91.2 948.0,82.0" />
+<line x1="688.0" y1="152.0" x2="720.0" y2="152.0" stroke="#8b3f58" stroke-width="3"/>
+<text x="728.0" y="156.0" class="small" text-anchor="start">rank-8 support separation</text>
+</svg>

@@ -8,7 +8,7 @@ description: Checkpoint-level measurement design for symbolic key-value circuit 
 
 ## Current Status
 
-This document began as the checkpoint-level measurement plan. The project has now moved beyond the original coarse checkpoint sweep into route-level and actual-update analysis.
+This document began as the checkpoint-level measurement plan. The project has now moved beyond the original coarse checkpoint sweep into route-level, weight-level, optimizer-level, and cross-seed analysis.
 
 Current state:
 
@@ -23,12 +23,13 @@ fixed probe sets:
 current proof direction:
   dataset relation
     -> attention/residual route geometry
-    -> actual optimizer update
-    -> actual recorded batch support
-    -> answer-margin effect
+    -> low-rank W_QK weight formation
+    -> exact AdamW optimizer update decomposition
+    -> cross-seed role replication
+    -> remaining answer-margin closure work
 ```
 
-The old checkpoint plan is still useful, but it is no longer the whole research process. The next phase is not another broad checkpoint dashboard. It is closing the proof gaps found by the completed experiments.
+The old checkpoint plan is still useful, but it is no longer the whole research process. The current paper result is anchored on the support-value retrieval role, not on broad checkpoint dashboards.
 
 ## Purpose
 
@@ -69,16 +70,23 @@ Current formation run:
 Important selected windows:
 
 - early feature/coalition formation: around `1750 -> 2500`
-- mid route formation: around `4500 -> 8250`
-- traced optimizer continuation: `5500 -> 5550`
+- QK route birth and SVD concentration: `750 -> 3500`
+- mid/late route geometry: around `4500 -> 8250`
+- exact from-initialization optimizer trace: `0 -> 6000`
+- cross-seed Adam-state validation: `750 -> 2500`
 - late reference behavior: through `16000`
 
 Important completed actual-update artifacts:
 
 - optimizer trace: `analysis/optimizer_update_trace/l2h1_support_value_5500_5550_stepwise/`
+- exact from-init optimizer trace: `analysis/optimizer_update_trace/from_init_seed7_0000_6000_stepwise/`
 - actual-batch route attribution: `analysis/actual_batch_route_attribution/support_value_routes_5500_5550_stepwise/`
 - stepwise retrieval-separation attribution: `analysis/attention_retrieval_separation_update_attribution/`
+- weight-SVD trace: `analysis/weight_svd_trace/phase1_000250_5500_top16/`
+- bilinear QK rank update attribution: `analysis/bilinear_qk_rank_update_attribution/`
+- Adam-state route attribution: `analysis/bilinear_qk_rank_adam_state_attribution/from_init_l2h1_rank8_support_value_0000_6000_stepwise/`
 - support-value route competition: `analysis/route_competition/support_value_routes_5500_5550_stepwise/`
+- cross-seed validation root: `artifacts/runs/symbolic_kv_cross_seed_adam/`
 
 ## Fixed Analysis Inputs
 
@@ -340,32 +348,37 @@ Currently implemented:
 - attention retrieval-chain report
 - optimizer-update trace
 - actual-batch route attribution
+- weight-SVD trace and pattern report
+- contextual SVD alignment
+- contextual key separability
+- bilinear QK match separation
+- bilinear QK rank update attribution
+- exact from-initialization Adam-state route attribution
+- cross-seed head scan / winner-runner-bottom validation
 - research proof ledger
 
 ## Next Analysis Work To Build
 
-The original missing coarse tools are mostly no longer the blocker. The current missing work is proof closure:
+The original missing coarse tools are no longer the blocker. The current missing work is narrower proof closure and generalization:
 
-1. actual-batch query-key route attribution
-2. route-to-answer-margin closure in the same traced window
-3. second-order residual accounting for first-order attribution errors
-4. actual-batch route competition across a wider candidate set
-5. superposition-aware decomposition that avoids treating neurons as clean atoms
-6. cross-seed repeat of the role-level geometry and update results
-7. future exact training trace with batch stream recorded from the beginning
+1. value/write-side closure for OV and downstream MLP effects
+2. full answer-margin closure with a route family rather than one isolated head
+3. optimizer ablations or controlled runs comparing AdamW against plain SGD
+4. larger cross-seed and factor screens for depth, width, heads, learning rate, and weight decay
+5. route-family accounting for winner plus runner-up heads
+6. superposition-aware decomposition that avoids treating neurons as clean atoms
 
-The important new constraint from the completed actual-batch support-value run is:
+The important constraint from the completed support-value route work is:
 
 ```text
-recorded batches support L2H1,
-but broad residual routes receive more support,
-and batch-support ranking does not equal realized route-growth ranking.
+the support-value retrieval role is stable across seeds,
+but the named head that implements it changes.
 ```
 
 So the next analysis must explain:
 
 ```text
-batch support -> realized route growth
+role family growth -> answer-margin growth
 ```
 
 not merely measure positive support for one route.
@@ -389,7 +402,7 @@ Status: mostly completed for seed 7.
 - trace one-step optimizer continuations
 - connect actual recorded batches to route support
 
-Status: partially completed. The support-value actual-batch route attribution is complete; query-key actual-batch attribution and route-to-answer closure remain.
+Status: completed for the reference seed's QK support-value route. Exact from-initialization Adam-state attribution shows raw SGD is tiny and AdamW preconditioned current/momentum terms carry the route growth.
 
 ### Phase C: Seed Replication
 
@@ -401,7 +414,7 @@ Status: partially completed. The support-value actual-batch route attribution is
   - residual probe trajectories
   - stabilization timing
 
-Status: still missing for final claims.
+Status: completed for a 5-seed role-level validation. The same support-value retrieval role appears, but head identity is seed-dependent. Further seeds and factor screens are still useful for stronger external validity.
 
 ### Phase D: Factor Screens
 
@@ -439,7 +452,7 @@ Start with the all-checkpoint coarse sweep, then escalate only on selected windo
 For the current run, the decision rule has changed:
 
 ```text
-Do not add more broad observation tools until the proof gaps are closed.
-Prioritize actual-batch attribution, route-to-answer closure, residual-error accounting,
-and cross-seed repeat.
+Do not add more broad observation tools until the remaining proof gaps are closed.
+Prioritize value/write-side closure, route-family answer-margin closure,
+optimizer ablations, and broader seed/factor screens.
 ```
