@@ -715,7 +715,42 @@ How much came from momentum?
 How much came from weight decay?
 ```
 
-### 9. Output-side validation
+### 9. Route-family closure
+
+#### `route-family-closure-report`
+
+Use this after `route-to-margin-closure` when the expensive run already measured all route deltas, but you need to compare families such as QK-only, OV-only, and QK+OV on the same observations.
+
+This command does not recompute activations. It refits the existing closure rows with different route subsets.
+
+```bash
+PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli route-family-closure-report \
+  --route-closure-rows $ANALYSIS/route_to_margin_closure/qk_ov_output_routes_5500_5550_stepwise/route_to_margin_closure_rows.jsonl \
+  --output-dir $ANALYSIS/route_family_closure/qk_vs_ov_vs_joint_5500_5550_stepwise \
+  --family label=qk,route=L2H1_qk_query,route=L1H2_qk_query,route=L0H0_qk_query,route=embedding_key_identity,route=full_layer1_query_key,route=full_layer0_query_key \
+  --family label=ov_input,route=L2H1_ov_input_support_value,route=L1H2_ov_input_support_value,route=L0H0_ov_input_support_value,route=embedding_value_identity,route=full_layer1_support_value,route=full_layer0_support_value \
+  --family label=ov_output,route=L1H2_ov_output_prediction,route=L2H1_ov_output_prediction,route=full_layer1_post_attn_prediction,route=full_layer2_post_attn_prediction \
+  --family label=qk_plus_ov,route=L2H1_qk_query,route=L1H2_qk_query,route=L0H0_qk_query,route=embedding_key_identity,route=full_layer1_query_key,route=full_layer0_query_key,route=L2H1_ov_input_support_value,route=L1H2_ov_input_support_value,route=L0H0_ov_input_support_value,route=embedding_value_identity,route=full_layer1_support_value,route=full_layer0_support_value,route=L1H2_ov_output_prediction,route=L2H1_ov_output_prediction,route=full_layer1_post_attn_prediction,route=full_layer2_post_attn_prediction \
+  --target-scalar answer_margin \
+  --record-side clean \
+  --overwrite
+```
+
+Important outputs:
+
+- `family_summary_rows`
+- `interval_rows`
+- `coefficient_rows`
+- `plots.r_squared`
+- `plots.abs_residual`
+
+Use it for:
+
+- whether OV routes add explanatory power beyond QK routes
+- whether full QK+OV route-family closure improves answer-margin closure
+- deciding whether the OV side is head-local or residual-family-local
+
+### 10. Output-side validation
 
 Use these after route-level closure, not before.
 
@@ -760,7 +795,7 @@ Key outputs:
 - `summary_rows`
 - `plots.rescue_fraction`
 
-### 10. Cross-seed pipeline
+### 11. Cross-seed pipeline
 
 #### `scripts/cross_seed_adam_pipeline.py`
 

@@ -383,6 +383,27 @@ role family growth -> answer-margin growth
 
 not merely measure positive support for one route.
 
+For the OV side, "closure" should now mean a stricter standard than trained-model causal importance. The quality bar is:
+
+1. define explicit write-side progress scalars for one role at a time
+2. show weight-space birth for `W_OV` or downstream MLP write directions
+3. run actual-update, actual-batch, and Adam-state attribution on that write scalar
+4. combine QK and OV route families into answer-margin closure
+
+The target is not:
+
+```text
+some late writer has positive DLA
+```
+
+The target is:
+
+```text
+this write-side route forms in weight space,
+this optimizer update grows it,
+and adding it materially improves route-family closure to answer margin.
+```
+
 ## Practical Research Workflow
 
 ### Phase A: Single-Seed Formation Trace
@@ -402,7 +423,7 @@ Status: mostly completed for seed 7.
 - trace one-step optimizer continuations
 - connect actual recorded batches to route support
 
-Status: completed for the reference seed's QK support-value route. Exact from-initialization Adam-state attribution shows raw SGD is tiny and AdamW preconditioned current/momentum terms carry the route growth.
+Status: completed for the reference seed's QK support-value route. Exact from-initialization Adam-state attribution shows raw SGD is tiny and AdamW preconditioned current/momentum terms carry the route growth. The OV/write side is not yet closed to the same standard.
 
 ### Phase C: Seed Replication
 

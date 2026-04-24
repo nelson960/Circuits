@@ -33,7 +33,9 @@ We trained a 3-layer decoder-only transformer on a symbolic key-value lookup tas
 When the model reads key K, output the most recent value written for K.
 ```
 
-The final mechanism is not a clean table, a single neuron, or one stable feature family. It is a dense residual-stream mechanism. The strongest route-level object we found is a support-value retrieval scalar:
+The final mechanism is not a clean table, a single neuron, or one stable feature family. It is a dense residual-stream mechanism. That is not the disappointing part. Dense, shared implementations are the expected setting once a model is small enough to superpose several partial roles into the same substrate. The result here is that even inside that dense setting we can still isolate a task-meaningful route variable and trace how training grows it.
+
+The strongest route-level object we found is a support-value retrieval scalar:
 
 ```text
 C_r(theta)
@@ -51,14 +53,26 @@ behavior improves
   -> exact AdamW decomposition reconstructs the route-growth direction
 ```
 
-The most important optimizer result is negative and positive at the same time:
+The main contribution is the optimizer result. The most important finding is negative and positive at the same time:
 
 ```text
 raw SGD is far too small to explain the route formation;
 AdamW's preconditioned current-gradient and momentum terms carry the useful update.
 ```
 
+Behavioral closure is partially solved, not fully solved. In the `5500 -> 5550` stepwise window, a 12-route QK+support-value family explains about `41%` of raw moving answer-margin variance, and branch-aware output closure raises local moving-margin closure to about `61%`. That is strong enough to show the route family is behaviorally meaningful, but not yet strong enough to claim that a small route set fully explains answer-margin improvement.
+
 Across 5 additional seeds, the same support-value retrieval role appears, but the winning head changes. The circuit is stable as a role pattern and unstable as a named address.
+
+The closed story is cleanest on the QK routing side. The OV/value-write side is strongly localized in the trained model, but it is not yet explained with the same from-initialization optimizer precision. The honest scope of the current paper is therefore:
+
+```text
+closed:
+  dense QK-side retrieval-route formation
+
+partially closed:
+  OV-side write/readout organization
+```
 
 <figure class="paper-figure">
   <img src="assets/figures/updated_loss_to_lookup_chain.svg" alt="Updated loss to lookup chain">
@@ -69,6 +83,32 @@ Across 5 additional seeds, the same support-value retrieval role appears, but th
   <img src="assets/figures/circuit_formation_animation.svg" alt="Conceptual map from dense neuron motion to retrieval role">
   <figcaption><strong>Formation sketch.</strong> This is a conceptual map, not a measurement plot. It shows why the explanation had to move upward from neurons and feature families to route-level variables: many shared units move, candidate families compete, a support-value retrieval role consolidates, `W_QK` gives weight-level evidence for the role, and answer margin grows.</figcaption>
 </figure>
+
+## Scope And Positioning
+
+This paper is a controlled mechanistic case study, not a theorem about transformer training in general. The task is narrow on purpose. That narrowness buys exact traced updates, exact route attribution, and exact from-initialization optimizer decomposition. It is also a limitation: the task isolates one algorithm, so any claim about broader multitask superposition has to be treated as future work rather than an automatic corollary.
+
+The project sits between several existing threads:
+
+- [Toy Models of Superposition](https://www.anthropic.com/research/toy-models-of-superposition) explains why neuron-level explanations break down when features share dimensions.
+- [Progress measures for grokking via mechanistic interpretability](https://openreview.net/forum?id=9XFSbDPmdW) motivates task-specific mechanistic scalars that track formation before behavior looks clean.
+- [What needs to go right for an induction head?](https://openreview.net/forum?id=O8rrXl71D5) studies formation as an interaction among prerequisite subcircuits.
+- [LLM Circuit Analyses Are Consistent Across Training and Scale](https://openreview.net/forum?id=3Ds5vNudIE) argues that roles can remain stable even when component identity changes.
+
+Recent spectral-edge work is adjacent as well: it studies global update-spectrum phase transitions and weight-decay compression during grokking-like dynamics. This paper is narrower and more concrete. It does not try to explain all dominant update modes. It asks which task-specific retrieval route is being written, when it is written, and how much of that writing is carried by the realized AdamW update rather than the instantaneous raw gradient.
+
+So the point of the paper is not:
+
+```text
+density is surprising
+```
+
+The point is:
+
+```text
+despite density, route formation is still traceable from behavior
+to weights to optimizer state.
+```
 
 ## The Task
 
@@ -171,6 +211,14 @@ C_r(theta)
        - mean score_r(prediction, value_distractors) ]
 ```
 
+Here `score_r` is the route-local score produced by the measurement instrument for route `r`. Depending on the experiment, it is instantiated as an attention-score margin, a bilinear QK matcher score, or a patched-transfer route score. The important point is not one universal scoring function. The important point is that every instantiation measures the same role-level question:
+
+```text
+does this route separate the real support value from distractor values?
+```
+
+So `C_r` is best understood as a task-specific progress measure, not as a universal importance metric for all circuits. Direct Logit Attribution, patching, and causal ablations remain supporting tools in the paper. `C_r` plays a different role: it is the scalar we use to watch one algorithmic subproblem form during training.
+
 For the reference seed, the strongest version is:
 
 | field | value |
@@ -264,7 +312,7 @@ they are not the final proof object in this dense model.
 
 The right move was not to stop looking inside. It was to move to a better anchor: a task-meaningful route scalar, then decompose that route into weights, residual directions, gradients, and optimizer state.
 
-## The Trained-Model Causal Picture
+## The Trained-Model Causal Picture And The OV Gap
 
 Transformer attention naturally separates into two pieces:
 
@@ -374,7 +422,20 @@ late attention and MLP routes read and write closer to the answer;
 the mechanism is dense, sign-conflicted, and distributed.
 ```
 
-## Weight-Level Birth
+The right interpretation is not that density ruined the explanation. Density is the setting in which the explanation has to work. The current trained-model evidence already localizes an OV/write side: late components have cleaner direct readout, attended OV value margins grow, and residual rescue localizes where early infrastructure enters the stream. But the exact optimizer-level closure is asymmetric:
+
+```text
+QK side:
+  weight birth + exact AdamW route attribution
+
+OV side:
+  trained-model causal localization + mediation + rescue
+  but not yet the same from-init optimizer decomposition
+```
+
+That asymmetry matters. The current paper explains the birth of the routing half more cleanly than the write/readout half.
+
+## Weight-Level Birth Of The QK Route
 
 Routes tell us where computation appears to flow. To study formation, we need to watch the weights change.
 
@@ -451,9 +512,15 @@ the route separates the real support value from distractors.
 
 But correlation is still not a training explanation. A growing singular direction can track retrieval quality and still leave open whether that route was actually selected by the realized optimizer update, or whether it only co-moved with other changing quantities. To cross that gap we need to stop looking only at trajectories and start attributing the actual parameter movement.
 
-## Optimizer-Level Why
+## Optimizer-Level Why This Route Forms
 
 Weight growth still does not explain why the route formed. For that, we need the actual optimizer update.
+
+This is the paper's main contribution. Everything before this section establishes that the route is real, causal, and visible in weight space. This section asks the harder training-dynamics question:
+
+```text
+which part of the realized optimizer update actually writes the route?
+```
 
 The checkpoint update question is:
 
@@ -623,7 +690,66 @@ the circuit is stable as a role,
 but unstable as an address.
 ```
 
-This is stronger than saying “seed 7 uses L2H1.” It says the task tends to induce a support-value retrieval role, while random initialization decides which head implements it.
+This is the right replication target for a dense circuit paper. The goal is not one immortal head label. The goal is a role that reappears under different addresses. So this is stronger than saying “seed 7 uses L2H1.” It says the task tends to induce a support-value retrieval role, while random initialization decides which head implements it.
+
+## Current Closure Status
+
+The closure question is:
+
+```text
+how much of actual behavioral improvement is explained by the measured route family?
+```
+
+The current answer is mixed but useful.
+
+At the route-score level, a 12-route family combining query-key and support-value routes gives only partial direct closure on moving answer margin in the `5500 -> 5550` stepwise window:
+
+| closure object | observations | R squared | interpretation |
+| --- | ---: | ---: | --- |
+| route deltas -> moving answer margin | 6400 | 0.413 | route-family signal is real, but not behaviorally complete |
+| route deltas -> correct-value logit | 6400 | 0.603 | stronger closure on a smoother scalar than on moving margin |
+| route deltas -> fixed-source margin | 6400 | 0.411 | stable but incomplete local closure |
+
+This is already enough to rule out one bad interpretation:
+
+```text
+the measured route family is irrelevant to behavior
+```
+
+That is false. The measured route family clearly tracks meaningful output movement. But it is not yet a full closure result.
+
+The stronger closure result appears one level later, in output space. Using component output-DLA deltas on the same `5500 -> 5550` stepwise window:
+
+| scalar | bucket | observations | R squared |
+| --- | --- | ---: | ---: |
+| correct-value logit | all | 6400 | 0.783 |
+| fixed-source competitor margin | all | 6400 | 0.612 |
+| fixed-target competitor margin | all | 6400 | 0.613 |
+| moving answer margin | all | 6400 | 0.099 |
+| negative answer loss | all | 6400 | 0.842 |
+
+The weak raw moving-margin result turned out to be mostly a branch problem, not a total mechanism failure. When the wrong-token identity is held fixed, or when the branch term is added back exactly:
+
+| moving-margin closure variant | all rows R squared | competitor-switch rows R squared |
+| --- | ---: | ---: |
+| direct moving margin | 0.099 | 0.161 |
+| fixed-source + exact branch correction | 0.606 | 0.713 |
+| fixed-target + exact branch correction | 0.608 | 0.738 |
+
+So the current closure story is:
+
+```text
+route-only closure:
+  partial and real
+
+output-space closure:
+  strong for fixed margins and correct-value logit
+
+moving answer margin:
+  branch-sensitive, and therefore misleading unless competitor identity is handled explicitly
+```
+
+This is why the paper treats `negative_answer_loss`, `correct_value_logit`, and fixed-competitor margins as cleaner local proof scalars than raw moving margin. It also explains why full answer-margin closure remains open without contradicting the existing evidence.
 
 ## What Is Supported
 
@@ -648,6 +774,8 @@ Current supported claims:
 | Adam current-gradient and momentum terms carry most route growth | supported |
 | The support-value retrieval role appears across 5 additional seeds | supported |
 | The exact winning head is seed-dependent | supported |
+| A 12-route QK+support-value family gives partial local answer-margin closure in `5500 -> 5550` | supported |
+| Fixed-competitor and branch-aware closure are much better local proof objects than raw moving margin | supported |
 
 ## What Is Not Proven
 
@@ -660,6 +788,7 @@ Current limits:
 | The current/momentum split is seed-dependent and not yet systematically characterized | open |
 | SGD without AdamW would form the same route | not tested |
 | The same role appears for every possible seed | not proven |
+| The same optimizer-level story holds under wider, deeper, or multitask training | not proven |
 | The method scales directly to large language models | not proven |
 | Individual neurons are the right proof object | not supported |
 | Feature-family IDs are natural circuit atoms | not supported |
@@ -672,6 +801,36 @@ The role is not tied to one head identity.
 In the reference seed, rank-8 L2H1 W_QK becomes the clearest low-rank matcher.
 That matcher's route growth is explained by actual AdamW updates,
 while raw per-batch SGD is far too small to account for it.
+```
+
+The most precise closure claim is:
+
+```text
+in the traced 5500 -> 5550 local window,
+a measured QK+support-value route family explains part of answer-margin movement,
+and output-space branch-aware closure explains substantially more,
+but a small causal route family that closes most behavioral improvement is still not proven.
+```
+
+## Raising The OV-Side Standard
+
+The next research-quality target is not another QK plot. It is to make the OV/value-write side answerable with the same discipline used on the QK side.
+
+That means four concrete upgrades:
+
+| step | question | quality bar |
+| --- | --- | --- |
+| define write-side progress scalars | what exact write/read quantity is being grown? | one scalar per role, not a loose bundle of output metrics |
+| trace weight birth on the write side | does `W_OV` or a downstream MLP write direction show concentrated formation? | weight-space birth pattern, not only trained-model attribution |
+| run exact optimizer decomposition for write-side growth | which part of AdamW writes the value/readout route? | actual update, actual-batch, and Adam-state closure |
+| join routing and writing into one route family | how much answer-margin improvement closes when QK and OV families are measured together? | route-family closure, not isolated-head support |
+
+The intended end state is:
+
+```text
+QK explains where the model looks;
+OV explains what the model writes after looking;
+joint route-family closure explains more of answer-margin growth than either half alone.
 ```
 
 ## Why This Is Hard Even In A Small Model
@@ -723,6 +882,8 @@ This work moves toward:
 ```text
 this optimizer update wrote this route into these weight directions during training
 ```
+
+Dense implementation should not be read as a failure case here. Modern circuit work already suggests that dense and overlapping mechanisms are normal. The stronger result is that dense sharing does not prevent a training-dynamics explanation. It forces the explanation to move upward: away from individual neurons and toward role-level routes, weight geometry, and optimizer state.
 
 The AdamW result matters on its own. A lot of circuit-formation reasoning in the field implicitly treats the current raw gradient as if it were the training signal that built the mechanism. In this traced run that would have told the wrong story. Raw SGD is tiny relative to realized route growth, while AdamW's preconditioned current-gradient and momentum terms carry most of the update. So at least on this task, optimizer-state-blind gradient analysis is not just incomplete; it is systematically misleading about which route is actually being reinforced.
 

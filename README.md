@@ -23,8 +23,8 @@ The strongest supported claim in the repo right now is:
 
 ```text
 training builds a support-value retrieval role;
-in the reference seed that role is visible as low-rank L2H1 W_QK formation;
-exact AdamW update decomposition explains the route growth much better than raw SGD;
+in the reference seed that role is most cleanly visible on the QK side as low-rank L2H1 W_QK formation;
+exact AdamW update decomposition explains that route growth much better than raw SGD;
 across 5 seeds the role repeats, but the winning head address changes.
 ```
 
@@ -34,6 +34,8 @@ So the original SGD question is still the right historical motivation, but the c
 raw SGD by itself is too small to explain the realized route growth in this run;
 the optimizer state is part of the mechanism-selection story.
 ```
+
+The paper is deliberately more precise than "full circuit formation is solved." The current closed story is strongest for the QK routing half. The OV/value-write half is localized in the trained model and partially decomposed, but it does not yet have the same from-initialization optimizer closure.
 
 This is a detailed mechanistic account for one task family. It is not a theorem about all transformers.
 
@@ -179,6 +181,7 @@ The repo has strong support for:
 It does not yet establish:
 
 - full answer-margin closure from a small route family
+- OV/value-write formation with the same optimizer-level precision as the QK route
 - that plain SGD without AdamW would form the same route
 - that the same method scales directly to large language models
 

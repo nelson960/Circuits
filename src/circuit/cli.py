@@ -51,6 +51,7 @@ from circuit.analysis.output_component_causal_validation import run_output_compo
 from circuit.analysis.output_mediated_causal_decomposition import run_output_mediated_causal_decomposition
 from circuit.analysis.output_route_closure import run_output_route_closure
 from circuit.analysis.residual_state_rescue import run_residual_state_rescue
+from circuit.analysis.route_family_closure import run_route_family_closure_report
 from circuit.analysis.route_to_margin_closure import run_route_to_margin_closure
 from circuit.analysis.route_to_scalar_closure import run_route_to_scalar_closure
 from circuit.analysis.shared_feature_dynamics import (
@@ -988,6 +989,17 @@ def main() -> None:
     route_to_scalar_parser.add_argument("--fit-intercept", action="store_true")
     route_to_scalar_parser.add_argument("--duplicate-tolerance", type=float, default=1.0e-6)
     route_to_scalar_parser.add_argument("--overwrite", action="store_true")
+
+    route_family_parser = subparsers.add_parser("route-family-closure-report")
+    route_family_parser.add_argument("--route-closure-rows", type=Path, required=True)
+    route_family_parser.add_argument("--output-dir", type=Path, required=True)
+    route_family_parser.add_argument("--family", type=str, action="append", required=True)
+    route_family_parser.add_argument("--pair-type", type=str, action="append", default=None)
+    route_family_parser.add_argument("--split", type=str, action="append", default=None)
+    route_family_parser.add_argument("--target-scalar", type=str, default=None)
+    route_family_parser.add_argument("--record-side", type=str, default=None)
+    route_family_parser.add_argument("--fit-intercept", action="store_true")
+    route_family_parser.add_argument("--overwrite", action="store_true")
 
     output_route_parser = subparsers.add_parser("output-route-closure")
     output_route_parser.add_argument("--config", type=Path, required=True)
@@ -2535,6 +2547,38 @@ def main() -> None:
                 "markdown": str(markdown_path),
                 "closure_rows": str(closure_rows_path),
                 "coefficient_rows": str(coefficient_rows_path),
+                "plots": {key: str(value) for key, value in plot_paths.items()},
+            }
+        )
+        return
+    if args.command == "route-family-closure-report":
+        (
+            report_path,
+            markdown_path,
+            closure_rows_path,
+            coefficient_rows_path,
+            family_summary_rows_path,
+            interval_rows_path,
+            plot_paths,
+        ) = run_route_family_closure_report(
+            route_closure_rows_path=args.route_closure_rows,
+            output_dir=args.output_dir,
+            raw_family_specs=args.family,
+            pair_types=args.pair_type,
+            splits=args.split,
+            target_scalar=args.target_scalar,
+            record_side=args.record_side,
+            fit_intercept=args.fit_intercept,
+            overwrite=args.overwrite,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "closure_rows": str(closure_rows_path),
+                "coefficient_rows": str(coefficient_rows_path),
+                "family_summary_rows": str(family_summary_rows_path),
+                "interval_rows": str(interval_rows_path),
                 "plots": {key: str(value) for key, value in plot_paths.items()},
             }
         )
