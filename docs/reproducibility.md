@@ -6,14 +6,6 @@ description: Environment, data, model, training, and command entry points for re
 
 # Reproducibility
 
-<nav class="paper-nav">
-  <strong>Pages</strong>
-  <a href="index.html">Paper</a>
-  <a href="reproducibility.html">Reproducibility</a>
-  <a href="analysis_cli_guide.html">CLI Guide</a>
-  <a href="artifact_map.html">Artifact Map</a>
-</nav>
-
 This page is the reproducibility contract for the paper. It gives the environment, task, model, training run, and command entry points. The detailed tool manual is [Analysis CLI Guide](analysis_cli_guide.md).
 
 The repository does not assume that analysis runs are uploaded. Reproduction means regenerating the benchmark, training or replaying the relevant runs, and producing the expected artifact directories locally.
@@ -324,4 +316,3 @@ artifacts/runs/symbolic_kv_reference_formation/analysis/route_to_scalar_closure/
 The cheap commands are reports that refit existing rows. The expensive commands are exact optimizer traces and attribution runs that need stepwise checkpoints. For long runs, keep one terminal per seed and verify that each expected report exists before launching the next dependent command.
 
 The tools are intentionally strict. If an input file, checkpoint, scalar row, route row, or optimizer trace is missing, the correct behavior is to fail loudly.
-

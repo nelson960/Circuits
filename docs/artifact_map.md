@@ -6,14 +6,6 @@ description: Claim-to-artifact ledger for the symbolic KV circuit formation pape
 
 # Artifact Map
 
-<nav class="paper-nav">
-  <strong>Pages</strong>
-  <a href="index.html">Paper</a>
-  <a href="reproducibility.html">Reproducibility</a>
-  <a href="analysis_cli_guide.html">CLI Guide</a>
-  <a href="artifact_map.html">Artifact Map</a>
-</nav>
-
 This page maps paper claims to local artifact directories. The repository does not need to upload every run. A reproduced run should create these paths locally.
 
 ## Reading The Ledger

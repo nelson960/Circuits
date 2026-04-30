@@ -48,7 +48,7 @@ Use the tools in this order.
 | Does the route become semantic? | `contextual-key-separability`, `contextual-svd-alignment`, `bilinear-qk-match-separation` | Tests whether the route aligns with contextual residual structure and support-vs-distractor separation |
 | Did checkpoint updates grow the route? | `checkpoint-update-attribution`, `bilinear-qk-rank-update-attribution`, `attention-retrieval-separation-update-attribution` | First-order route-growth attribution across checkpoints |
 | Did the actual training batch grow the route? | `optimizer-update-trace`, `bilinear-qk-rank-actual-batch-attribution`, `actual-batch-route-attribution` | Uses exact traced batches and parameter updates |
-| Why did the QK route grow? | `bilinear-qk-rank-adam-state-attribution` | Decomposes actual update into raw SGD, clipped SGD, Adam current, momentum, weight decay for a rank-limited QK matcher |
+| Why did the QK route grow? | `bilinear-qk-rank-adam-state-attribution` | Decomposes actual update into raw SGD-equivalent, clipped SGD-equivalent, Adam current, momentum, weight decay for a rank-limited QK matcher |
 | Why did the OV/write scalar grow? | `attention-downstream-adam-state-attribution` | Decomposes actual update into AdamW pieces and splits pressure over the traced head's `W_Q`, `W_K`, `W_V`, and `W_O` slices |
 | Does the same role repeat across seeds? | `scripts/cross_seed_adam_pipeline.py` | Winner / runner-up / bottom-control comparison across seeds |
 
@@ -719,7 +719,7 @@ Important outputs:
 This is the command that answers:
 
 ```text
-How much came from raw SGD?
+How much came from the raw SGD-equivalent update?
 How much came from Adam current gradient?
 How much came from momentum?
 How much came from weight decay?
@@ -774,7 +774,7 @@ This command answers:
 
 ```text
 Did the actual AdamW update increase the write scalar?
-Was raw SGD tiny or large for that write scalar?
+Was the raw SGD-equivalent update tiny or large for that write scalar?
 Did Adam current gradient or historical momentum carry the update?
 Did the useful pressure land in W_V, W_O, QK slices, or outside the traced head?
 ```

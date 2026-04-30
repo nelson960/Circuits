@@ -423,7 +423,7 @@ Status: mostly completed for seed 7.
 - trace one-step optimizer continuations
 - connect actual recorded batches to route support
 
-Status: completed for the reference seed's QK support-value route. Exact from-initialization Adam-state attribution shows raw SGD is tiny and AdamW preconditioned current/momentum terms carry the route growth. The OV/write side is not yet closed to the same standard.
+Status: completed for the reference seed's QK support-value route. Exact from-initialization Adam-state attribution shows the raw SGD-equivalent update is tiny and AdamW preconditioned current/momentum terms carry the route growth. The OV/write side is now supported as a contextual write/readout subspace, but not as a clean static `W_OV` theorem.
 
 ### Phase C: Seed Replication
 

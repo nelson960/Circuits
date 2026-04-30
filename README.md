@@ -1,18 +1,18 @@
-# circuit formation
+# Circuits
 
 Research repo for mechanistic interpretability experiments on how a small decoder-only transformer learns a symbolic latest-write key-value lookup task.
 
 The project is not only about whether the model solves the task. The motivating question is:
 
 ```text
-How does SGD find a circuit at all?
+How does training find a circuit at all?
 ```
 
 The current paper sharpens that question into a version we can actually measure:
 
 ```text
-How does gradient-based training, realized here as AdamW rather than raw SGD,
-turn a dense, shared, polysemantic substrate into a functional retrieval circuit?
+How does AdamW-trained gradient-based learning
+turn a dense, shared, polysemantic substrate into a functional retrieval role?
 ```
 
 ## Current result
@@ -22,28 +22,34 @@ The current paper result is centered on a symbolic KV benchmark and a reference 
 The strongest supported claim in the repo right now is:
 
 ```text
-training builds a support-value retrieval role;
-in the reference seed that role is most cleanly visible on the QK side as low-rank L2H1 W_QK formation;
-exact AdamW update decomposition explains that route growth much better than raw SGD;
-across 5 seeds the role repeats, but the winning head address changes.
+training repeatedly builds a support-value retrieval role;
+the role repeats across seeds, while the named head address changes;
+in the reference seed, the QK side is visible as low-rank L2H1 W_QK formation;
+exact AdamW update accounting explains the route growth;
+the instantaneous raw-gradient, SGD-equivalent update is tiny.
 ```
 
-So the original SGD question is still the right historical motivation, but the current measured answer is narrower:
+The write side is not a clean static `W_OV` theorem. The current evidence supports a different object:
 
 ```text
-raw SGD by itself is too small to explain the realized route growth in this run;
-the optimizer state is part of the mechanism-selection story.
+a contextual residual perturbation at the prediction position
+that downstream readout directions can use.
 ```
 
-The paper is deliberately more precise than "full circuit formation is solved." The current closed story is strongest for the QK routing half. The OV/value-write half is localized in the trained model and partially decomposed, but it does not yet have the same from-initialization optimizer closure.
+Across additional seeds, both the QK retrieval role and the write/readout role repeat at the functional level while their component addresses move. The ghost moves rooms.
+
+The paper is deliberately more precise than "full circuit formation is solved." It gives a strong QK formation account, a supported contextual write/readout account, and explicit limits around full answer-margin closure, optimizer ablations, and scaling.
 
 This is a detailed mechanistic account for one task family. It is not a theorem about all transformers.
 
 ## Public paper and research docs
 
 - [From Loss To Lookup: Tracing Circuit Formation In A Small Transformer](https://nelson960.github.io/Circuits/)
+- [Reproducibility page](https://nelson960.github.io/Circuits/reproducibility.html)
+- [Analysis CLI guide](https://nelson960.github.io/Circuits/analysis_cli_guide.html)
+- [Artifact map](https://nelson960.github.io/Circuits/artifact_map.html)
+- [Repository](https://github.com/nelson960/Circuits)
 - [Internal research log](results.md)
-- [Analysis CLI guide](docs/analysis_cli_guide.md)
 - [Checkpoint analysis plan](docs/checkpoint_analysis_plan.md)
 - [Shared feature dynamics plan](docs/shared_feature_dynamics_plan.md)
 - [Plain-language notes](notes.md)
@@ -136,6 +142,8 @@ That guide documents the analysis stack actually used in the current paper:
 - exact optimizer traces
 - actual-batch and Adam-state attribution
 - cross-seed validation
+- contextual write/readout subspace validation
+- branch-aware answer-margin diagnostics
 
 ## Main analysis entry points
 
@@ -177,11 +185,13 @@ The repo has strong support for:
 - weight-space formation analysis
 - exact optimizer-state attribution for traced windows
 - cross-seed role-level validation
+- contextual write/readout subspace analysis
+- branch-aware and output-space closure diagnostics
 
 It does not yet establish:
 
 - full answer-margin closure from a small route family
-- OV/value-write formation with the same optimizer-level precision as the QK route
+- a clean static `W_OV` theorem analogous to the QK story
 - that plain SGD without AdamW would form the same route
 - that the same method scales directly to large language models
 

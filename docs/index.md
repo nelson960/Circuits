@@ -10,14 +10,6 @@ Nelson Alex
 
 Living draft: 2026-04-30
 
-<nav class="paper-nav">
-  <strong>Pages</strong>
-  <a href="index.html">Paper</a>
-  <a href="reproducibility.html">Reproducibility</a>
-  <a href="analysis_cli_guide.html">CLI Guide</a>
-  <a href="artifact_map.html">Artifact Map</a>
-</nav>
-
 ## Abstract
 
 We study circuit formation in a 3-layer decoder-only transformer trained on a symbolic key-value lookup task. Because the task has a known algorithmic structure, we can define role-level progress measures for support-value retrieval and write/readout coupling. We find that the trained mechanism is dense and not localized to a stable head or neuron identity. Instead, a support-value retrieval role repeatedly forms across random seeds, while its implementing head changes. In the reference seed, the QK side appears as a low-rank `W_QK` matcher whose route growth is predicted by exact AdamW update accounting. The instantaneous raw-gradient, SGD-equivalent update explains only a small fraction of this growth, while AdamW-preconditioned current and momentum terms carry the movement. The write side does not reduce to a clean static `W_OV` matrix; it appears as a contextual residual perturbation at the prediction position used by downstream readout directions. These results support role-level, optimizer-state-aware circuit formation in a controlled model, while leaving full answer-margin closure, optimizer ablations, and scaling open.
