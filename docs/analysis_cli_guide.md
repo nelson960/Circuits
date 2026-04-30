@@ -48,7 +48,8 @@ Use the tools in this order.
 | Does the route become semantic? | `contextual-key-separability`, `contextual-svd-alignment`, `bilinear-qk-match-separation` | Tests whether the route aligns with contextual residual structure and support-vs-distractor separation |
 | Did checkpoint updates grow the route? | `checkpoint-update-attribution`, `bilinear-qk-rank-update-attribution`, `attention-retrieval-separation-update-attribution` | First-order route-growth attribution across checkpoints |
 | Did the actual training batch grow the route? | `optimizer-update-trace`, `bilinear-qk-rank-actual-batch-attribution`, `actual-batch-route-attribution` | Uses exact traced batches and parameter updates |
-| Why did the route grow? | `bilinear-qk-rank-adam-state-attribution` | Decomposes actual update into raw SGD, clipped SGD, Adam current, momentum, weight decay |
+| Why did the QK route grow? | `bilinear-qk-rank-adam-state-attribution` | Decomposes actual update into raw SGD, clipped SGD, Adam current, momentum, weight decay for a rank-limited QK matcher |
+| Why did the OV/write scalar grow? | `attention-downstream-adam-state-attribution` | Decomposes actual update into AdamW pieces and splits pressure over the traced head's `W_Q`, `W_K`, `W_V`, and `W_O` slices |
 | Does the same role repeat across seeds? | `scripts/cross_seed_adam_pipeline.py` | Winner / runner-up / bottom-control comparison across seeds |
 
 ## Minimal Decision Tree
@@ -78,6 +79,15 @@ Run:
 - `optimizer-update-trace`
 - `bilinear-qk-rank-actual-batch-attribution`
 - `bilinear-qk-rank-adam-state-attribution`
+
+### I want to know whether optimizer updates built the write side
+
+Run:
+
+- `ov-write-progress-report`
+- `optimizer-update-trace`
+- `attention-downstream-update-attribution`
+- `attention-downstream-adam-state-attribution`
 
 ### I want to know whether this is seed-specific
 
@@ -715,6 +725,134 @@ How much came from momentum?
 How much came from weight decay?
 ```
 
+#### `attention-downstream-adam-state-attribution`
+
+Use this for the OV/write-side optimizer question. It uses the same exact optimizer trace as the QK Adam tool, but the target scalar is a downstream write quantity such as `qk_ov_product`, `support_mass_ov_value_margin`, `attended_support_ov_value_margin`, `head_value_margin_dla`, or `head_margin_dla_fixed_readout`.
+
+The output has two levels:
+
+- global AdamW decomposition for the scalar
+- parameter-group decomposition over the traced head's `q_proj`, `k_proj`, `v_proj`, `out_proj`, and combined `qkvo` slices
+- optional extra groups such as `module:L0.mlp`, `module:L1.attention`, or another head's projection via repeated `--parameter-group`
+
+```bash
+PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli attention-downstream-adam-state-attribution \
+  --config $CONFIG \
+  --probe-set $PROBE \
+  --optimizer-trace-dir $ANALYSIS/optimizer_update_trace/from_init_seed7_0000_6000_stepwise \
+  --output-dir $ANALYSIS/attention_downstream_adam_state_attribution/l1h2_support_value_write_5500_5501_smoke \
+  --device mps \
+  --checkpoint $ANALYSIS/optimizer_update_trace/from_init_seed7_0000_6000_stepwise/checkpoints/step_005500.pt \
+  --checkpoint $ANALYSIS/optimizer_update_trace/from_init_seed7_0000_6000_stepwise/checkpoints/step_005501.pt \
+  --head-layer 1 \
+  --head 2 \
+  --score-query-role prediction \
+  --support-key-role support_value \
+  --distractor-key-role value_distractors \
+  --record-side clean \
+  --scalar qk_ov_product \
+  --scalar support_mass_ov_value_margin \
+  --scalar attended_support_ov_value_margin \
+  --scalar head_value_margin_dla \
+  --scalar head_margin_dla_fixed_readout \
+  --objective-pair-type support_value \
+  --route-pair-source-type support_value \
+  --max-route-pairs-per-type 64 \
+  --min-route-pairs-per-type 16 \
+  --loss-scope full_lm \
+  --overwrite
+```
+
+Important outputs:
+
+- `metric_rows`
+- `component_rows`
+- `group_rows`
+- `route_pair_rows`
+
+This command answers:
+
+```text
+Did the actual AdamW update increase the write scalar?
+Was raw SGD tiny or large for that write scalar?
+Did Adam current gradient or historical momentum carry the update?
+Did the useful pressure land in W_V, W_O, QK slices, or outside the traced head?
+```
+
+The two audit-selected scalar forms are:
+
+```text
+support_mass_ov_value_margin = total support attention mass * OV value margin
+qk_ov_product = QK support-minus-distractor score separation * OV value margin
+```
+
+#### `ov-write-progress-report`
+
+Use this before OV/write optimizer attribution. It audits candidate heads and write scalars across checkpoints, with readout-level attention-frozen and shuffled-value controls.
+
+This is the scalar-selection step. Do not skip it and jump straight to AdamW decomposition unless you already know which write scalar is meaningful.
+
+```bash
+PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli ov-write-progress-report \
+  --config $CONFIG \
+  --probe-set $PROBE \
+  --checkpoint-dir $CKPT_DIR \
+  --checkpoint $CKPT_DIR/step_000750.pt \
+  --checkpoint $CKPT_DIR/step_001000.pt \
+  --checkpoint $CKPT_DIR/step_001250.pt \
+  --checkpoint $CKPT_DIR/step_001500.pt \
+  --checkpoint $CKPT_DIR/step_001750.pt \
+  --checkpoint $CKPT_DIR/step_002000.pt \
+  --checkpoint $CKPT_DIR/step_002250.pt \
+  --checkpoint $CKPT_DIR/step_002500.pt \
+  --checkpoint $CKPT_DIR/step_002750.pt \
+  --checkpoint $CKPT_DIR/step_003000.pt \
+  --checkpoint $CKPT_DIR/step_003250.pt \
+  --checkpoint $CKPT_DIR/step_003500.pt \
+  --output-dir $ANALYSIS/ov_write_progress/l0_l1_l2_attention_0750_3500_formation \
+  --device mps \
+  --head L0H0 \
+  --head L0H1 \
+  --head L0H2 \
+  --head L0H3 \
+  --head L1H2 \
+  --head L2H1 \
+  --score-query-role prediction \
+  --support-key-role support_value \
+  --distractor-key-role value_distractors \
+  --record-side clean \
+  --pair-type support_value \
+  --max-pairs-per-type 64 \
+  --min-pairs-per-type 16 \
+  --top-k-correlations 32 \
+  --overwrite
+```
+
+Important outputs:
+
+- `checkpoint_rows`
+- `delta_rows`
+- `correlation_rows`
+- `pair_rows`
+
+The four conditions are:
+
+```text
+real_attention_real_values
+correct_support_attention_real_values
+real_attention_shuffled_values
+correct_support_attention_shuffled_values
+```
+
+This command answers:
+
+```text
+Which OV/write scalar has a clean birth curve?
+Does forcing correct-support attention make the write useful?
+Does shuffling the support value destroy the write signal?
+Which write scalar best tracks fixed-competitor margin, correct-value logit, or negative loss?
+```
+
 ### 9. Route-family closure
 
 #### `route-family-closure-report`
@@ -794,6 +932,20 @@ Key outputs:
 - `rescue_rows`
 - `summary_rows`
 - `plots.rescue_fraction`
+
+#### `component-output-rescue`
+
+Tests whether patching one clean downstream component write rescues a removed source component.
+
+This is stricter than `residual-state-rescue`: it does not patch the whole residual stream. For MLPs it replaces the MLP residual write. For attention heads it replaces the single-head residual contribution, computed by subtracting all-heads-off attention output from only-this-head attention output so the shared output bias cancels.
+
+Pass `--patch-component L0MLP` for single-component rescue. Pass `--patch-group L0MLP,L2MLP` for ordered multi-component rescue; the tool patches components in model order and recomputes intermediate residual states between patch stages.
+
+Key outputs:
+
+- `rescue_rows`
+- `summary_rows`
+- `pair_rows`
 
 ### 11. Cross-seed pipeline
 

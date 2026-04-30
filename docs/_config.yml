@@ -9,6 +9,12 @@ lang: en
 plugins:
   - jekyll-seo-tag
 
+header_pages:
+  - index.md
+  - reproducibility.md
+  - analysis_cli_guide.md
+  - artifact_map.md
+
 kramdown:
   input: GFM
   syntax_highlighter: rouge

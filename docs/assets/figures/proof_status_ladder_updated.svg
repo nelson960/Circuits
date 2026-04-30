@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="980" height="490" viewBox="0 0 980 490" role="img">
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="475" viewBox="0 0 980 475" role="img">
 <defs>
 <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
 <path d="M0,0 L0,6 L9,3 z" fill="#343434" />
@@ -8,37 +8,48 @@
 </defs>
 <text x="32.0" y="36.0" class="title" text-anchor="start">Proof status after the current experiments</text>
 <text x="32.0" y="61.0" class="subtitle" text-anchor="start">The result is no longer only a trained-model story, but it is not a universal theorem.</text>
-<rect x="55.0" y="73.0" width="840.0" height="34.0" class="ok" />
-<text x="73.0" y="95.0" class="label" text-anchor="start">Behavior learns lookup</text>
-<text x="445.0" y="95.0" class="small" text-anchor="start">supported</text>
-<text x="640.0" y="95.0" class="small" text-anchor="start">heldout-pair accuracy is high</text>
-<rect x="55.0" y="115.0" width="840.0" height="34.0" class="warn" />
-<text x="73.0" y="137.0" class="label" text-anchor="start">Feature families reveal structure</text>
-<text x="445.0" y="137.0" class="small" text-anchor="start">supported as diagnostic</text>
-<text x="640.0" y="137.0" class="small" text-anchor="start">not natural atoms</text>
-<rect x="55.0" y="157.0" width="840.0" height="34.0" class="ok" />
-<text x="73.0" y="179.0" class="label" text-anchor="start">Route scalar C(theta)</text>
-<text x="445.0" y="179.0" class="small" text-anchor="start">supported</text>
-<text x="640.0" y="179.0" class="small" text-anchor="start">support-value separation</text>
-<rect x="55.0" y="199.0" width="840.0" height="34.0" class="ok" />
-<text x="73.0" y="221.0" class="label" text-anchor="start">Weight-level QK birth</text>
-<text x="445.0" y="221.0" class="small" text-anchor="start">supported</text>
-<text x="640.0" y="221.0" class="small" text-anchor="start">low-rank W_QK growth</text>
-<rect x="55.0" y="241.0" width="840.0" height="34.0" class="ok" />
-<text x="73.0" y="263.0" class="label" text-anchor="start">Optimizer-level why</text>
-<text x="445.0" y="263.0" class="small" text-anchor="start">supported for AdamW</text>
-<text x="640.0" y="263.0" class="small" text-anchor="start">raw SGD tiny, Adam state large</text>
-<rect x="55.0" y="283.0" width="840.0" height="34.0" class="ok" />
-<text x="73.0" y="305.0" class="label" text-anchor="start">Cross-seed role replication</text>
-<text x="445.0" y="305.0" class="small" text-anchor="start">supported</text>
-<text x="640.0" y="305.0" class="small" text-anchor="start">5 seeds, address changes</text>
-<rect x="55.0" y="325.0" width="840.0" height="34.0" class="open" />
-<text x="73.0" y="347.0" class="label" text-anchor="start">Full answer-margin closure</text>
-<text x="445.0" y="347.0" class="small" text-anchor="start">open</text>
-<text x="640.0" y="347.0" class="small" text-anchor="start">route family / OV side incomplete</text>
-<rect x="55.0" y="367.0" width="840.0" height="34.0" class="open" />
-<text x="73.0" y="389.0" class="label" text-anchor="start">Scaling to LLMs</text>
-<text x="445.0" y="389.0" class="small" text-anchor="start">open</text>
-<text x="640.0" y="389.0" class="small" text-anchor="start">requires candidate filtering</text>
-<text x="55.0" y="455.0" class="small" text-anchor="start">The paper should claim a detailed mechanistic accounting for this task, not a theorem about all transformers.</text>
+<rect x="55.0" y="70.0" width="840.0" height="31.0" class="ok" />
+<text x="73.0" y="92.0" class="label" text-anchor="start">Behavior learns lookup</text>
+<text x="445.0" y="92.0" class="small" text-anchor="start">supported</text>
+<text x="640.0" y="92.0" class="small" text-anchor="start">heldout-pair accuracy is high</text>
+<rect x="55.0" y="106.0" width="840.0" height="31.0" class="warn" />
+<text x="73.0" y="128.0" class="label" text-anchor="start">Feature families reveal structure</text>
+<text x="445.0" y="128.0" class="small" text-anchor="start">supported as diagnostic</text>
+<text x="640.0" y="128.0" class="small" text-anchor="start">shared infrastructure, not atoms</text>
+<rect x="55.0" y="142.0" width="840.0" height="31.0" class="ok" />
+<text x="73.0" y="164.0" class="label" text-anchor="start">QK route scalar</text>
+<text x="445.0" y="164.0" class="small" text-anchor="start">supported</text>
+<text x="640.0" y="164.0" class="small" text-anchor="start">support-value separation</text>
+<rect x="55.0" y="178.0" width="840.0" height="31.0" class="ok" />
+<text x="73.0" y="200.0" class="label" text-anchor="start">Weight-level QK birth</text>
+<text x="445.0" y="200.0" class="small" text-anchor="start">supported</text>
+<text x="640.0" y="200.0" class="small" text-anchor="start">low-rank W_QK growth</text>
+<rect x="55.0" y="214.0" width="840.0" height="31.0" class="ok" />
+<text x="73.0" y="236.0" class="label" text-anchor="start">QK optimizer cause</text>
+<text x="445.0" y="236.0" class="small" text-anchor="start">supported for AdamW</text>
+<text x="640.0" y="236.0" class="small" text-anchor="start">raw SGD-eq tiny, Adam state large</text>
+<rect x="55.0" y="250.0" width="840.0" height="31.0" class="ok" />
+<text x="73.0" y="272.0" class="label" text-anchor="start">Cross-seed QK role</text>
+<text x="445.0" y="272.0" class="small" text-anchor="start">supported</text>
+<text x="640.0" y="272.0" class="small" text-anchor="start">same role, moving head address</text>
+<rect x="55.0" y="286.0" width="840.0" height="31.0" class="ok" />
+<text x="73.0" y="308.0" class="label" text-anchor="start">Write functional subspace</text>
+<text x="445.0" y="308.0" class="small" text-anchor="start">supported</text>
+<text x="640.0" y="308.0" class="small" text-anchor="start">contextual prediction-position residual coupling</text>
+<rect x="55.0" y="322.0" width="840.0" height="31.0" class="ok" />
+<text x="73.0" y="344.0" class="label" text-anchor="start">Write optimizer cause</text>
+<text x="445.0" y="344.0" class="small" text-anchor="start">supported for AdamW</text>
+<text x="640.0" y="344.0" class="small" text-anchor="start">raw SGD-eq tiny, AdamW-preconditioned growth</text>
+<rect x="55.0" y="358.0" width="840.0" height="31.0" class="warn" />
+<text x="73.0" y="380.0" class="label" text-anchor="start">Full answer-margin closure</text>
+<text x="445.0" y="380.0" class="small" text-anchor="start">partial</text>
+<text x="640.0" y="380.0" class="small" text-anchor="start">output closure stronger than route closure</text>
+<rect x="55.0" y="394.0" width="840.0" height="31.0" class="open" />
+<text x="73.0" y="416.0" class="label" text-anchor="start">Plain-SGD sufficiency</text>
+<text x="445.0" y="416.0" class="small" text-anchor="start">open</text>
+<text x="640.0" y="416.0" class="small" text-anchor="start">SGD-only training not tested</text>
+<rect x="55.0" y="430.0" width="840.0" height="31.0" class="open" />
+<text x="73.0" y="452.0" class="label" text-anchor="start">Scaling to LLMs</text>
+<text x="445.0" y="452.0" class="small" text-anchor="start">open</text>
+<text x="640.0" y="452.0" class="small" text-anchor="start">requires candidate filtering</text>
 </svg>

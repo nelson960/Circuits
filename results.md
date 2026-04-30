@@ -6637,3 +6637,1851 @@ In simple words:
 the circuit is stable as a pattern,
 but unstable as an address.
 ```
+
+## 2026-04-27 Update: OV Write-Side Is A Downstream Chain, Not One Head Writing The Answer
+
+The QK side now has the cleanest story:
+
+```text
+L2H1 W_QK forms a low-rank support-value matcher.
+AdamW's preconditioned state explains most of that route growth.
+The role repeats across seeds even when the winning head changes.
+```
+
+The write side is harder.
+
+The question is different from QK:
+
+```text
+QK asks: where does the head look?
+OV asks: what does the attended value become after it is written into the residual stream?
+```
+
+For QK, a support-vs-distractor score is a direct routing scalar.
+
+For OV, the written vector enters the shared residual stream, passes through later normalization, attention, and MLP blocks, and only later becomes answer evidence.
+
+So the right question became:
+
+```text
+which write-side signal grows,
+where is it written,
+and which downstream components turn it into output evidence?
+```
+
+### OV Scalar Audit
+
+The new `ov-write-progress-report` scanned write-side scalars across heads during the formation window.
+
+Artifact:
+
+```text
+artifacts/runs/symbolic_kv_reference_formation/analysis/ov_write_progress/all_heads_0750_3500_formation/
+```
+
+Main result:
+
+```text
+L0H0 is the cleanest early OV/write-side candidate.
+```
+
+Important numbers:
+
+```text
+L0H0 forced-support real OV map final value:       +4.82437
+L0H0 forced-support real OV map delta:             +10.12
+L0H0 forced-support shuffled-value final value:    -15.5484
+real-vs-shuffled final gap:                        about +20.37
+```
+
+The strongest scalar was not "raw head output points directly at the answer" in isolation.
+
+The useful scalar was closer to:
+
+```text
+attention route × OV write usefulness
+```
+
+The `L0H0 qk_ov_product` tracked output-space progress very strongly:
+
+```text
+correlation with delta negative_answer_loss: +0.9703
+```
+
+This says the early write signal is not random.
+
+It becomes useful when the head reads the right source and writes value-relevant information into the residual stream.
+
+### AdamW Decomposition For The L0H0 Write Route
+
+The next tool applied the same optimizer-state decomposition used for QK, but to the `L0H0 qk_ov_product` write scalar.
+
+Artifacts:
+
+```text
+artifacts/runs/symbolic_kv_reference_formation/analysis/attention_downstream_adam_state_attribution/l0h0_ov_write_qk_product_0750_1000_stepwise/
+artifacts/runs/symbolic_kv_reference_formation/analysis/attention_downstream_adam_state_attribution/l0h0_ov_write_qk_product_1000_1250_stepwise/
+artifacts/runs/symbolic_kv_reference_formation/analysis/attention_downstream_adam_state_attribution/l0h0_ov_write_qk_product_1250_1500_stepwise/
+artifacts/runs/symbolic_kv_reference_formation/analysis/attention_downstream_adam_state_attribution/l0h0_ov_write_qk_product_1500_1750_stepwise/
+artifacts/runs/symbolic_kv_reference_formation/analysis/attention_downstream_adam_state_attribution/l0h0_ov_write_qk_product_1750_2000_stepwise/
+artifacts/runs/symbolic_kv_reference_formation/analysis/attention_downstream_adam_state_attribution/l0h0_ov_write_qk_product_2000_2250_stepwise/
+artifacts/runs/symbolic_kv_reference_formation/analysis/attention_downstream_adam_state_attribution/l0h0_ov_write_qk_product_2250_2500_stepwise/
+```
+
+The phase structure was:
+
+```text
+750  -> 1000: -0.405
+1000 -> 1250: -1.294
+1250 -> 1500: -2.958
+1500 -> 1750: +18.433
+1750 -> 2000: +8.135
+2000 -> 2250: +1.013
+2250 -> 2500: +0.328
+```
+
+So the write route is suppressed early, then has a sharp birth burst between `1500 -> 2000`, then consolidates.
+
+Across `750 -> 2500`:
+
+```text
+actual qk_ov_product growth:             +23.251
+AdamW reconstruction:                    +23.852
+raw SGD contribution:                    +0.059
+current preconditioned-gradient part:    +2.624
+historical momentum part:                +21.821
+weight decay part:                       -0.592
+```
+
+As a fraction of actual growth:
+
+```text
+raw SGD:             about 0.25%
+current gradient:    about 11.3%
+momentum:            about 93.9%
+weight decay:        about -2.5%
+```
+
+This is a stronger AdamW result than the QK case in one respect:
+
+```text
+the L0H0 write-side formation burst is overwhelmingly carried by AdamW momentum.
+```
+
+The parameter-slice split also matters.
+
+For the `1500 -> 1750` burst, the signs were:
+
+```text
+Q slice: negative
+K slice: negative
+V slice: strongly positive
+O slice: strongly positive
+```
+
+So this is not just another QK routing effect.
+
+The write-side birth is mostly a `W_V/W_O` effect.
+
+### L0H0 Is Causal, But Not Directly Sufficient
+
+We then asked whether the `L0H0` write is actually used downstream.
+
+The first path test ablated `L0H0` and measured the target endpoint.
+
+The ablation damage was large:
+
+```text
+correct_value_logit drop:              about +5.079
+negative_answer_loss drop:             about +2.326
+fixed-source competitor margin drop:   about +2.941
+fixed-target competitor margin drop:   about +1.482
+```
+
+A full residual-state patch rescued almost all of this, which proves the information is present in the residual stream.
+
+But full residual patching is too broad.
+
+It says:
+
+```text
+the L0H0 effect is somewhere in the residual stream.
+```
+
+It does not say:
+
+```text
+which downstream component reads it.
+```
+
+### Single-Component Output Rescue
+
+The first narrower rescue patched one downstream component write at a time after ablating `L0H0`.
+
+Artifact:
+
+```text
+artifacts/runs/symbolic_kv_reference_formation/analysis/component_output_rescue/l0h0_downstream_component_writes_1500_2000/
+```
+
+Target endpoint, best single-component rescue:
+
+| scalar | best single component | rescue fraction |
+|---|---|---:|
+| `negative_answer_loss` | `L0MLP` | 22.1% |
+| `correct_value_logit` | `L0MLP` | 12.6% |
+| `fixed_source_competitor_margin` | `L0MLP` | 11.6% |
+| `fixed_target_competitor_margin` | `L0MLP` | 8.7% |
+
+Secondary signal:
+
+```text
+L2MLP helps correct_value_logit by about 7.9%.
+L2MLP helps fixed-source competitor margin by about 9.2%.
+L2H1 is tiny in this test, usually around 0.4% -> 1.0%.
+```
+
+This rejected a simple story:
+
+```text
+L0H0 writes value information directly to L2H1.
+```
+
+The data says:
+
+```text
+L0MLP is the first strong downstream reader/transformer of the L0H0 write.
+```
+
+### Grouped Downstream Rescue
+
+The next rescue patched ordered downstream component groups.
+
+Artifact:
+
+```text
+artifacts/runs/symbolic_kv_reference_formation/analysis/component_output_rescue/l0h0_downstream_component_groups_1500_2000/
+```
+
+This was the important result.
+
+Grouped rescues were much stronger than single-component rescues.
+
+Target endpoint:
+
+| scalar | best single rescue | best grouped rescue |
+|---|---:|---:|
+| `negative_answer_loss` | 22.1% via `L0MLP` | 35.0% via `L0MLP+L2H1+L2MLP` |
+| `correct_value_logit` | 12.6% via `L0MLP` | 40.1% via `L0MLP+L1H3+L1MLP+L2MLP` |
+| `fixed_source_competitor_margin` | 11.6% via `L0MLP` | 42.5% via `L0MLP+L1H3+L1MLP+L2MLP` |
+| `fixed_target_competitor_margin` | 8.7% via `L0MLP` | 15.9% via `L0MLP+L2H1+L2MLP` |
+
+The best grouped rescues also had much cleaner rescue-vs-damage correlations.
+
+Examples:
+
+```text
+correct_value_logit target:
+  best group = L0MLP+L1H3+L1MLP+L2MLP
+  rescue fraction = 40.1%
+  correlation = 0.934
+  R^2 = 0.343
+
+fixed_source_competitor_margin target:
+  best group = L0MLP+L1H3+L1MLP+L2MLP
+  rescue fraction = 42.5%
+  correlation = 0.835
+  R^2 = 0.428
+
+negative_answer_loss target:
+  best group = L0MLP+L2H1+L2MLP
+  rescue fraction = 35.0%
+  correlation = 0.695
+```
+
+So the current write-side circuit is not:
+
+```text
+L0H0 -> answer
+```
+
+and not:
+
+```text
+L0H0 -> L2H1 -> answer
+```
+
+The better current picture is:
+
+```text
+L0H0 writes an early value-bearing residual ingredient.
+L0MLP reads/transforms that ingredient.
+Middle-layer components refine it.
+L2MLP converts much of it into output-space value evidence.
+L2H1 helps some loss-relevant paths, but is not the main reader of this early write signal.
+```
+
+In simple terms:
+
+```text
+QK gives us a clean pointer.
+OV gives us a shared residual ingredient.
+The answer is produced by a downstream chain that reuses that ingredient.
+```
+
+This is exactly where superposition hits hardest.
+
+The value is not written as a clean standalone answer vector.
+
+It is written into a shared residual space where later MLPs and heads can read, rotate, suppress, or amplify parts of it.
+
+### Updated QK Plus OV Closure Context
+
+The existing `route-family-closure-report` result on the `5500 -> 5550` stepwise window already showed that adding OV/output families improves answer-margin closure:
+
+Artifact:
+
+```text
+artifacts/runs/symbolic_kv_reference_formation/analysis/route_family_closure/qk_vs_ov_vs_joint_5500_5550_stepwise/
+```
+
+Family closure results:
+
+| family | R squared | mean absolute residual |
+|---|---:|---:|
+| `qk` | 0.370 | 0.2417 |
+| `ov_input` | 0.188 | 0.2619 |
+| `ov_output` | 0.421 | 0.2301 |
+| `qk_plus_ov` | 0.456 | 0.2254 |
+
+This matters because QK alone is not the whole behavior story.
+
+Adding OV/output-side routes improves closure, but does not fully close the answer-margin gap.
+
+The grouped rescue result explains why:
+
+```text
+the write side is not a single route label;
+it is a distributed downstream chain.
+```
+
+### Updated Research Position
+
+The current end-to-end picture is now:
+
+```text
+1. AdamW builds a low-rank QK support-value matcher.
+2. The same training run also builds an early L0H0 value-write signal.
+3. The L0H0 write-side birth is mostly V/O and momentum-driven.
+4. That write does not directly become the answer.
+5. L0MLP and later MLP-heavy chains transform it into output-space value evidence.
+6. QK+OV route-family closure is better than QK alone, but still incomplete.
+```
+
+The important correction to the paper story is:
+
+```text
+the QK side is a clean route-formation result;
+the OV side is a dense residual-chain result.
+```
+
+That is not a failure.
+
+It is the actual mechanism becoming visible.
+
+### What This Still Does Not Prove
+
+This does not yet prove full behavioral sufficiency.
+
+The best grouped rescues recover about `35% -> 42%` of important target-endpoint damage, not 100%.
+
+Remaining explanations include:
+
+```text
+unpatched residual interactions
+attention-pattern shifts
+normalization effects
+additional components not included in the tested groups
+nonlinear composition between patched writes
+branch sensitivity in the answer-margin scalar
+```
+
+It also does not yet prove that a plain SGD optimizer would or would not build the same write route.
+
+The supported claim is narrower:
+
+```text
+in this AdamW run, the observed write-side birth is carried mostly by AdamW momentum,
+and the causal output path is distributed across downstream residual transformations.
+```
+
+### Focused Joint-Path Closure Run
+
+After the grouped rescue result, we ran a focused `route-family-closure-report` over the existing `5500 -> 5550` route-to-margin rows.
+
+Artifact:
+
+```text
+artifacts/runs/symbolic_kv_reference_formation/analysis/route_family_closure/qk_pointer_l0h0_write_chain_5500_5550_stepwise/
+```
+
+Families:
+
+```text
+qk_pointer:
+  L2H1_qk_query
+  L1H2_qk_query
+  L0H0_qk_query
+  embedding_key_identity
+  full_layer1_query_key
+  full_layer0_query_key
+
+early_write_chain_proxy:
+  L0H0_ov_input_support_value
+  embedding_value_identity
+  full_layer0_support_value
+  full_layer1_support_value
+
+late_output_proxy:
+  L1H2_ov_output_prediction
+  L2H1_ov_output_prediction
+  full_layer1_post_attn_prediction
+  full_layer2_post_attn_prediction
+
+qk_plus_early_write:
+  qk_pointer + early_write_chain_proxy
+
+qk_plus_write_plus_output:
+  qk_pointer + early_write_chain_proxy + late_output_proxy
+```
+
+Result:
+
+| family | routes | R squared |
+|---|---:|---:|
+| `early_write_chain_proxy` | 4 | 0.181 |
+| `qk_pointer` | 6 | 0.370 |
+| `late_output_proxy` | 4 | 0.421 |
+| `qk_plus_early_write` | 10 | 0.383 |
+| `qk_plus_write_plus_output` | 14 | 0.451 |
+
+This says:
+
+```text
+QK pointer routes explain a real part of answer-margin movement.
+The early write proxy alone is weaker on this late 5500 -> 5550 window.
+Late output routes explain more than QK alone.
+Combining QK, early-write, and late-output routes is best.
+But the combined measured family still does not fully close answer margin.
+```
+
+The important interpretation is:
+
+```text
+the output-side path is not just L0H0 write geometry;
+by the late stepwise window, the cleaner explanatory variables are late output-space routes.
+```
+
+This matches the rescue result:
+
+```text
+L0H0 creates an early value ingredient,
+but downstream components, especially MLP-heavy output transformations,
+turn it into answer evidence.
+```
+
+### Next Experiment After This
+
+The remaining gap is now more specific.
+
+We need to bridge the early write-side birth window to the late output-side closure window.
+
+The next useful run should measure the same focused families over the formation window, not only `5500 -> 5550`.
+
+Target question:
+
+```text
+does the L0H0 write-chain proxy explain more during 1500 -> 2500,
+when the OV/write route is actually born?
+```
+
+If yes, the story becomes:
+
+```text
+early window: L0H0/L0MLP write-chain forms
+late window: L2H1 QK and late output routes dominate behavior closure
+```
+
+If no, the write-side object is probably even more residual-state based than the current route labels capture.
+
+### Formation-Window Joint Closure Result
+
+We then ran the same focused closure over the actual OV/write-side formation window:
+
+```text
+1500 -> 1750 -> 2000 -> 2250 -> 2500
+```
+
+Artifacts:
+
+```text
+artifacts/runs/symbolic_kv_reference_formation/analysis/route_to_margin_closure/qk_ov_output_routes_1500_2500_formation/
+artifacts/runs/symbolic_kv_reference_formation/analysis/route_family_closure/qk_pointer_l0h0_write_chain_1500_2500_formation/
+```
+
+Overall route-to-margin closure:
+
+```text
+observations:                 512
+mean actual answer-margin Δ:  +0.878392
+mean predicted Δ:             +0.630379
+mean residual:                +0.248013
+mean absolute residual:       1.44093
+R^2:                          0.248964
+design rank:                  13 / 14
+```
+
+Family comparison:
+
+| family | routes | R squared | mean abs residual |
+|---|---:|---:|---:|
+| `early_write_chain_proxy` | 4 | 0.123 | 1.5395 |
+| `late_output_proxy` | 4 | 0.191 | 1.4700 |
+| `qk_pointer` | 6 | 0.212 | 1.4389 |
+| `qk_plus_early_write` | 10 | 0.235 | 1.4385 |
+| `qk_plus_write_plus_output` | 14 | 0.249 | 1.4409 |
+
+This was the important check.
+
+The early write-chain proxy did **not** become the dominant answer-margin closure variable during `1500 -> 2500`.
+
+That means:
+
+```text
+L0H0 write-side birth is real,
+but route-score growth in this early write proxy does not by itself explain most answer-margin movement.
+```
+
+The interval-level closure also shows the fit is uneven:
+
+| interval | actual mean Δ | predicted mean Δ | R squared |
+|---|---:|---:|---:|
+| `1500 -> 1750` | 0.891 | 0.784 | 0.379 |
+| `1750 -> 2000` | 1.926 | 1.150 | 0.194 |
+| `2000 -> 2250` | 0.458 | 0.229 | 0.133 |
+| `2250 -> 2500` | 0.239 | 0.359 | -0.104 |
+
+So this window is not a clean linear route-to-margin story.
+
+The strongest positive route contributions in the full family were mostly broad residual terms:
+
+```text
+full_layer0_query_key:       +1.811
+full_layer0_support_value:   +0.295
+embedding_value_identity:    +0.027
+embedding_key_identity:      +0.023
+L0H0_ov_input_support_value: +0.012
+L2H1_qk_query:               +0.0066
+```
+
+The important interpretation:
+
+```text
+during early formation, answer margin is moving through broad residual-state changes,
+not only through the named low-rank head routes.
+```
+
+This does not invalidate the OV/write birth result.
+
+It says the birth result lives one level below immediate behavior:
+
+```text
+optimizer state builds a useful write-side ingredient,
+but the behavioral margin depends on wider residual geometry and downstream conversion.
+```
+
+### Updated Next Step
+
+The next closure should not use moving answer margin as the only scalar.
+
+For the early formation window, we need route-to-scalar closure against cleaner output scalars:
+
+```text
+negative_answer_loss
+correct_value_logit
+fixed_source_competitor_margin
+fixed_target_competitor_margin
+```
+
+Reason:
+
+```text
+answer margin is branch-sensitive and mixes correct-logit growth with best-wrong-token movement.
+early formation is exactly where those branches and residual states are still unstable.
+```
+
+The question becomes:
+
+```text
+do the QK/write/output routes close a cleaner scalar than raw moving answer margin?
+```
+
+If yes, the remaining gap is mostly scalar choice.
+
+If no, the gap is genuinely residual/nonlinear and the next proof object should be residual-state closure rather than route-score closure.
+
+### Route-To-Scalar Closure Result
+
+We tested whether the weak formation-window answer-margin closure was just a bad scalar choice.
+
+Artifacts:
+
+```text
+artifacts/runs/symbolic_kv_reference_formation/analysis/answer_scalar_residual_diagnosis/qk_ov_output_routes_1500_2500_formation/
+artifacts/runs/symbolic_kv_reference_formation/analysis/route_to_scalar_closure/qk_ov_output_routes_1500_2500_formation/
+```
+
+First, scalar residual diagnosis showed:
+
+| scalar | first-order mean abs error | first-order sign match |
+|---|---:|---:|
+| `negative_answer_loss` | 0.450 | 1.000 |
+| `fixed_target_competitor_margin` | 0.527 | 0.250 |
+| `moving_answer_margin` | 0.615 | 1.000 |
+| `fixed_source_competitor_margin` | 1.112 | 1.000 |
+| `correct_value_logit` | 1.734 | 1.000 |
+
+This says:
+
+```text
+negative_answer_loss is the cleanest scalar for local first-order update prediction.
+moving answer margin has branch-switch problems but still gets direction right.
+correct_value_logit changes a lot, but first-order magnitude misses more.
+```
+
+Then route-to-scalar closure asked whether the measured QK/OV/output route-score deltas explain each scalar's actual movement.
+
+Result:
+
+| scalar | R squared | mean actual Δ | mean predicted Δ | mean abs residual |
+|---|---:|---:|---:|---:|
+| `correct_value_logit` | 0.373 | 2.315 | 1.429 | 1.717 |
+| `fixed_target_competitor_margin` | 0.253 | 0.213 | 0.283 | 1.484 |
+| `moving_answer_margin` | 0.249 | 0.878 | 0.630 | 1.441 |
+| `fixed_source_competitor_margin` | 0.217 | 2.085 | 1.286 | 1.923 |
+| `negative_answer_loss` | 0.098 | 0.733 | 0.341 | 0.882 |
+
+This is a useful negative result.
+
+Changing the scalar helps somewhat:
+
+```text
+correct_value_logit closes better than moving answer margin.
+```
+
+But it does not solve closure:
+
+```text
+best R^2 is only 0.373.
+negative_answer_loss is locally predictable from full parameter updates,
+but not well explained by the selected route-score family.
+```
+
+That distinction matters.
+
+There are two different questions:
+
+```text
+Can the parameter update predict the scalar?
+Can the selected route scores explain the scalar?
+```
+
+For `negative_answer_loss`, the first answer is relatively good and the second answer is poor.
+
+So the gap is not just scalar choice.
+
+The selected QK/OV route labels are missing an important part of the residual transformation.
+
+Top route-to-scalar contributions also point to broad residual terms, not isolated head routes:
+
+```text
+correct_value_logit:
+  full_layer0_query_key         +2.970
+  full_layer1_query_key         -1.208
+  full_layer1_post_attn_pred    -1.208
+  full_layer0_support_value     +0.595
+  L0H0_ov_input_support_value   +0.210
+
+negative_answer_loss:
+  full_layer2_post_attn_pred    +0.572
+  full_layer1_query_key         -0.327
+  full_layer1_post_attn_pred    -0.327
+  full_layer0_query_key         +0.235
+  embedding_value_identity      +0.132
+```
+
+The interpretation is now sharper:
+
+```text
+early write-side formation is real and optimizer-explained,
+but answer behavior is mediated by broad residual-state transformations.
+Named low-rank QK/OV route labels are not enough to close behavior during early formation.
+```
+
+### Current Next Step
+
+The next proof object should be residual-state closure, not another isolated head route.
+
+We need to test whether residual states at a few stages explain scalar movement better than route scores:
+
+```text
+embedding
+layer_0_post_mlp
+layer_1_post_mlp
+layer_2_post_attn
+layer_2_post_mlp
+```
+
+The target question:
+
+```text
+does patching or regressing broad residual-state deltas close correct_value_logit / negative_answer_loss movement
+better than QK/OV route-score deltas?
+```
+
+If yes, the paper should say:
+
+```text
+the optimizer builds identifiable route geometry,
+but behavioral closure at formation time lives in residual-state dynamics.
+```
+
+If no, then the remaining gap is likely nonlinear optimizer/model interaction rather than missing route labels.
+
+## Write-Side State Conversion: MLP Local Weight Maps
+
+We then tested the write-side interpretation directly at the local weight-map level.
+
+Artifact:
+
+```text
+artifacts/runs/symbolic_kv_reference_formation/analysis/mlp_local_write_map/l0h0_mlp_write_maps_1500_2500_formation/
+```
+
+The question was:
+
+```text
+when L0H0 changes the prediction-slot residual state,
+which later weight maps turn that perturbation into answer/value geometry?
+```
+
+For each selected MLP, the tool defines the local map:
+
+```text
+F_i(z) = MLP_i(LN_2(z))
+delta_in = z_clean - z_L0H0_ablated
+actual_delta_out = F_i(z_clean) - F_i(z_L0H0_ablated)
+jvp_ablated = J_F_i(z_L0H0_ablated) @ delta_in
+```
+
+Then it asks whether `actual_delta_out` and the local Jacobian-vector prediction point into contextual `answer_value`, `support_value`, and `query_key` subspaces.
+
+The strongest result is that `L1MLP` and `L2MLP` are the main local write-side converters.
+
+Source-endpoint answer/support-value summary:
+
+| component | step | input delta norm | actual output delta norm | answer overlap | JVP answer overlap | JVP cosine to actual | JVP relative error |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `L1MLP` | `1500` | `7.024` | `4.205` | `0.799` | `0.794` | `0.9996` | `0.109` |
+| `L1MLP` | `1750` | `8.657` | `8.107` | `0.957` | `0.954` | `0.9992` | `0.113` |
+| `L1MLP` | `2000` | `7.231` | `12.690` | `0.973` | `0.979` | `0.9969` | `0.302` |
+| `L1MLP` | `2250` | `6.904` | `13.863` | `0.966` | `0.982` | `0.9944` | `0.486` |
+| `L2MLP` | `1500` | `14.924` | `2.565` | `0.642` | `0.635` | `0.9999` | `0.119` |
+| `L2MLP` | `1750` | `18.876` | `7.883` | `0.902` | `0.898` | `0.9996` | `0.271` |
+| `L2MLP` | `2000` | `21.063` | `18.881` | `0.954` | `0.950` | `0.9980` | `0.385` |
+| `L2MLP` | `2250` | `22.034` | `22.203` | `0.955` | `0.950` | `0.9957` | `0.436` |
+
+`L0MLP` is weaker and earlier:
+
+| component | step | actual output delta norm | answer overlap | JVP cosine to actual |
+|---|---:|---:|---:|---:|
+| `L0MLP` | `1500` | `3.748` | `0.564` | `0.990` |
+| `L0MLP` | `1750` | `4.522` | `0.640` | `0.966` |
+| `L0MLP` | `2000` | `3.137` | `0.517` | `0.954` |
+| `L0MLP` | `2250` | `2.657` | `0.451` | `0.960` |
+
+This gives a much clearer write-side story:
+
+```text
+L0H0 does not directly write a clean answer vector.
+L0H0 perturbs the current prediction-slot residual state.
+L0MLP weakly shapes that perturbation.
+L1MLP sharply converts it into answer/support-value geometry.
+L2MLP strongly amplifies and finalizes the answer/value-coded direction.
+```
+
+The local Jacobian-vector products are important.
+
+They show this is not just an activation correlation:
+
+```text
+the local weight map of L1MLP/L2MLP sends the L0H0-caused residual perturbation
+in almost the same direction as the actual nonlinear forward-pass output change.
+```
+
+The direction is very well explained:
+
+```text
+L1MLP JVP cosine to actual: about 0.994-0.999
+L2MLP JVP cosine to actual: about 0.995-0.999
+```
+
+The magnitude is not fully closed:
+
+```text
+later relative errors are about 0.30-0.49.
+```
+
+So the supported claim is:
+
+```text
+the write side is a dense residual-state conversion implemented by local MLP weight maps,
+not a single clean OV head writing the final answer directly.
+```
+
+The next optimizer question is:
+
+```text
+does AdamW also build the L1MLP/L2MLP local write conversion,
+or does optimizer-state dominance mainly apply to the QK routing side?
+```
+
+## Write-Side Converter Chain: Full Component Rescue And Gradient Subspace Tests
+
+After the local MLP write-map result, we tested whether the write side is a compact low-rank direction or a broader downstream converter chain.
+
+The source is still `L0H0`. The question is:
+
+```text
+when L0H0 is ablated, which downstream writes can put back the missing behavior?
+```
+
+The strongest full-chain artifact is:
+
+```text
+artifacts/runs/symbolic_kv_reference_formation/analysis/component_output_rescue/l0h0_full_chain_over_time_1500_2500/
+```
+
+The tested patch groups were:
+
+```text
+L0MLP+L1H3+L1MLP+L2MLP
+L0MLP+L1MLP+L2MLP
+L1H3+L1MLP+L2MLP
+L1MLP+L2MLP
+L0MLP+L2MLP
+L2MLP
+```
+
+The target-endpoint aggregate result is:
+
+| scalar | best group | damage | rescue | rescue fraction | improved fraction | corr |
+|---|---|---:|---:|---:|---:|---:|
+| `correct_value_logit` | `L0MLP+L1H3+L1MLP+L2MLP` | `6.687` | `2.795` | `0.418` | `0.926` | `0.927` |
+| `fixed_source_competitor_margin` | `L0MLP+L1H3+L1MLP+L2MLP` | `3.224` | `1.231` | `0.382` | `0.807` | `0.773` |
+| `fixed_target_competitor_margin` | `L0MLP+L1H3+L1MLP+L2MLP` | `2.347` | `0.496` | `0.211` | `0.758` | `0.576` |
+| `negative_answer_loss` | `L0MLP+L1H3+L1MLP+L2MLP` | `2.583` | `0.859` | `0.333` | `0.830` | `0.288` |
+
+The main comparison is that groups containing `L0MLP` work much better than groups without it.
+
+For `correct_value_logit`, target endpoint:
+
+| patch group | rescue fraction |
+|---|---:|
+| `L0MLP+L1H3+L1MLP+L2MLP` | `0.418` |
+| `L0MLP+L1MLP+L2MLP` | `0.401` |
+| `L0MLP+L2MLP` | `0.265` |
+| `L1MLP+L2MLP` | `0.187` |
+| `L1H3+L1MLP+L2MLP` | `0.184` |
+| `L2MLP` | `0.098` |
+
+For margin and loss, the pattern is sharper. Removing `L0MLP` often makes the patch weak or harmful:
+
+| scalar | `L0MLP+L1H3+L1MLP+L2MLP` | `L1MLP+L2MLP` | `L2MLP` |
+|---|---:|---:|---:|
+| `fixed_target_competitor_margin` | `0.211` | `-0.070` | `-0.062` |
+| `negative_answer_loss` | `0.333` | `-0.088` | `-0.052` |
+
+The time-sweep shows that this is already present by step `1750`, not a late artifact:
+
+| step | scalar | full-chain rescue fraction |
+|---:|---|---:|
+| `1750` | `correct_value_logit` | `0.395` |
+| `2000` | `correct_value_logit` | `0.404` |
+| `2250` | `correct_value_logit` | `0.411` |
+| `2500` | `correct_value_logit` | `0.444` |
+| `1750` | `negative_answer_loss` | `0.393` |
+| `2250` | `negative_answer_loss` | `0.334` |
+| `2500` | `negative_answer_loss` | `0.341` |
+
+This changes the write-side story:
+
+```text
+L0H0 does not hand the answer directly to the unembedding.
+It creates a residual perturbation at the prediction slot.
+L0MLP is the first important converter of that perturbation.
+L1H3/L1MLP add smaller intermediate processing.
+L2MLP is part of the downstream output path, but later functional-subspace tests show its own MLP output is not the main positive converter.
+```
+
+So the write side is not a clean standalone `W_OV` writer. It is a downstream converter chain.
+
+### Low-Rank Subspace Tests
+
+We then asked whether a small subspace of the converter writes is enough.
+
+PCA artifact:
+
+```text
+artifacts/runs/symbolic_kv_reference_formation/analysis/causal_write_subspace_rescue/l0h0_joint_mlp_answer_value_support_prediction_1500_2500/
+```
+
+Gradient-selected subspace artifacts:
+
+```text
+artifacts/runs/symbolic_kv_reference_formation/analysis/causal_write_gradient_subspace_rescue/l0h0_joint_mlp_support_prediction_1500_2500/
+artifacts/runs/symbolic_kv_reference_formation/analysis/causal_write_gradient_subspace_rescue/l0h0_converter_chain_support_prediction_1500_2500/
+```
+
+The PCA result is important but negative in the right way. Rank-8 PCA captures almost all component-delta norm, but it does not cleanly rescue behavior.
+
+For `L1MLP+L2MLP`, target endpoint, rank 8:
+
+| basis | position group | `correct_value_logit` rescue | `fixed_target_competitor_margin` rescue | `negative_answer_loss` rescue |
+|---|---|---:|---:|---:|
+| `all_delta_pca` | `support_value+prediction` | `0.146` | negative / weak | negative / weak |
+| `identity_delta_pca` | `support_value+prediction` | `0.149` | negative / weak | negative / weak |
+
+That means the biggest write-delta directions are not the same thing as the causally useful answer directions.
+
+The scalar-gradient-selected basis is smaller but cleaner.
+
+For `L1MLP+L2MLP`, target endpoint, rank 8:
+
+| scalar | rescue fraction |
+|---|---:|
+| `correct_value_logit` | `0.063` |
+| `fixed_source_competitor_margin` | `0.043` |
+| `fixed_target_competitor_margin` | `0.009` |
+| `negative_answer_loss` | `0.018` |
+
+Adding the upstream converter pieces improves it:
+
+For `L0MLP+L1H3+L1MLP+L2MLP`, target endpoint, rank 8:
+
+| scalar | rescue fraction | rescue | projection fraction |
+|---|---:|---:|---:|
+| `correct_value_logit` | `0.136` | `0.909` | `0.123` |
+| `fixed_source_competitor_margin` | `0.102` | `0.329` | `0.118` |
+| `fixed_target_competitor_margin` | `0.015` | `0.036` | about `0.12` |
+| `negative_answer_loss` | `0.068` | `0.175` | `0.128` |
+
+The diagnostic detail matters: the gradient-basis run produced `1024` basis rows, with `896` full-rank cases and `128` zero-gradient cases. The zero-gradient cases were the expected `L2MLP` / `support_value` combinations: after `L2MLP`, no later cross-position operation can move support-position information to the prediction position.
+
+### Current Write-Side Conclusion
+
+The supported write-side claim is:
+
+```text
+the value/write half of the circuit is a broad residual converter chain,
+not a single low-rank OV map.
+```
+
+Full component writes recover about `33%` to `42%` of the L0H0 ablation damage on the best output scalars. Low-rank or gradient-selected projections recover much less, even when they point in the right direction. That means superposition is still active: the useful write effect is spread through a wide state transformation, and the compact subspaces only capture a small behavior-aligned slice.
+
+This does not close the whole answer-margin story yet. It gives a stronger write-side mechanism:
+
+```text
+QK side: a low-rank route matcher forms.
+write side: L0H0 perturbs prediction state, then MLP converter writes transform it into answer/value geometry.
+```
+
+The next optimizer test is to ask whether AdamW builds this converter chain the same way it built the QK route.
+
+### Functional Subspace Split: The Write Signal Lives At The Prediction Slot
+
+We then made the write-side question more precise.
+
+Instead of asking only whether a downstream component can rescue behavior, we asked:
+
+```text
+what vector does L0H0 add to the residual stream?
+which scalar-gradient/read directions see that vector?
+does the downstream MLP transform the vector, or mostly pass it through?
+```
+
+The tool was:
+
+```text
+mlp-input-functional-subspace-report
+```
+
+Artifacts:
+
+```text
+artifacts/runs/symbolic_kv_reference_formation/analysis/mlp_input_functional_subspace/l0h0_to_l0mlp_support_prediction_1500_2500/
+artifacts/runs/symbolic_kv_reference_formation/analysis/mlp_input_functional_subspace/l0h0_to_l1mlp_support_prediction_1500_2500/
+artifacts/runs/symbolic_kv_reference_formation/analysis/mlp_input_functional_subspace/l0h0_to_l2mlp_prediction_1500_2500/
+```
+
+For an MLP block, the report computes:
+
+```text
+delta_in = z_clean[input_stage] - z_L0H0_ablated[input_stage]
+
+mlp_output_delta =
+  MLP(z_clean[input_stage]) - MLP(z_L0H0_ablated[input_stage])
+
+skip_dot =
+  grad_scalar(output_stage) dot delta_in
+
+mlp_dot =
+  grad_scalar(output_stage) dot mlp_output_delta
+
+total_dot =
+  grad_scalar(output_stage) dot (delta_in + mlp_output_delta)
+```
+
+So this separates the carried residual signal from the MLP-transformed signal.
+
+The prediction-position aggregate is:
+
+| component | total scalar-relevant effect | residual skip/direct part | MLP-transformed part | mean `delta_in` overlap with read subspace | mean MLP-output overlap with read subspace |
+|---|---:|---:|---:|---:|---:|
+| `L0MLP` | `1648.453` | `1219.088` | `429.365` | `0.259` | `0.162` |
+| `L1MLP` | `1329.142` | `1399.580` | `-70.438` | `0.146` | `0.042` |
+| `L2MLP` | `1187.722` | `1319.112` | `-131.390` | `0.064` | `0.039` |
+
+This changes the write-side interpretation again.
+
+`L0MLP` is the only tested MLP where the local MLP-transformed part is clearly positive and large. Its transformed part contributes about `429` scalar-dot units, while the residual skip/direct part contributes about `1219`.
+
+For `L1MLP` and `L2MLP`, the residual signal remains strongly useful, but the MLP-transformed part is negative on aggregate. These later MLPs are therefore not the main local positive converters of the L0H0-caused signal. They mostly carry a useful prediction-position residual direction forward, while their own MLP outputs slightly oppose it in this scalar split.
+
+The position split is decisive:
+
+| position | aggregate scalar-relevant effect |
+|---|---:|
+| `prediction` | `4165.317` |
+| `support_value` | `-17.307` |
+
+The `support_value` result is tiny compared with the prediction-position effect. The failed first `L2MLP` run is also informative: `L2MLP` at the `support_value` position had zero gradient to the answer scalar, because after that point there is no later cross-position operation that can move support-position information into the prediction answer.
+
+The supported write-side mechanism is now:
+
+```text
+L0H0 creates a prediction-position residual perturbation.
+L0MLP partly converts and amplifies it.
+After L0MLP, most of the useful signal is carried in the residual stream itself.
+L1MLP and L2MLP are part of the downstream model state, but their local MLP outputs are not the main positive writer for this L0H0-caused signal.
+```
+
+This means the write-side object is not a clean `W_OV` value writer and not a simple MLP chain where each MLP converts more. The better object is:
+
+```text
+the prediction-position functional residual subspace caused by L0H0/L0MLP
+```
+
+That subspace is what should be tracked in the next phase.
+
+## 2026-04-29 Update: OV Write-Side Functional Subspace And AdamW Split
+
+This update closes the next layer of the OV/write-side question for the reference seed.
+
+The earlier write-side result said:
+
+```text
+L0H0 has a real early value/write signal.
+That signal is not a clean standalone OV vector.
+The useful effect travels through the residual stream and downstream components.
+```
+
+The new result makes that more precise.
+
+The write-side object is:
+
+```text
+the L0H0-caused prediction-position residual perturbation,
+as read by the mature answer/value readout directions around L0MLP.
+```
+
+In plain language:
+
+```text
+L0H0 does not simply write "the answer token" into the residual stream.
+It changes the residual vector at the prediction position.
+That change already points partly in a useful mature direction early in training.
+Around 1500 -> 1750, AdamW makes that direction strongly usable by the answer readout.
+L0MLP then adds a smaller nonlinear conversion on top.
+```
+
+This is the current OV-side mechanism.
+
+### Why Static OV Was The Wrong Object
+
+For QK, the matrix story was clean:
+
+```text
+W_QK = W_Q W_K^T
+```
+
+and the useful scalar was a route score:
+
+```text
+C_QK(theta)
+  = E[score(prediction, support_value)
+      - mean score(prediction, distractors)]
+```
+
+That works because QK is a routing map:
+
+```text
+query vector dot key vector -> attention score
+```
+
+OV is different.
+
+OV writes into the residual stream:
+
+```text
+head_output = attention @ V
+residual_write = head_output W_O
+```
+
+But that residual write is not judged immediately.
+
+It is later processed by:
+
+```text
+residual addition
+layer norm
+later attention
+later MLPs
+final norm
+unembedding
+```
+
+So the right OV question is not:
+
+```text
+does W_OV point directly at the answer embedding?
+```
+
+The right question is:
+
+```text
+does the residual vector written by L0H0 land in directions
+that the later network actually reads as answer evidence?
+```
+
+This is why the stronger proof object became a contextual residual-write scalar, not raw `W_OV` SVD.
+
+### Local Functional Decomposition
+
+For an MLP block, define:
+
+```text
+F_l(z) = MLP_l(LN_2(z))
+```
+
+For a clean run and an `L0H0`-ablated run, define the L0H0-caused input change at a selected residual stage:
+
+```text
+delta_in
+  = z_clean[input_stage] - z_L0H0_ablated[input_stage]
+```
+
+The MLP output change caused by that perturbation is:
+
+```text
+mlp_output_delta
+  = F_l(z_clean[input_stage])
+    - F_l(z_L0H0_ablated[input_stage])
+```
+
+The post-MLP residual change is therefore:
+
+```text
+post_mlp_total_delta
+  = delta_in + mlp_output_delta
+```
+
+For an output scalar `s`, such as fixed-source or fixed-target answer margin, define the readout gradient:
+
+```text
+g_s = grad_z s
+```
+
+Then the scalar-relevant write effect is:
+
+```text
+C_total = E[g_s . post_mlp_total_delta]
+        = E[g_s . delta_in] + E[g_s . mlp_output_delta]
+        = C_skip + C_mlp
+```
+
+This split asks:
+
+```text
+is the useful write signal already present in the residual stream,
+or does the MLP create most of it?
+```
+
+The answer is:
+
+```text
+most of it is already in the L0H0-caused residual perturbation;
+L0MLP adds a smaller positive conversion.
+```
+
+### Prediction Slot, Not Support Slot
+
+The functional-subspace report compared where the L0H0-caused signal matters.
+
+Artifacts:
+
+```text
+artifacts/runs/symbolic_kv_reference_formation/analysis/mlp_input_functional_subspace/l0h0_to_l0mlp_support_prediction_1500_2500/
+artifacts/runs/symbolic_kv_reference_formation/analysis/mlp_input_functional_subspace/l0h0_to_l1mlp_support_prediction_1500_2500/
+artifacts/runs/symbolic_kv_reference_formation/analysis/mlp_input_functional_subspace/l0h0_to_l2mlp_prediction_1500_2500/
+```
+
+Aggregate scalar-relevant effect:
+
+| position | aggregate effect |
+|---|---:|
+| `prediction` | `4165.317` |
+| `support_value` | `-17.307` |
+
+So the useful write-side signal is overwhelmingly at the prediction/read position.
+
+This matters because it rules out a misleading picture:
+
+```text
+L0H0 writes a value at the support position,
+then some later component simply moves it.
+```
+
+The better picture is:
+
+```text
+L0H0 changes the current prediction-position state.
+That state already contains value-relevant information.
+Downstream readout directions increasingly use it.
+```
+
+### Which MLP Actually Helps?
+
+The local split showed:
+
+| component | total scalar-relevant effect | residual skip/direct part | MLP-transformed part | `delta_in` read overlap | MLP-output read overlap |
+|---|---:|---:|---:|---:|---:|
+| `L0MLP` | `1648.453` | `1219.088` | `429.365` | `0.259` | `0.162` |
+| `L1MLP` | `1329.142` | `1399.580` | `-70.438` | `0.146` | `0.042` |
+| `L2MLP` | `1187.722` | `1319.112` | `-131.390` | `0.064` | `0.039` |
+
+The key point:
+
+```text
+L0MLP is the only tested MLP whose own output adds a clearly positive local conversion.
+L1MLP and L2MLP mostly preserve/carry the useful residual direction,
+while their local MLP outputs are negative in this scalar split.
+```
+
+This refines the earlier "MLP converter chain" story.
+
+The downstream model is still necessary, but the strongest local positive conversion for the L0H0-caused prediction-slot signal is at `L0MLP`.
+
+### Fixed Mature Functional Subspace Trajectory
+
+Next we asked whether the useful write direction is born as a new direction or whether it exists earlier but becomes useful later.
+
+Artifact:
+
+```text
+artifacts/runs/symbolic_kv_reference_formation/analysis/mlp_functional_subspace_trajectory/l0h0_to_l0mlp_prediction_ref2500_0750_3500/
+```
+
+We fixed reference subspaces at step `2500`, then measured every checkpoint against the same basis.
+
+For example, define a mature readout basis at step `2500`:
+
+```text
+B_ref = PCA_top4({g_s(step 2500, x_i)})
+```
+
+Then for each checkpoint:
+
+```text
+overlap(delta_in(t), B_ref)
+overlap(mlp_output_delta(t), B_ref)
+E[g_s(t) . post_mlp_total_delta(t)]
+```
+
+The result was surprising.
+
+The mature-looking write directions are already present early:
+
+| step | `delta_in` overlap with step-2500 `input_delta` basis | MLP-output overlap with step-2500 MLP-output basis |
+|---:|---:|---:|
+| `750` | `0.661` | `0.721` |
+| `1000` | `0.655` | `0.735` |
+| `1250` | `0.606` | `0.728` |
+| `1500` | `0.608` | `0.750` |
+| `1750` | `0.583` | `0.722` |
+| `2500` | `0.596` | `0.724` |
+
+So the write side does not look like:
+
+```text
+random direction -> new mature direction
+```
+
+Instead it looks like:
+
+```text
+mature-ish direction exists early,
+but it is weakly coupled to the answer readout.
+```
+
+The scalar-relevant effect is tiny until the birth window:
+
+| step | total functional write effect | residual skip part | L0MLP transformed part |
+|---:|---:|---:|---:|
+| `750` | `2.864` | `-1.257` | `4.121` |
+| `1000` | `2.607` | `-0.924` | `3.531` |
+| `1250` | `2.225` | `-0.155` | `2.380` |
+| `1500` | `2.647` | `2.472` | `0.174` |
+| `1750` | `50.185` | `32.584` | `17.601` |
+| `2000` | `64.801` | `48.013` | `16.788` |
+| `2250` | `66.713` | `51.059` | `15.654` |
+| `2500` | `91.624` | `70.177` | `21.446` |
+| `2750` | `104.699` | `79.161` | `25.537` |
+| `3500` | `92.627` | `79.046` | `13.582` |
+
+This gives the current best formation story for the write side:
+
+```text
+the direction exists early,
+but answer-readout coupling turns on sharply around 1500 -> 1750.
+```
+
+That is different from QK.
+
+For QK, the low-rank route direction itself visibly forms.
+
+For the write side, the direction is partly present early; the functional coupling is what crystallizes.
+
+### Fixed-Readout AdamW Attribution
+
+The next experiment asked why the functional write coupling grows.
+
+We fixed the mature step-2500 readout vector and measured:
+
+```text
+C_write(t)
+  = E[ r_ref(x_i) . post_mlp_total_delta(t, x_i) ]
+```
+
+where:
+
+```text
+r_ref(x_i) = post-MLP scalar gradient at step 2500
+post_mlp_total_delta = delta_in + mlp_output_delta
+```
+
+Then for each one-step optimizer interval:
+
+```text
+Delta C_write
+  ~= grad_theta C_write(theta_t) . Delta theta_actual
+```
+
+and the actual AdamW update was decomposed into:
+
+```text
+raw SGD
+clipped SGD
+Adam current-gradient component
+Adam historical momentum component
+Adam preconditioned total
+weight decay
+reconstructed AdamW update
+```
+
+Artifact:
+
+```text
+artifacts/runs/symbolic_kv_reference_formation/analysis/mlp_functional_write_adam_state_attribution/l0h0_l0mlp_prediction_ref2500_postgrad_total_1500_2500/
+```
+
+Across `1500 -> 2500`, averaged across the four fixed-margin endpoint/readout variants:
+
+| quantity | value |
+|---|---:|
+| actual scalar growth | `1.015` |
+| first-order actual-update prediction | `1.034` |
+| raw SGD fraction | `0.124%` |
+| Adam current-gradient fraction | `11.50%` |
+| Adam momentum fraction | `91.35%` |
+| weight decay fraction | `-2.85%` |
+| actual-update sign match | `99.7%` |
+| reconstructed AdamW sign match | `100%` |
+| mean reconstruction relative error | `0.00010` |
+
+This is the central optimizer result for the write side:
+
+```text
+raw SGD barely moves the fixed functional-write scalar.
+AdamW momentum carries almost all of the useful write-coupling update.
+```
+
+The timing is also sharp.
+
+Summed over the four scalar variants:
+
+| window | actual change | predicted change | raw SGD | Adam current | Adam momentum | weight decay |
+|---|---:|---:|---:|---:|---:|---:|
+| `1500 -> 1750` | `+5.978` | `+5.992` | `+0.00584` | `+0.563` | `+5.449` | `-0.0197` |
+| `1750 -> 2000` | `-0.375` | `-0.363` | `+0.00005` | `-0.006` | `-0.325` | `-0.0324` |
+| `2000 -> 2250` | `-0.738` | `-0.716` | `-0.00043` | `-0.0459` | `-0.638` | `-0.0322` |
+| `2250 -> 2500` | `-0.804` | `-0.777` | `-0.00032` | `-0.0362` | `-0.709` | `-0.0315` |
+
+So the write-side fixed scalar is mostly born in:
+
+```text
+1500 -> 1750
+```
+
+Afterward it partially relaxes or redistributes.
+
+This matches the trajectory result:
+
+```text
+the direction was present before;
+the useful readout coupling turns on in the birth window.
+```
+
+### Residual Write Versus L0MLP Conversion
+
+Finally, we split:
+
+```text
+post_mlp_total_delta = delta_in + mlp_output_delta
+```
+
+into two separate AdamW attribution runs.
+
+Artifacts:
+
+```text
+artifacts/runs/symbolic_kv_reference_formation/analysis/mlp_functional_write_adam_state_attribution/l0h0_l0mlp_prediction_ref2500_postgrad_input_delta_1500_2500/
+artifacts/runs/symbolic_kv_reference_formation/analysis/mlp_functional_write_adam_state_attribution/l0h0_l0mlp_prediction_ref2500_postgrad_mlp_output_delta_1500_2500/
+```
+
+The split result:
+
+| part | actual growth | share of total | predicted growth | raw SGD fraction | Adam current fraction | Adam momentum fraction | weight decay fraction |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `input_delta` | `0.789` | `~78%` | `0.802` | `0.157%` | `11.22%` | `91.23%` | `-2.45%` |
+| `mlp_output_delta` | `0.226` | `~22%` | `0.232` | `-0.010%` | `13.12%` | `92.37%` | `-5.51%` |
+
+So most of the write-side birth is not the L0MLP nonlinear output.
+
+Most of it is:
+
+```text
+the L0H0-caused residual perturbation itself,
+arriving at the L0MLP input / prediction slot.
+```
+
+L0MLP adds a smaller positive nonlinear correction.
+
+The timing split is:
+
+| window | `input_delta` actual | `mlp_output_delta` actual |
+|---|---:|---:|
+| `1500 -> 1750` | `+3.858` | `+2.120` |
+| `1750 -> 2000` | `+0.204` | `-0.579` |
+| `2000 -> 2250` | `-0.410` | `-0.328` |
+| `2250 -> 2500` | `-0.494` | `-0.310` |
+
+Again, both pieces mainly turn on in `1500 -> 1750`.
+
+The parameter-group split is also clean.
+
+For `input_delta`, `L0MLP` contributes exactly zero because this scalar is measured before L0MLP acts:
+
+| parameter group | predicted growth |
+|---|---:|
+| `L0H0.qkvo` | `3.143` |
+| `L0 attention block` | `3.143` |
+| `L0MLP` | `0.000` |
+
+For `mlp_output_delta`, `L0MLP` is the main converter:
+
+| parameter group | predicted growth |
+|---|---:|
+| `L0MLP` | `0.882` |
+| `L0H0.qkvo` | `0.442` |
+| `L0 attention block` | `0.048` |
+
+These parameter groups overlap, so they should not be added as independent effects.
+
+But the interpretation is clear:
+
+```text
+L0H0 carries the main residual write.
+L0MLP carries the nonlinear conversion.
+AdamW momentum builds both.
+```
+
+### Current Full OV Picture
+
+The current OV/write-side mechanism is:
+
+```text
+1. L0H0 develops an early value-bearing write route.
+
+2. The useful write is not mainly a clean W_OV singular vector.
+   It is a contextual residual perturbation at the prediction position.
+
+3. The mature-looking residual/write directions are partly present early.
+   What forms sharply is their coupling to answer/value readout directions.
+
+4. The coupling birth happens mainly in 1500 -> 1750.
+
+5. Most of the useful effect is the residual write itself:
+   delta_in explains about 78% of the fixed-readout write growth.
+
+6. L0MLP adds a smaller positive nonlinear conversion:
+   mlp_output_delta explains about 22%.
+
+7. Raw SGD contributes almost nothing to either part.
+
+8. In this reference-seed fixed-readout split, AdamW momentum carries about 91% -> 92% of both pieces.
+```
+
+In simple terms:
+
+```text
+QK answers "where should I read?"
+OV/write answers "what useful residual state gets created after reading?"
+
+For this model, the answer to the second question is:
+L0H0 creates a useful prediction-slot residual state,
+L0MLP slightly transforms it,
+and AdamW momentum is the optimizer-state mechanism that makes it functionally useful.
+```
+
+This is the write-side complement to the QK result.
+
+QK formation was:
+
+```text
+AdamW builds a low-rank support-value matcher in W_QK.
+```
+
+Write-side formation is:
+
+```text
+AdamW makes an already-present contextual residual direction become readout-useful,
+mostly through L0H0's residual write and secondarily through L0MLP conversion.
+```
+
+### What This Solves And What It Does Not
+
+This solves a specific missing link:
+
+```text
+the OV/write side is not just "messy."
+It has a measurable functional subspace,
+a clear prediction-position location,
+a residual-vs-MLP split,
+and an exact AdamW decomposition.
+```
+
+It also explains why the earlier low-rank OV route labels did not close behavior:
+
+```text
+the useful write-side object is a contextual residual-state coupling,
+not one static OV matrix direction.
+```
+
+But this still does not prove full behavioral sufficiency.
+
+Open gaps:
+
+```text
+the full answer-margin movement is not fully closed by the selected route families;
+downstream residual interactions still matter;
+normalization and later component interactions may explain part of the remaining gap;
+plain SGD-vs-AdamW optimizer ablation is still not done;
+cross-seed validation of this exact functional-write split was not part of this 2026-04-29 reference-seed update.
+```
+
+The supported claim is now:
+
+```text
+In the reference seed, both halves of the lookup circuit have optimizer-level explanations.
+
+QK:
+  AdamW builds a low-rank support-value route matcher.
+
+OV/write:
+  AdamW momentum builds functional coupling between L0H0's prediction-slot residual write
+  and mature answer/value readout directions, with L0MLP adding a smaller nonlinear conversion.
+```
+
+## 2026-04-30 Update: Computation Ledger, Scalar Closure, And Cross-Seed Write Validation
+
+This update turns the recent runs into the paper-facing accounting layer.
+
+The central reason for the ledger is that three claims are different:
+
+```text
+causal claim:
+  ablating or patching the object changes behavior
+
+dynamic claim:
+  actual optimizer updates built the object during training
+
+computational claim:
+  the object implements a specific part of the lookup algorithm
+```
+
+The current ledger is:
+
+| object | math target | artifact family | status |
+|---|---|---|---|
+| behavior | `m_t = logit(correct) - max wrong logit` | best checkpoint, answer-scalar diagnostics | learned lookup supported |
+| QK route | `C_QK = E[score(prediction, support) - mean score(prediction, distractors)]` | QK route geometry, contextual alignment, route attribution | strong computational story |
+| QK weight birth | `W_QK = W_Q W_K^T = U Sigma V^T` | `weight_svd_trace`, rank-8 QK reports | low-rank matcher birth supported |
+| QK optimizer cause | `Delta C_QK ~= grad C_QK . Delta theta_actual` | exact from-init AdamW attribution, cross-seed winner/bottom controls | raw SGD tiny; AdamW state carries route growth |
+| write functional subspace | `C_write = E[g_ref . delta_write]` | `mlp_input_functional_subspace`, functional trajectory | supported; contextual residual subspace, not clean `W_OV` |
+| write optimizer cause | `Delta C_write ~= grad C_write . Delta theta_actual` | cross-seed `mlp_functional_write_adam_state_attribution` | raw SGD tiny; AdamW-preconditioned update carries write growth |
+| scalar closure | `Delta s ~= beta^T Delta routes` | `route_to_scalar_closure`, `route_family_closure`, `output_route_closure` | partial route closure; stronger output-space closure |
+
+The ledger changes the paper's wording.
+
+The old loose statement was:
+
+```text
+the OV/write side is still not optimizer explained
+```
+
+That is now too weak.
+
+The supported statement is:
+
+```text
+the write side is not a clean static W_OV matrix story;
+it is a prediction-position functional residual-subspace story.
+
+That write subspace is validated across seeds,
+and exact AdamW attribution shows raw SGD is tiny while
+AdamW-preconditioned updates carry the useful write growth.
+```
+
+### Cross-Seed Functional Write Validation
+
+The cross-seed write audit ran `28 / 28` functional-subspace reports.
+
+The selected winner write sources were:
+
+| seed | source head | downstream MLP |
+|---:|---|---|
+| `0011` | `L1H3` | `L1MLP` |
+| `0013` | `L1H3` | `L1MLP` |
+| `0017` | `L1H1` | `L1MLP` |
+| `0023` | `L2H1` | `L2MLP` |
+| `0029` | `L1H1` | `L1MLP` |
+
+Final-step functional write effect, grouped by role:
+
+| scalar | winner mean | runner mean | bottom mean |
+|---|---:|---:|---:|
+| `fixed_source_competitor_margin` | `510.43` | `388.22` | `177.01` |
+| `negative_answer_loss` | `415.64` | `195.40` | `9.63` |
+
+The winner/runner/bottom ordering is the important validation.
+
+It says:
+
+```text
+the write role repeats across seeds;
+the component address changes;
+bottom controls do not carry the same functional write effect.
+```
+
+The split inside the winning write effect is also stable:
+
+| scalar | residual-skip fraction | local MLP-output fraction |
+|---|---:|---:|
+| `fixed_source_competitor_margin` | `0.902` | `0.098` |
+| `negative_answer_loss` | `0.908` | `0.092` |
+
+So the write-side object is mostly:
+
+```text
+the source-head-caused residual perturbation at the prediction slot
+```
+
+not:
+
+```text
+a local MLP-created answer vector
+```
+
+The MLP is still part of the readout boundary, but most of the measured functional signal is already in the residual write.
+
+### Cross-Seed Write AdamW Attribution
+
+The write-side AdamW attribution ran on the five selected winner source-to-MLP paths over `1500 -> 2500`.
+
+Aggregate over the selected answer-value write scalars:
+
+| aggregate | actual growth | first-order predicted growth | raw SGD / predicted | Adam current / predicted | Adam momentum / predicted | weight decay / predicted |
+|---|---:|---:|---:|---:|---:|---:|
+| all write scalars | `23.843` | `41.636` | `1.22%` | `86.00%` | `15.39%` | `-1.40%` |
+| `fixed_source_competitor_margin` | `14.802` | `24.840` | `1.14%` | `81.68%` | `19.54%` | `-1.22%` |
+| `negative_answer_loss` | `9.041` | `16.795` | `1.34%` | `92.40%` | `9.26%` | `-1.66%` |
+
+Per-seed split:
+
+| seed | path | actual | predicted | raw SGD / pred | current / pred | momentum / pred | decay / pred |
+|---:|---|---:|---:|---:|---:|---:|---:|
+| `0011` | `L1H3 -> L1MLP` | `3.180` | `9.011` | `2.17%` | `125.36%` | `-23.32%` | `-2.04%` |
+| `0013` | `L1H3 -> L1MLP` | `7.112` | `9.426` | `0.91%` | `53.99%` | `47.21%` | `-1.20%` |
+| `0017` | `L1H1 -> L1MLP` | `5.929` | `14.695` | `1.34%` | `115.98%` | `-14.02%` | `-1.96%` |
+| `0023` | `L2H1 -> L2MLP` | `2.054` | `3.185` | `1.02%` | `73.91%` | `26.73%` | `-0.64%` |
+| `0029` | `L1H1 -> L1MLP` | `5.570` | `5.319` | `-0.07%` | `0.47%` | `99.07%` | `0.46%` |
+
+This is not the same as the reference-seed-only statement that momentum carries almost everything.
+
+The better cross-seed statement is:
+
+```text
+raw SGD is consistently tiny;
+AdamW-preconditioned updates carry the useful write growth;
+the split between current-gradient and historical momentum is seed-dependent.
+```
+
+That distinction matters. The QK route result is much more cleanly momentum-heavy across the traced winner runs. The write-side result is broader: AdamW state/preconditioning matters, but the current-vs-momentum decomposition changes with seed and write address.
+
+### Scalar Closure During The Formation Window
+
+We then asked whether measured QK/write/output route-score deltas close the answer scalar.
+
+The relevant formation window is:
+
+```text
+1500 -> 2500
+```
+
+because this is where the write functional coupling turns on.
+
+The 14-route family includes QK pointer terms, early write terms, and late output proxies.
+
+Route-to-scalar closure:
+
+| scalar | observations | actual mean delta | predicted mean delta | mean abs residual | R squared |
+|---|---:|---:|---:|---:|---:|
+| `correct_value_logit` | `512` | `2.315` | `1.429` | `1.717` | `0.373` |
+| `fixed_source_competitor_margin` | `512` | `2.085` | `1.286` | `1.923` | `0.217` |
+| `fixed_target_competitor_margin` | `512` | `0.213` | `0.283` | `1.484` | `0.253` |
+| `moving_answer_margin` | `512` | `0.878` | `0.630` | `1.441` | `0.249` |
+| `negative_answer_loss` | `512` | `0.733` | `0.341` | `0.882` | `0.098` |
+
+Family-level answer-margin closure:
+
+| family | routes | observations | mean predicted delta | R squared |
+|---|---:|---:|---:|---:|
+| `qk_pointer` | `6` | `512` | `0.531` | `0.212` |
+| `qk_plus_early_write` | `10` | `512` | `0.635` | `0.235` |
+| `qk_plus_write_plus_output` | `14` | `512` | `0.630` | `0.249` |
+
+This is partial closure, not full closure.
+
+It supports:
+
+```text
+the measured route/write coordinates are behaviorally meaningful
+```
+
+but it does not support:
+
+```text
+these 14 route scores fully explain the answer margin
+```
+
+Output-route closure is stronger in the same window:
+
+| scalar | observations | actual mean delta | predicted mean delta | mean abs residual | R squared |
+|---|---:|---:|---:|---:|---:|
+| `correct_value_logit` | `512` | `2.315` | `2.043` | `0.962` | `0.837` |
+| `fixed_source_competitor_margin` | `512` | `2.085` | `1.505` | `1.377` | `0.576` |
+| `fixed_target_competitor_margin` | `512` | `0.213` | `0.346` | `1.186` | `0.508` |
+| `moving_answer_margin` | `512` | `0.878` | `0.359` | `1.377` | `0.340` |
+| `negative_answer_loss` | `512` | `0.733` | `0.091` | `0.866` | `0.022` |
+
+This says the answer scalar is easier to explain once we move into output/readout space.
+
+The scalar hierarchy is now:
+
+```text
+cleanest local proof scalars:
+  correct_value_logit
+  fixed-source competitor margin
+  fixed-target competitor margin
+
+branch-sensitive scalar:
+  moving answer margin
+
+harder nonlinear scalar:
+  negative answer loss in the 1500 -> 2500 output-route closure
+```
+
+The current closure claim is therefore:
+
+```text
+QK/write route scores partially close answer-scalar movement.
+Output-space readout deltas close much more of the local correct-logit/fixed-margin movement.
+Raw moving answer margin remains branch-sensitive.
+Full answer-margin closure by a small causal route set remains open.
+```
+
+### Current Paper-Level Claim After This Update
+
+The paper can now say:
+
+```text
+In symbolic KV lookup, training repeatedly forms a support-value retrieval role.
+
+QK side:
+  the role becomes a low-rank W_QK matcher;
+  exact AdamW decomposition explains its growth;
+  raw SGD is far too small.
+
+Write side:
+  the role is not a clean W_OV singular-vector story;
+  it is a contextual prediction-position residual-write subspace;
+  the write role validates across seeds under different component addresses;
+  exact AdamW attribution shows AdamW-preconditioned updates carry the write growth;
+  raw SGD is again tiny.
+
+Closure:
+  route/write scalars are meaningful but partial;
+  output-space scalars are stronger;
+  full answer-margin sufficiency is still open.
+```

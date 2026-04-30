@@ -47,6 +47,32 @@ KEY_SEPARABILITY_REPORT = ROOT / (
     "l2h1_prediction_query_key_stage_sweep_000250_005500/"
     "contextual_key_separability_report.json"
 )
+WRITE_TRAJECTORY_ROWS = ROOT / (
+    "artifacts/runs/symbolic_kv_reference_formation/analysis/mlp_functional_subspace_trajectory/"
+    "l0h0_to_l0mlp_prediction_ref2500_0750_3500/"
+    "mlp_functional_subspace_trajectory_functional_summary_rows.jsonl"
+)
+REFERENCE_WRITE_ADAM_REPORT = ROOT / (
+    "artifacts/runs/symbolic_kv_reference_formation/analysis/mlp_functional_write_adam_state_attribution/"
+    "l0h0_l0mlp_prediction_ref2500_postgrad_total_1500_2500/"
+    "mlp_functional_write_adam_state_attribution_report.json"
+)
+ROUTE_TO_SCALAR_CLOSURE_REPORT = ROOT / (
+    "artifacts/runs/symbolic_kv_reference_formation/analysis/route_to_scalar_closure/"
+    "qk_ov_output_routes_1500_2500_formation/route_to_scalar_closure_report.json"
+)
+OUTPUT_ROUTE_CLOSURE_REPORT = ROOT / (
+    "artifacts/runs/symbolic_kv_reference_formation/analysis/output_route_closure/"
+    "qk_ov_output_routes_1500_2500_formation/output_route_closure_report.json"
+)
+LINE_INTEGRAL_REPORT = ROOT / (
+    "artifacts/runs/symbolic_kv_reference_formation/analysis/component_output_rescue_line_integral/"
+    "l0h0_full_converter_1500_2500_stride10/component_output_rescue_line_integral_report.json"
+)
+BRANCH_DECOMPOSITION_REPORT = ROOT / (
+    "artifacts/runs/symbolic_kv_reference_formation/analysis/answer_margin_branch_decomposition/"
+    "query_key_support_value_5500_5550_stepwise/answer_margin_branch_decomposition_report.json"
+)
 CROSS_SEED_ROOT = ROOT / "artifacts/runs/symbolic_kv_cross_seed_adam"
 
 
@@ -58,6 +84,17 @@ def require_path(path: Path) -> Path:
 
 def load_json(path: Path) -> dict:
     return json.loads(require_path(path).read_text(encoding="utf-8"))
+
+
+def load_jsonl(path: Path) -> list[dict]:
+    rows = []
+    for line_number, line in enumerate(require_path(path).read_text(encoding="utf-8").splitlines(), start=1):
+        if not line:
+            raise RuntimeError(f"Empty JSONL line in {path} at {line_number}")
+        rows.append(json.loads(line))
+    if not rows:
+        raise RuntimeError(f"No rows found in {path}")
+    return rows
 
 
 def write_svg(name: str, width: int, height: int, body: str) -> None:
@@ -177,29 +214,36 @@ def read_csv_rows(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(handle))
 
 
+def require_one(rows: list[dict], label: str) -> dict:
+    if len(rows) != 1:
+        raise RuntimeError(f"Expected one row for {label}, found {len(rows)}")
+    return rows[0]
+
+
 def build_updated_chain() -> None:
     labels = [
-        ("Data relation", "latest write answers read"),
-        ("Loss", "next-token CE on real batches"),
-        ("AdamW state", "preconditioned current + momentum"),
-        ("Weight geometry", "rank-8 W_QK support matcher"),
-        ("Route", "support value > distractors"),
-        ("Behavior", "answer margin improves"),
+        ("Data relation", ("latest write", "answers read")),
+        ("Loss", ("next-token CE", "on real batches")),
+        ("AdamW state", ("preconditioned current", "+ momentum")),
+        ("Weight geometry", ("rank-8 W_QK", "support matcher")),
+        ("Route", ("support value", "> distractors")),
+        ("Behavior", ("answer margin", "improves")),
     ]
-    x0, y, w, h, gap = 30, 110, 135, 76, 24
+    x0, y, w, h, gap = 26, 108, 150, 92, 24
     parts = [text(30, 38, "From loss to lookup: the measured chain", "title"),
              text(30, 63, "Current paper claim: a support-value retrieval role is built by actual AdamW updates.", "subtitle")]
-    for i, (a, b) in enumerate(labels):
+    for i, (a, b_lines) in enumerate(labels):
         x = x0 + i * (w + gap)
         parts.append(rect(x, y, w, h))
-        parts.append(text(x + w / 2, y + 30, a, "label", "middle"))
-        parts.append(text(x + w / 2, y + 52, b, "tiny", "middle"))
+        parts.append(text(x + w / 2, y + 29, a, "label", "middle"))
+        parts.append(text(x + w / 2, y + 57, b_lines[0], "small", "middle"))
+        parts.append(text(x + w / 2, y + 75, b_lines[1], "small", "middle"))
         if i < len(labels) - 1:
-            parts.append(line(x + w + 4, y + h / 2, x + w + gap - 6, y + h / 2, arrow=True))
-    parts.append(text(30, 235, "The old question was \"which neuron matters?\" The current proof object is a differentiable route scalar C(theta).", "small"))
-    parts.append(text(30, 258, "Supported: route growth, low-rank QK birth, exact AdamW update reconstruction, and 5-seed role replication.", "small"))
-    parts.append(text(30, 281, "Open: full answer-margin closure and whether the same method scales beyond this symbolic model.", "small"))
-    write_svg("updated_loss_to_lookup_chain.svg", 1000, 320, "\n".join(parts))
+            parts.append(line(x + w + 5, y + h / 2, x + w + gap - 8, y + h / 2, arrow=True))
+    parts.append(text(30, 250, "The old question was \"which neuron matters?\" The current proof object is a differentiable route scalar C(theta).", "small"))
+    parts.append(text(30, 273, "Supported: route growth, low-rank QK birth, exact AdamW update reconstruction, and 5-seed role replication.", "small"))
+    parts.append(text(30, 296, "Open: full answer-margin closure and whether the same method scales beyond this symbolic model.", "small"))
+    write_svg("updated_loss_to_lookup_chain.svg", 1080, 335, "\n".join(parts))
 
 
 def build_weight_birth() -> None:
@@ -285,154 +329,386 @@ def build_contextual_alignment() -> None:
     write_svg("contextual_semantic_alignment.svg", width, height, "\n".join(parts))
 
 
-def build_adam_decomposition() -> None:
-    report = load_json(ADAM_REPORT)
-    rank_summary = report["summary"]["rank_summaries"][0]
-    values = [
-        ("actual route growth", rank_summary["sum_actual_rank_match_delta"], "#245f73"),
-        ("reconstructed AdamW", rank_summary["sum_reconstructed_adamw_rank_delta"], "#4f7f54"),
-        ("raw SGD", rank_summary["sum_raw_sgd_rank_delta"], "#b95f56"),
-        ("clipped SGD", rank_summary["sum_clipped_sgd_rank_delta"], "#d69b3a"),
-        ("Adam current", rank_summary["sum_adam_current_gradient_rank_delta"], "#7b5ea7"),
-        ("Adam momentum", rank_summary["sum_adam_historical_momentum_rank_delta"], "#8f5a24"),
-        ("weight decay", rank_summary["sum_weight_decay_rank_delta"], "#777777"),
+def sum_qk_phase(rows: list[dict], start: int, end: int) -> dict[str, float]:
+    selected = [
+        r for r in rows
+        if int(r["source_step"]) >= start and int(r["target_step"]) <= end
     ]
-    width, height = 980, 430
-    left, top, bottom = 70, 96, 330
+    expected = end - start
+    if len(selected) != expected:
+        raise RuntimeError(f"Expected {expected} QK rows for {start}->{end}, found {len(selected)}")
+    return {
+        "actual": sum(float(r["actual_rank_match_delta"]) for r in selected),
+        "predicted": sum(float(r["reconstructed_adamw_rank_delta"]) for r in selected),
+        "raw_sgd": sum(float(r["raw_sgd_rank_delta"]) for r in selected),
+        "current": sum(float(r["adam_current_gradient_rank_delta"]) for r in selected),
+        "momentum": sum(float(r["adam_historical_momentum_rank_delta"]) for r in selected),
+        "decay": sum(float(r["weight_decay_rank_delta"]) for r in selected),
+    }
+
+
+def build_qk_optimizer_phase_structure() -> None:
+    report = load_json(ADAM_REPORT)
+    metric_rows = load_jsonl(ROOT / report["metric_rows_path"])
+    phases = [
+        ("0 -> 750", 0, 750, "setup"),
+        ("750 -> 2500", 750, 2500, "momentum birth"),
+        ("2500 -> 3500", 2500, 3500, "fresh gradients join"),
+        ("3500 -> 6000", 3500, 6000, "saturation"),
+    ]
+    phase_rows = [(label, tag, sum_qk_phase(metric_rows, start, end)) for label, start, end, tag in phases]
+    width, height = 1040, 520
+    parts = [
+        text(32, 36, "QK route formation has phases", "title"),
+        text(32, 61, "Rank-8 L2H1 support-value route, summed from every one-step AdamW attribution row.", "subtitle"),
+    ]
+    left, right, top, bottom = 78, width - 42, 112, 332
+    max_abs = max(abs(v) for _, _, row in phase_rows for v in row.values())
+    zero_y = top + max_abs / (2 * max_abs) * (bottom - top)
+    parts.append(line(left, zero_y, right, zero_y, color="#4a4741", width=1.2))
+    colors = {
+        "actual": "#245f73",
+        "predicted": "#4f7f54",
+        "raw_sgd": "#b95f56",
+        "current": "#7b5ea7",
+        "momentum": "#8f5a24",
+        "decay": "#777777",
+    }
+    keys = ["actual", "predicted", "raw_sgd", "current", "momentum", "decay"]
+    group_w = (right - left) / len(phase_rows)
+    bw = 18
+    for group_i, (label, tag, values) in enumerate(phase_rows):
+        group_x = left + group_i * group_w + 18
+        parts.append(text(group_x + 72, 94, label, "small", "middle"))
+        parts.append(text(group_x + 72, 356, tag, "tiny", "middle"))
+        for i, key in enumerate(keys):
+            val = values[key]
+            h = abs(val) / max_abs * 96
+            x = group_x + i * (bw + 8)
+            y = zero_y - h if val >= 0 else zero_y
+            parts.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{bw:.1f}" height="{h:.1f}" fill="{colors[key]}" opacity="0.9"/>')
+        parts.append(text(group_x + 72, 381, f"actual {values['actual']:+.3f}", "tiny", "middle"))
+        parts.append(text(group_x + 72, 398, f"raw {values['raw_sgd']:+.3f}", "tiny", "middle"))
+        parts.append(text(group_x + 72, 415, f"cur {values['current']:+.3f} / mom {values['momentum']:+.3f}", "tiny", "middle"))
+    legend_x, legend_y = 140, 455
+    for i, key in enumerate(keys):
+        x = legend_x + i * 135
+        parts.append(f'<rect x="{x:.1f}" y="{legend_y - 11:.1f}" width="18" height="10" fill="{colors[key]}" opacity="0.9"/>')
+        parts.append(text(x + 26, legend_y, key.replace("_", " "), "tiny"))
+    parts.append(text(32, 493, "The cleanest birth window is 750 -> 2500: actual route growth is positive while raw SGD-equivalent movement is slightly negative.", "small"))
+    write_svg("qk_optimizer_phase_structure.svg", width, height, "\n".join(parts))
+
+
+def build_reference_write_optimizer_split() -> None:
+    rows = load_json(REFERENCE_WRITE_ADAM_REPORT)["summary"]["scalar_rows"]
+    if not rows:
+        raise RuntimeError(f"No scalar rows in {REFERENCE_WRITE_ADAM_REPORT}")
+    values = [
+        ("actual", sum(float(r["sum_actual_score_delta"]) for r in rows), "#245f73"),
+        ("reconstructed", sum(float(r["sum_reconstructed_adamw_scalar_delta"]) for r in rows), "#4f7f54"),
+        ("raw SGD-eq", sum(float(r["sum_raw_sgd_scalar_delta"]) for r in rows), "#b95f56"),
+        ("Adam current", sum(float(r["sum_adam_current_gradient_scalar_delta"]) for r in rows), "#7b5ea7"),
+        ("Adam momentum", sum(float(r["sum_adam_historical_momentum_scalar_delta"]) for r in rows), "#8f5a24"),
+        ("weight decay", sum(float(r["sum_weight_decay_scalar_delta"]) for r in rows), "#777777"),
+    ]
+    actual = values[0][1]
+    width, height = 900, 405
+    left, top, bottom = 76, 96, 280
     max_abs = max(abs(v) for _, v, _ in values)
-    zero = bottom - (0 - (-0.5)) / (max_abs + 0.5) * (bottom - top)
-    parts = [text(32, 36, "Exact AdamW update decomposition for seed 7", "title"),
-             text(32, 61, "Rank-8 L2H1 support-value route growth over 0 -> 6000.", "subtitle"),
-             line(left, zero, 930, zero, color="#4a4741", width=1.2)]
+    zero_y = bottom
+    parts = [
+        text(32, 36, "Reference-seed write scalar is momentum-heavy", "title"),
+        text(32, 61, "L0H0 -> L0MLP, prediction position, fixed step-2500 readout, 1500 -> 2500.", "subtitle"),
+        line(left, zero_y, 844, zero_y, color="#4a4741", width=1.2),
+    ]
     bw, gap = 92, 28
     for i, (label, val, color) in enumerate(values):
         x = left + i * (bw + gap)
-        h = abs(val) / max_abs * 190
-        y = zero - h if val >= 0 else zero
+        h = abs(val) / max_abs * 158
+        y = zero_y - h if val >= 0 else zero_y
         parts.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{bw:.1f}" height="{h:.1f}" fill="{color}" opacity="0.9"/>')
         parts.append(text(x + bw / 2, y - 8 if val >= 0 else y + h + 18, f"{val:+.3f}", "small", "middle"))
-        label_words = label.split()
-        parts.append(text(x + bw / 2, 362, " ".join(label_words[:2]), "tiny", "middle"))
-        if len(label_words) > 2:
-            parts.append(text(x + bw / 2, 377, " ".join(label_words[2:]), "tiny", "middle"))
-    actual = rank_summary["sum_actual_rank_match_delta"]
-    raw_pct = rank_summary["sum_raw_sgd_rank_delta"] / actual * 100
-    cur_pct = rank_summary["sum_adam_current_gradient_rank_delta"] / actual * 100
-    mom_pct = rank_summary["sum_adam_historical_momentum_rank_delta"] / actual * 100
-    wd_pct = rank_summary["sum_weight_decay_rank_delta"] / actual * 100
-    parts.append(text(32, 407, f"Fractions of actual growth: raw SGD {raw_pct:.2f}%, Adam current {cur_pct:.1f}%, Adam momentum {mom_pct:.1f}%, weight decay {wd_pct:.1f}%.", "small"))
-    write_svg("adam_route_growth_decomposition.svg", width, height, "\n".join(parts))
+        words = label.split()
+        parts.append(text(x + bw / 2, 315, words[0], "tiny", "middle"))
+        if len(words) > 1:
+            parts.append(text(x + bw / 2, 330, " ".join(words[1:]), "tiny", "middle"))
+    parts.append(text(32, 370, f"Relative to actual growth: raw SGD-eq {values[2][1] / actual * 100:.2f}%, Adam current {values[3][1] / actual * 100:.1f}%, Adam momentum {values[4][1] / actual * 100:.1f}%.", "small"))
+    write_svg("reference_write_optimizer_split.svg", width, height, "\n".join(parts))
 
 
-def classify_adam_report(path: Path) -> str:
-    name = path.parent.name
-    if name.startswith("runner_up_"):
-        return "runner-up"
-    if name.startswith("bottom_"):
-        return "bottom"
-    return "winner"
+def build_write_side_mechanism() -> None:
+    parts = [
+        text(32, 36, "Write side: the useful object is a residual coupling", "title"),
+        text(32, 61, "QK chooses a source. The write side asks whether the resulting residual change is readable by downstream answer directions.", "subtitle"),
+    ]
+    boxes = [
+        (38, 126, 150, 86, "L0H0 source", "attends to value-bearing state"),
+        (240, 126, 185, 86, "delta_write(x)", "change at prediction position"),
+        (477, 126, 155, 86, "L0MLP boundary", "residual + nonlinear correction"),
+        (684, 126, 180, 86, "g_ref(x)", "mature answer-readout direction"),
+    ]
+    for i, (x, y, w, h, a, b) in enumerate(boxes):
+        parts.append(rect(x, y, w, h))
+        parts.append(text(x + w / 2, y + 34, a, "label", "middle"))
+        parts.append(text(x + w / 2, y + 58, b, "tiny", "middle"))
+        if i < len(boxes) - 1:
+            parts.append(line(x + w + 10, y + h / 2, boxes[i + 1][0] - 10, y + h / 2, arrow=True))
+    parts.append(rect(156, 270, 668, 70, "warn"))
+    parts.append(text(490, 298, "C_write(theta) = E_x [ g_ref(x) . delta_write_theta(x) ]", "label", "middle"))
+    parts.append(text(490, 320, "This scalar asks whether the write is useful to the finished readout, not whether W_OV directly points at a token embedding.", "small", "middle"))
+    parts.append(text(32, 385, "Interpretation: static W_OV was the wrong proof object. The measured write is contextual, position-specific, and read through later computation.", "small"))
+    write_svg("write_side_mechanism.svg", 980, 430, "\n".join(parts))
 
 
-def build_cross_seed() -> None:
-    selections = []
-    for path in sorted(CROSS_SEED_ROOT.glob("seed_*/analysis/cross_seed_head_selection.json")):
-        data = load_json(path)
-        candidates = data["candidates"]
-        if len(candidates) < 2:
-            raise RuntimeError(f"Need at least two candidates in {path}")
-        winner = candidates[0]
-        runner = candidates[1]
-        bottom = candidates[-1]
-        selections.append({
-            "seed": int(winner["seed"]),
-            "winner": winner["head_label"],
-            "runner": runner["head_label"],
-            "bottom": bottom["head_label"],
-            "score": float(winner["score"]),
-            "sv_corr": float(winner["window_qk_match_separation_vs_qk_singular_value_top"]),
-            "margin_corr": float(winner["window_qk_match_separation_vs_answer_margin"]),
-        })
-    if len(selections) != 5:
-        raise RuntimeError(f"Expected 5 cross-seed selections, found {len(selections)}")
+def build_write_functional_birth() -> None:
+    rows = [
+        r for r in load_jsonl(WRITE_TRAJECTORY_ROWS)
+        if r["group_by"] == "answer_value"
+        and r["position_role"] == "prediction"
+        and r["mlp_component"] == "L0MLP"
+    ]
+    if not rows:
+        raise RuntimeError("No L0H0 -> L0MLP prediction write-trajectory rows found.")
+    by_step: dict[int, dict[str, float]] = {}
+    for step in sorted({int(r["step"]) for r in rows}):
+        step_rows = [r for r in rows if int(r["step"]) == step]
+        if not step_rows:
+            raise RuntimeError(f"No write trajectory rows for step {step}")
+        count = len(step_rows)
+        by_step[step] = {
+            "total": sum(float(r["sum_post_mlp_gradient_dot_total_delta"]) for r in step_rows) / count,
+            "skip": sum(float(r["sum_post_mlp_gradient_dot_skip_delta"]) for r in step_rows) / count,
+            "mlp": sum(float(r["sum_post_mlp_gradient_dot_mlp_output_delta"]) for r in step_rows) / count,
+            "count": count,
+        }
+    steps = sorted(by_step)
+    if len(steps) < 5:
+        raise RuntimeError(f"Expected a trajectory, found only {len(steps)} steps in {WRITE_TRAJECTORY_ROWS}")
 
-    actuals: dict[tuple[int, str], float] = {}
-    raw_pct: list[float] = []
-    sign_rates: list[float] = []
-    for path in sorted(CROSS_SEED_ROOT.glob("seed_*/analysis/bilinear_qk_rank_adam_state_attribution/*/bilinear_qk_rank_adam_state_attribution_report.json")):
-        seed_match = re.search(r"seed_(\d+)", str(path))
+    width, height = 980, 460
+    left, right, top, bottom = 78, width - 34, 88, height - 70
+    y_values = [by_step[s][k] for s in steps for k in ("total", "skip", "mlp")]
+    y_min = min(-5.0, min(y_values))
+    y_max = max(110.0, max(y_values))
+    x_min, x_max = min(steps), max(steps)
+
+    def x_for(step: int) -> float:
+        return left + (step - x_min) / (x_max - x_min) * (right - left)
+
+    def y_for(value: float) -> float:
+        return bottom - (value - y_min) / (y_max - y_min) * (bottom - top)
+
+    parts = [
+        text(32, 36, "Functional write coupling turns on before the late behavior plateau", "title"),
+        text(32, 61, "Reference seed L0H0 -> L0MLP, prediction position, grouped by answer value.", "subtitle"),
+    ]
+    for tick in [0, 25, 50, 75, 100]:
+        y = y_for(tick)
+        parts.append(line(left, y, right, y, "grid", "#ddd6c8", 1))
+        parts.append(text(left - 10, y + 4, str(tick), "tiny", "end"))
+    parts.append(line(left, bottom, right, bottom, "axis", "#4a4741", 1.2))
+    parts.append(line(left, top, left, bottom, "axis", "#4a4741", 1.2))
+    for step in [750, 1500, 1750, 2500, 3500]:
+        if step < x_min or step > x_max:
+            continue
+        x = x_for(step)
+        parts.append(line(x, bottom, x, bottom + 6, color="#4a4741", width=1))
+        parts.append(text(x, bottom + 24, str(step), "tiny", "middle"))
+    for step, label in [(1500, "coupling starts"), (1750, "sharp jump")]:
+        x = x_for(step)
+        parts.append(line(x, top, x, bottom, color="#a67c00", width=1.2))
+        parts.append(text(x + 6, top + (16 if step == 1500 else 34), label, "tiny"))
+    series = [
+        ("total functional write", "total", "#245f73"),
+        ("residual skip part", "skip", "#4f7f54"),
+        ("L0MLP nonlinear part", "mlp", "#8f5a24"),
+    ]
+    for label, key, color in series:
+        pts = [(x_for(s), y_for(by_step[s][key])) for s in steps]
+        parts.append(polyline(pts, color, 3))
+    legend_x, legend_y = 670, 102
+    for i, (label, _, color) in enumerate(series):
+        y = legend_y + i * 22
+        parts.append(line(legend_x, y - 5, legend_x + 36, y - 5, color=color, width=3))
+        parts.append(text(legend_x + 45, y, label, "small"))
+    parts.append(text(32, 432, "The direction is not born from zero. What changes sharply is its coupling to the mature answer-readout direction.", "small"))
+    write_svg("write_functional_birth.svg", width, height, "\n".join(parts))
+
+
+def build_cross_seed_qk_write_role_map() -> None:
+    seed_rows = []
+    for selection_path in sorted(CROSS_SEED_ROOT.glob("seed_*/analysis/cross_seed_head_selection.json")):
+        seed_match = re.search(r"seed_(\d+)", str(selection_path))
         if not seed_match:
-            raise RuntimeError(f"Could not parse seed from {path}")
+            raise RuntimeError(f"Could not parse seed from {selection_path}")
         seed = int(seed_match.group(1))
-        role = classify_adam_report(path)
-        report = load_json(path)
-        row = report["summary"]["rank_summaries"][0]
-        actuals[(seed, role)] = float(row["sum_actual_rank_match_delta"])
-        if role == "winner":
-            actual = float(row["sum_actual_rank_match_delta"])
-            raw_pct.append(float(row["sum_raw_sgd_rank_delta"]) / actual * 100.0)
-            sign_rates.append(float(row["reconstructed_adamw_sign_match_count"]) / float(row["sign_match_total"]) * 100.0)
-    width, height = 980, 470
-    parts = [text(32, 36, "Cross-seed validation: role repeats, head address changes", "title"),
-             text(32, 61, "Each seed scans all heads, then checks winner / runner-up / bottom with exact Adam-state attribution.", "subtitle")]
-    x_seed, x_win, x_run, x_bot, x_bar = 55, 135, 295, 455, 620
-    y0, row_h = 108, 52
+        selection = load_json(selection_path)
+        qk_winner = selection["candidates"][0]["head_label"]
+        write_reports = sorted(
+            selection_path.parent.glob(
+                "mlp_functional_write_adam_state_attribution/winner_*/"
+                "mlp_functional_write_adam_state_attribution_report.json"
+            )
+        )
+        if len(write_reports) != 1:
+            raise RuntimeError(f"Expected one write winner report for seed {seed}, found {len(write_reports)}")
+        report_name = write_reports[0].parent.name
+        match = re.match(r"winner_(?P<source>.+)_to_(?P<mlp>.+)_prediction_ref2500_postgrad_total_1500_2500", report_name)
+        if not match:
+            raise RuntimeError(f"Could not parse write winner report name: {report_name}")
+        write_report = load_json(write_reports[0])
+        scalar_rows = write_report["summary"]["scalar_rows"]
+        if not scalar_rows:
+            raise RuntimeError(f"No scalar rows in {write_reports[0]}")
+        actual_mean = sum(float(r["sum_actual_score_delta"]) for r in scalar_rows) / len(scalar_rows)
+        raw_pct = (
+            sum(float(r["sum_raw_sgd_scalar_delta"]) for r in scalar_rows)
+            / sum(float(r["sum_reconstructed_adamw_scalar_delta"]) for r in scalar_rows)
+            * 100.0
+        )
+        seed_rows.append({
+            "seed": seed,
+            "qk_winner": qk_winner,
+            "write_source": match.group("source"),
+            "write_mlp": match.group("mlp"),
+            "write_actual_mean": actual_mean,
+            "write_raw_pct": raw_pct,
+        })
+    if len(seed_rows) != 5:
+        raise RuntimeError(f"Expected five cross-seed rows, found {len(seed_rows)}")
+
+    parts = [
+        text(32, 36, "Role repeats, address changes on both sides of the circuit", "title"),
+        text(32, 61, "QK winners and write/readout paths are selected from independent cross-seed artifacts.", "subtitle"),
+    ]
+    x_seed, x_qk, x_write, x_effect = 60, 150, 360, 670
+    y0, row_h = 110, 56
     parts.extend([
-        text(x_seed, 92, "seed", "small"),
-        text(x_win, 92, "winner", "small"),
-        text(x_run, 92, "runner-up", "small"),
-        text(x_bot, 92, "bottom", "small"),
-        text(x_bar, 92, "actual route growth", "small"),
+        text(x_seed, 90, "seed", "small"),
+        text(x_qk, 90, "QK retrieval winner", "small"),
+        text(x_write, 90, "write/readout winner", "small"),
+        text(x_effect, 90, "mean write scalar", "small"),
     ])
-    scale = 55
-    zero_x = x_bar + 120
-    parts.append(line(zero_x, 92, zero_x, y0 + row_h * len(selections), color="#4a4741", width=1))
-    for i, row in enumerate(selections):
+    max_effect = max(abs(r["write_actual_mean"]) for r in seed_rows)
+    for i, row in enumerate(seed_rows):
         y = y0 + i * row_h
-        seed = row["seed"]
-        win_actual = actuals[(seed, "winner")]
-        run_actual = actuals[(seed, "runner-up")]
-        bot_actual = actuals[(seed, "bottom")]
-        parts.append(text(x_seed, y, str(seed), "label"))
-        parts.append(text(x_win, y, f"{row['winner']} ({win_actual:+.2f})", "small"))
-        parts.append(text(x_run, y, f"{row['runner']} ({run_actual:+.2f})", "small"))
-        parts.append(text(x_bot, y, f"{row['bottom']} ({bot_actual:+.2f})", "small"))
-        for j, (val, color) in enumerate([(win_actual, "#4f7f54"), (run_actual, "#d69b3a"), (bot_actual, "#b95f56")]):
-            bar_y = y - 14 + j * 12
-            if val >= 0:
-                parts.append(f'<rect x="{zero_x:.1f}" y="{bar_y:.1f}" width="{abs(val)*scale:.1f}" height="8" fill="{color}" opacity="0.9"/>')
-            else:
-                parts.append(f'<rect x="{zero_x + val*scale:.1f}" y="{bar_y:.1f}" width="{abs(val)*scale:.1f}" height="8" fill="{color}" opacity="0.9"/>')
-    parts.append(text(620, 398, f"winner raw-SGD / actual mean: {sum(raw_pct)/len(raw_pct):.2f}%", "small"))
-    parts.append(text(620, 421, f"Adam reconstruction sign match: {min(sign_rates):.1f}% -> {max(sign_rates):.1f}%", "small"))
-    parts.append(text(32, 448, "Conclusion: the support-value retrieval role is stable; the named head that implements it is seed-dependent.", "small"))
-    write_svg("cross_seed_role_replication.svg", width, height, "\n".join(parts))
+        parts.append(rect(42, y - 28, 880, 42, "box"))
+        parts.append(text(x_seed, y, str(row["seed"]), "label"))
+        parts.append(text(x_qk, y, row["qk_winner"], "label"))
+        parts.append(text(x_write, y, f"{row['write_source']} -> {row['write_mlp']}", "label"))
+        bar_w = 160 * abs(row["write_actual_mean"]) / max_effect
+        parts.append(f'<rect x="{x_effect:.1f}" y="{y - 16:.1f}" width="{bar_w:.1f}" height="14" fill="#4f7f54" opacity="0.9"/>')
+        parts.append(text(x_effect + bar_w + 8, y - 4, f"{row['write_actual_mean']:.2f}", "tiny"))
+        parts.append(text(x_effect, y + 14, f"raw SGD-eq / predicted {row['write_raw_pct']:.2f}%", "tiny"))
+    parts.append(text(42, 415, "Reading this figure: a named head is not the invariant. The invariant is the role: retrieve support value, then create a readout-useful residual write.", "small"))
+    write_svg("cross_seed_qk_write_role_map.svg", 980, 455, "\n".join(parts))
+
+
+def build_closure_boundary() -> None:
+    route_summary = load_json(ROUTE_TO_SCALAR_CLOSURE_REPORT)["summary"]["scalar_bucket_summaries"]
+    output_summary = load_json(OUTPUT_ROUTE_CLOSURE_REPORT)["summary"]["scalar_summary_rows"]
+    route_by_scalar = {r["scalar_name"]: float(r["r_squared"]) for r in route_summary}
+    output_by_scalar = {r["scalar_name"]: float(r["r_squared"]) for r in output_summary}
+    scalars = [
+        ("correct logit", "correct_value_logit"),
+        ("fixed source", "fixed_source_competitor_margin"),
+        ("fixed target", "fixed_target_competitor_margin"),
+        ("moving margin", "moving_answer_margin"),
+        ("neg loss", "negative_answer_loss"),
+    ]
+    missing = [name for _, name in scalars if name not in route_by_scalar or name not in output_by_scalar]
+    if missing:
+        raise RuntimeError(f"Missing closure scalar summaries for: {missing}")
+    line_rows = load_json(LINE_INTEGRAL_REPORT)["summary"]["score_rows"]
+    fixed_source_line = require_one([
+        r for r in line_rows
+        if r["patch_group_id"] == "L0MLP+L1H3+L1MLP+L2MLP"
+        and r["scalar_name"] == "fixed_source_competitor_margin"
+    ], "full-converter fixed-source line integral")
+    neg_loss_line = require_one([
+        r for r in line_rows
+        if r["patch_group_id"] == "L0MLP+L1H3+L1MLP+L2MLP"
+        and r["scalar_name"] == "negative_answer_loss"
+    ], "full-converter negative-loss line integral")
+    branch_summary = load_json(BRANCH_DECOMPOSITION_REPORT)["summary"]
+    branch_all = require_one([
+        r for r in branch_summary["branch_aware_closure_summary_rows"]
+        if r["pair_type"] == "__all__" and r["switch_bucket"] == "all"
+    ], "branch-aware closure all rows")
+    branch_switch = require_one([
+        r for r in branch_summary["branch_aware_closure_summary_rows"]
+        if r["pair_type"] == "__all__" and r["switch_bucket"] == "competitor_switch"
+    ], "branch-aware closure switch rows")
+    branch_energy = require_one([
+        r for r in branch_summary["branch_summary_rows"]
+        if r["pair_type"] == "__all__" and r["switch_bucket"] == "competitor_switch"
+    ], "branch-energy switch rows")
+
+    parts = [
+        text(32, 36, "Closure boundary: routes help, output space helps more, nonlinear paths still matter", "title"),
+        text(32, 61, "Formation-window 1500 -> 2500 closure on 512 observations.", "subtitle"),
+    ]
+    left, top, bottom = 86, 105, 310
+    group_w = 160
+    for tick in [0.0, 0.25, 0.5, 0.75, 1.0]:
+        y = bottom - tick * (bottom - top)
+        parts.append(line(left - 20, y, 910, y, "grid", "#ddd6c8", 1))
+        parts.append(text(left - 28, y + 4, f"{tick:.2f}", "tiny", "end"))
+    parts.append(line(left - 20, bottom, 910, bottom, color="#4a4741", width=1.2))
+    for i, (label, scalar) in enumerate(scalars):
+        x = left + i * group_w
+        route_r2 = route_by_scalar[scalar]
+        output_r2 = output_by_scalar[scalar]
+        for j, (value, color) in enumerate([(route_r2, "#d69b3a"), (output_r2, "#245f73")]):
+            bw = 42
+            bar_h = value * (bottom - top)
+            bx = x + j * 48
+            by = bottom - bar_h
+            parts.append(f'<rect x="{bx:.1f}" y="{by:.1f}" width="{bw}" height="{bar_h:.1f}" fill="{color}" opacity="0.9"/>')
+            parts.append(text(bx + bw / 2, by - 7, f"{value:.2f}", "tiny", "middle"))
+        parts.append(text(x + 45, bottom + 24, label, "tiny", "middle"))
+    parts.append(line(650, 350, 686, 350, color="#d69b3a", width=4))
+    parts.append(text(695, 355, "route/write scalar closure", "small"))
+    parts.append(line(650, 374, 686, 374, color="#245f73", width=4))
+    parts.append(text(695, 379, "output-space closure", "small"))
+    parts.append(rect(42, 386, 875, 58, "warn"))
+    parts.append(text(58, 412, f"Branch accounting: moving-margin direct R2 {branch_all['direct_moving_r_squared']:.3f}; fixed-source+branch {branch_all['source_fixed_branch_r_squared']:.3f}; fixed-target+branch {branch_all['target_fixed_branch_r_squared']:.3f}.", "small"))
+    parts.append(text(58, 434, f"On switch rows: direct {branch_switch['direct_moving_r_squared']:.3f} -> {branch_switch['source_fixed_branch_r_squared']:.3f}/{branch_switch['target_fixed_branch_r_squared']:.3f}; target branch energy fraction {branch_energy['target_branch_energy_fraction_of_moving']:.3f}.", "small"))
+    parts.append(rect(42, 454, 875, 58, "warn"))
+    parts.append(text(58, 480, f"Line integral: fixed-source actual {fixed_source_line['sum_actual_endpoint_delta']:.3f}, endpoint first-order {fixed_source_line['sum_source_endpoint_first_order_delta']:.3f}, line integral {fixed_source_line['sum_source_endpoint_line_integral_delta']:.3f}.", "small"))
+    parts.append(text(58, 502, f"Negative loss: endpoint first-order {neg_loss_line['sum_source_endpoint_first_order_delta']:.3f}, line integral {neg_loss_line['sum_source_endpoint_line_integral_delta']:.3f}, actual {neg_loss_line['sum_actual_endpoint_delta']:.3f}.", "small"))
+    write_svg("closure_boundary.svg", 980, 535, "\n".join(parts))
 
 
 def build_proof_status() -> None:
     rows = [
         ("Behavior learns lookup", "supported", "heldout-pair accuracy is high"),
-        ("Feature families reveal structure", "supported as diagnostic", "not natural atoms"),
-        ("Route scalar C(theta)", "supported", "support-value separation"),
+        ("Feature families reveal structure", "supported as diagnostic", "shared infrastructure, not atoms"),
+        ("QK route scalar", "supported", "support-value separation"),
         ("Weight-level QK birth", "supported", "low-rank W_QK growth"),
-        ("Optimizer-level why", "supported for AdamW", "raw SGD tiny, Adam state large"),
-        ("Cross-seed role replication", "supported", "5 seeds, address changes"),
-        ("Full answer-margin closure", "open", "route family / OV side incomplete"),
+        ("QK optimizer cause", "supported for AdamW", "raw SGD-eq tiny, Adam state large"),
+        ("Cross-seed QK role", "supported", "same role, moving head address"),
+        ("Write functional subspace", "supported", "contextual prediction-position residual coupling"),
+        ("Write optimizer cause", "supported for AdamW", "raw SGD-eq tiny, AdamW-preconditioned growth"),
+        ("Full answer-margin closure", "partial", "output closure stronger than route closure"),
+        ("Plain-SGD sufficiency", "open", "SGD-only training not tested"),
         ("Scaling to LLMs", "open", "requires candidate filtering"),
     ]
     parts = [text(32, 36, "Proof status after the current experiments", "title"),
              text(32, 61, "The result is no longer only a trained-model story, but it is not a universal theorem.", "subtitle")]
-    x0, y0, w, h = 55, 95, 840, 34
+    x0, y0, w, h = 55, 92, 840, 31
     for i, (claim, status, note) in enumerate(rows):
-        y = y0 + i * 42
+        y = y0 + i * 36
         cls = "ok" if status.startswith("supported") else "open"
         if status == "supported as diagnostic":
+            cls = "warn"
+        if status == "partial":
             cls = "warn"
         parts.append(rect(x0, y - 22, w, h, cls))
         parts.append(text(x0 + 18, y, claim, "label"))
         parts.append(text(x0 + 390, y, status, "small"))
         parts.append(text(x0 + 585, y, note, "small"))
-    parts.append(text(55, 455, "The paper should claim a detailed mechanistic accounting for this task, not a theorem about all transformers.", "small"))
-    write_svg("proof_status_ladder_updated.svg", 980, 490, "\n".join(parts))
+    write_svg("proof_status_ladder_updated.svg", 980, 475, "\n".join(parts))
 
 
 def main() -> None:
@@ -443,14 +719,24 @@ def main() -> None:
         STATIC_ALIGN_REPORT,
         CONTEXT_ALIGN_REPORT,
         KEY_SEPARABILITY_REPORT,
+        WRITE_TRAJECTORY_ROWS,
+        REFERENCE_WRITE_ADAM_REPORT,
+        ROUTE_TO_SCALAR_CLOSURE_REPORT,
+        OUTPUT_ROUTE_CLOSURE_REPORT,
+        LINE_INTEGRAL_REPORT,
+        BRANCH_DECOMPOSITION_REPORT,
         CROSS_SEED_ROOT,
     ]:
         require_path(path)
     build_updated_chain()
     build_weight_birth()
     build_contextual_alignment()
-    build_adam_decomposition()
-    build_cross_seed()
+    build_qk_optimizer_phase_structure()
+    build_reference_write_optimizer_split()
+    build_write_side_mechanism()
+    build_write_functional_birth()
+    build_cross_seed_qk_write_role_map()
+    build_closure_boundary()
     build_proof_status()
 
 

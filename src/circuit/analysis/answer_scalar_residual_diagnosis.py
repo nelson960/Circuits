@@ -1133,6 +1133,8 @@ def run_answer_scalar_residual_diagnosis(
     pair_types: list[str],
     device_name: str = "mps",
     checkpoint_paths: list[Path] | None = None,
+    start_step: int | None = None,
+    end_step: int | None = None,
     margin_sides: list[str] | None = None,
     scalar_names: list[str] | None = None,
     switch_buckets: list[str] | None = None,
@@ -1158,6 +1160,8 @@ def run_answer_scalar_residual_diagnosis(
         raise ValueError("top_k_rows must be positive.")
     if min_error_denominator <= 0.0:
         raise ValueError("min_error_denominator must be positive.")
+    if start_step is not None and end_step is not None and start_step > end_step:
+        raise ValueError(f"start_step must be <= end_step; got start_step={start_step} end_step={end_step}.")
     resolved_margin_sides = _resolve_unique_values(
         values=margin_sides,
         default_values=["clean"],
@@ -1194,8 +1198,15 @@ def run_answer_scalar_residual_diagnosis(
     holdout_pairs = _holdout_pair_set(metadata)
     device = require_device(device_name)
     checkpoints = _resolve_checkpoint_paths(checkpoint_dir=checkpoint_dir, checkpoint_paths=checkpoint_paths)
+    if start_step is not None:
+        checkpoints = [path for path in checkpoints if _checkpoint_step_from_path(path) >= start_step]
+    if end_step is not None:
+        checkpoints = [path for path in checkpoints if _checkpoint_step_from_path(path) <= end_step]
     if len(checkpoints) < 2:
-        raise ValueError("answer-scalar-residual-diagnosis requires at least two checkpoints.")
+        raise ValueError(
+            "answer-scalar-residual-diagnosis requires at least two checkpoints after applying "
+            f"step filters start_step={start_step} end_step={end_step}."
+        )
     pairs, pair_construction = _build_route_competition_pairs(
         probe_set_path=probe_set_path,
         spec=spec,

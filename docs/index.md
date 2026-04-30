@@ -1,931 +1,660 @@
 ---
 layout: default
 title: "From Loss To Lookup: Tracing Circuit Formation In A Small Transformer"
-description: Mechanistic interpretability research on how AdamW training forms dense retrieval machinery in a small symbolic key-value transformer.
+description: A narrative paper on how AdamW training forms dense retrieval machinery in a small symbolic key-value transformer.
 ---
 
 # From Loss To Lookup: Tracing Circuit Formation In A Small Transformer
 
 Nelson Alex
 
-Living draft: 2026-04-23
+Living draft: 2026-04-30
 
-This is a living research paper. The result is not a theorem about all transformers. It is a detailed mechanistic accounting of one small transformer task, then a cross-seed check of the central pattern.
-
-The motivating question behind the project was simple:
-
-```text
-How does SGD find a circuit at all?
-```
-
-The current paper keeps that question, but answers it in the narrower form supported by the traced run:
-
-```text
-How does gradient-based training, realized here as AdamW rather than raw SGD,
-select and reinforce a retrieval route?
-```
+<nav class="paper-nav">
+  <strong>Pages</strong>
+  <a href="index.html">Paper</a>
+  <a href="reproducibility.html">Reproducibility</a>
+  <a href="analysis_cli_guide.html">CLI Guide</a>
+  <a href="artifact_map.html">Artifact Map</a>
+</nav>
 
 ## Abstract
 
-We trained a 3-layer decoder-only transformer on a symbolic key-value lookup task:
+We study circuit formation in a 3-layer decoder-only transformer trained on a symbolic key-value lookup task. Because the task has a known algorithmic structure, we can define role-level progress measures for support-value retrieval and write/readout coupling. We find that the trained mechanism is dense and not localized to a stable head or neuron identity. Instead, a support-value retrieval role repeatedly forms across random seeds, while its implementing head changes. In the reference seed, the QK side appears as a low-rank `W_QK` matcher whose route growth is predicted by exact AdamW update accounting. The instantaneous raw-gradient, SGD-equivalent update explains only a small fraction of this growth, while AdamW-preconditioned current and momentum terms carry the movement. The write side does not reduce to a clean static `W_OV` matrix; it appears as a contextual residual perturbation at the prediction position used by downstream readout directions. These results support role-level, optimizer-state-aware circuit formation in a controlled model, while leaving full answer-margin closure, optimizer ablations, and scaling open.
+
+## Contributions
+
+The paper makes six claims that can be checked against the artifact map.
+
+1. A controlled symbolic key-value benchmark for studying circuit formation under autoregressive training.
+2. A role-level route scalar for support-value retrieval.
+3. Evidence that QK route formation appears as low-rank `W_QK` crystallization.
+4. Exact AdamW update attribution showing that the instantaneous raw-gradient, SGD-equivalent update is tiny relative to AdamW-preconditioned route growth.
+5. Cross-seed evidence that the retrieval role repeats while the implementing head changes.
+6. A write-side analysis showing contextual residual coupling rather than a clean static `W_OV` theorem.
+
+The question was simple:
 
 ```text
-When the model reads key K, output the most recent value written for K.
+How does training find a circuit?
 ```
 
-The final mechanism is not a clean table, a single neuron, or one stable feature family. It is a dense residual-stream mechanism. That is not the disappointing part. Dense, shared implementations are the expected setting once a model is small enough to superpose several partial roles into the same substrate. The result here is that even inside that dense setting we can still isolate a task-meaningful route variable and trace how training grows it.
+The usual answer is "the gradient found it." That is not precise enough. A model is not updated by a slogan. It is updated by a particular optimizer, on particular batches, through particular weights, over a particular trajectory.
 
-The strongest route-level object we found is a support-value retrieval scalar:
+We ran into this early. A transparent feature-family birth model used activation support, amplification, feature-score drive, and aggregate gradient alignment. It predicted `family4` should form first. The model actually formed the more generalizing `family7` first: `family7` became useful at step `2250`, while `family4` followed at step `2500`. `family7` also had the larger useful delta (`0.408` versus `0.234`) and heldout-gap delta (`0.196` versus `0.022`). That failure was useful. It told us a gradient-flavored feature score was not enough. We needed to track the role being written, not just the most tempting feature family.
+
+This paper follows one small transformer's lookup circuit from the outside inward: behavior, activations, residual states, route geometry, weight movement, optimizer state, and then cross-seed replication. The result is not a clean neuron story. It is a role story.
+
+The strongest claim is this:
 
 ```text
-C_r(theta)
-  = E[ score_r(prediction, support_value)
-       - mean score_r(prediction, value_distractors) ]
+The task repeatedly induces a support-value retrieval role.
+The role is stable.
+The named head address is not.
+In the traced runs, AdamW-preconditioned updates carry the useful growth,
+while the instantaneous raw-gradient, SGD-equivalent direction is tiny.
 ```
 
-For the reference seed, this scalar is implemented most clearly by `L2H1 W_QK` at rank 8. The evidence chain is:
-
-```text
-behavior improves
-  -> L2H1 support-value retrieval separation grows
-  -> L2H1 W_QK develops a low-rank matching direction
-  -> actual parameter updates grow that route
-  -> exact AdamW decomposition reconstructs the route-growth direction
-```
-
-The main contribution is the optimizer result. The most important finding is negative and positive at the same time:
-
-```text
-raw SGD is far too small to explain the route formation;
-AdamW's preconditioned current-gradient and momentum terms carry the useful update.
-```
-
-Behavioral closure is partially solved, not fully solved. In the `5500 -> 5550` stepwise window, a 12-route QK+support-value family explains about `41%` of raw moving answer-margin variance, and branch-aware output closure raises local moving-margin closure to about `61%`. That is strong enough to show the route family is behaviorally meaningful, but not yet strong enough to claim that a small route set fully explains answer-margin improvement.
-
-Across 5 additional seeds, the same support-value retrieval role appears, but the winning head changes. The circuit is stable as a role pattern and unstable as a named address.
-
-The closed story is cleanest on the QK routing side. The OV/value-write side is strongly localized in the trained model, but it is not yet explained with the same from-initialization optimizer precision. The honest scope of the current paper is therefore:
-
-```text
-closed:
-  dense QK-side retrieval-route formation
-
-partially closed:
-  OV-side write/readout organization
-```
+That is the core finding. The write side is real too, but it is not QK again. QK becomes a clean low-rank route matcher. The write side appears as a contextual residual subspace at the prediction position that downstream readout directions can use.
 
 <figure class="paper-figure">
-  <img src="assets/figures/updated_loss_to_lookup_chain.svg" alt="Updated loss to lookup chain">
-  <figcaption><strong>Figure 1. Current measured chain.</strong> The current paper claim is no longer only that a component matters. The claim is that a task-meaningful route grows in weight space and that actual AdamW updates explain that growth.</figcaption>
+  <img src="assets/figures/updated_loss_to_lookup_chain.svg" alt="Loss to lookup chain">
+  <figcaption><strong>Figure 1. The measured chain.</strong> The paper follows one role from loss pressure, to optimizer state, to weight geometry, to route separation, to output behavior.</figcaption>
 </figure>
 
-<figure class="paper-figure">
-  <img src="assets/figures/circuit_formation_animation.svg" alt="Conceptual map from dense neuron motion to retrieval role">
-  <figcaption><strong>Formation sketch.</strong> This is a conceptual map, not a measurement plot. It shows why the explanation had to move upward from neurons and feature families to route-level variables: many shared units move, candidate families compete, a support-value retrieval role consolidates, `W_QK` gives weight-level evidence for the role, and answer margin grows.</figcaption>
-</figure>
+## The Short Version
 
-## Scope And Positioning
-
-This paper is a controlled mechanistic case study, not a theorem about transformer training in general. The task is narrow on purpose. That narrowness buys exact traced updates, exact route attribution, and exact from-initialization optimizer decomposition. It is also a limitation: the task isolates one algorithm, so any claim about broader multitask superposition has to be treated as future work rather than an automatic corollary.
-
-The project sits between several existing threads:
-
-- [Toy Models of Superposition](https://www.anthropic.com/research/toy-models-of-superposition) explains why neuron-level explanations break down when features share dimensions.
-- [Progress measures for grokking via mechanistic interpretability](https://openreview.net/forum?id=9XFSbDPmdW) motivates task-specific mechanistic scalars that track formation before behavior looks clean.
-- [What needs to go right for an induction head?](https://openreview.net/forum?id=O8rrXl71D5) studies formation as an interaction among prerequisite subcircuits.
-- [LLM Circuit Analyses Are Consistent Across Training and Scale](https://openreview.net/forum?id=3Ds5vNudIE) argues that roles can remain stable even when component identity changes.
-
-Recent spectral-edge work is adjacent as well: it studies global update-spectrum phase transitions and weight-decay compression during grokking-like dynamics. This paper is narrower and more concrete. It does not try to explain all dominant update modes. It asks which task-specific retrieval route is being written, when it is written, and how much of that writing is carried by the realized AdamW update rather than the instantaneous raw gradient.
-
-So the point of the paper is not:
-
-```text
-density is surprising
-```
-
-The point is:
-
-```text
-despite density, route formation is still traceable from behavior
-to weights to optimizer state.
-```
-
-## The Task
-
-Each prompt is a stream of writes and reads:
+We trained a 3-layer decoder-only transformer on symbolic key-value lookup. The model sees writes and reads:
 
 ```text
 W K03 V14   W K01 V09   R K03   W K03 V02   R K03
 ```
 
-`W K V` means write value `V` into key `K`. `R K` means read key `K`. The correct answer is the latest previous value written for that key.
+The correct answer is the latest previous value for the queried key. In the example above, the last read of `K03` should return `V02`, not `V14`, because `V02` is the latest write for that key.
+
+The task is small on purpose. It is not meant to be language modeling. It is meant to be a controlled world where we can ask a sharper question:
+
+```text
+when lookup behavior appears, what exactly changed inside the model?
+```
+
+The answer has two halves.
+
+The QK half asks where the model reads. In the reference seed, `L2H1 W_QK` becomes a low-rank support-value matcher. Its route score grows during formation, its singular structure crystallizes, and exact AdamW attribution explains the growth. The raw-gradient, SGD-equivalent update accounts for only about `0.76%` of the route growth in the traced from-initialization run.
+
+The write half asks what useful state gets written after reading. This does not reduce to a clean `W_OV` matrix theorem. The better object is a residual perturbation at the prediction position:
+
+```text
+C_write(theta) = E_x [ g_ref(x) . delta_write_theta(x) ]
+```
+
+In words: remove a source, look at the missing residual change, and ask whether that missing change points in the answer-relevant direction used by the mature model. For the reference seed fixed-readout write scalar over `1500 -> 2500`, the raw-gradient, SGD-equivalent update is about `0.13%` of actual growth. Adam momentum carries about `93%` of the same scalar aggregate in that run.
+
+Across five additional seeds, both sides repeat at the role level but move at the address level. QK winners include `L2H0`, `L2H2`, `L2H3`, `L2H1`, and `L1H2`. Write winners include paths such as `L1H3 -> L1MLP`, `L1H1 -> L1MLP`, and `L2H1 -> L2MLP`.
+
+The ghost moves rooms. The computation repeats, but the named component changes.
+
+## Related Work
+
+This work sits between mechanistic interpretability and training dynamics.
+
+The transformer architecture comes from [Vaswani et al. 2017](https://arxiv.org/abs/1706.03762). The QK/OV language and the habit of decomposing attention heads into route and write maps follows the transformer-circuits line of work, especially [Elhage et al. 2021](https://transformer-circuits.pub/2021/framework/index.html). The closest circuit-formation precedent is the induction-head work of [Olsson et al. 2022](https://transformer-circuits.pub/2022/in-context-learning-and-induction-heads/index.html), which connects a learned attention circuit to a training-time phase change. This paper asks a narrower but more optimizer-specific question: which update components actually moved the role scalar during formation?
+
+The superposition framing follows [Elhage et al. 2022](https://transformer-circuits.pub/2022/toy_model/index.html). That is why the paper does not force a neuron-level theorem when the evidence says the useful object is a subspace. The causal-intervention style is related to causal tracing and model-editing work such as [Meng et al. 2022](https://arxiv.org/abs/2202.05262), but the target here is not just where a finished model stores a fact. The target is how training wrote a role into the model.
+
+The optimizer accounting is specific to AdamW. Adam was introduced by [Kingma and Ba 2014](https://arxiv.org/abs/1412.6980), and decoupled weight decay for AdamW by [Loshchilov and Hutter 2017](https://arxiv.org/abs/1711.05101). Small algorithmic tasks have also been used to study delayed generalization and training dynamics, most famously in grokking work by [Power et al. 2022](https://arxiv.org/abs/2201.02177). This paper uses a small symbolic task for a different purpose: to make a role-level circuit formation story auditable end to end.
+
+## The Tiny World
+
+The task rule is deliberately simple: a read asks for the latest previous write for the same key.
 
 <figure class="paper-figure">
-  <img src="assets/figures/task_rule_latest_write_lookup.svg" alt="Latest-write lookup task diagram">
-  <figcaption><strong>Figure 2. Latest-write lookup rule.</strong> The first `R K03` should output `V14`; after a later `W K03 V02`, the next `R K03` should output `V02`. The model only receives next-token loss.</figcaption>
+  <img src="assets/figures/task_rule_latest_write_lookup.svg" alt="Latest-write lookup task rule">
+  <figcaption><strong>Figure 2. Latest-write lookup.</strong> The model must return the most recent value written for the queried key, not just any value associated with the key.</figcaption>
 </figure>
 
-The symbolic relation can be written:
-
-```text
-d(x, y) = 1  if y is the latest written value for the queried key in x
-d(x, y) = 0  otherwise
-```
-
-The hand-written algorithm is simple:
-
-```text
-store = {}
-for event in stream:
-  if event is W K V:
-    store[K] = V
-  if event is R K:
-    output store[K]
-```
-
-The transformer has no dictionary. It has embeddings, attention scores, MLP activations, residual streams, layer norms, and logits. The research question is how the training loss reshapes those weights into a lookup mechanism.
+The split is part of the experiment. IID validation asks whether the model learned the training distribution. Heldout-pair validation asks whether it learned the relation rather than memorizing value pairs.
 
 <figure class="paper-figure">
-  <img src="assets/figures/dataset_geometry_split_axes.svg" alt="Dataset split geometry">
-  <figcaption><strong>Figure 3. Dataset split geometry.</strong> The train, IID, heldout, OOD, and counterfactual splits differ in query structure, active keys, writes, overwrites, and lag. This matters because a shortcut can work on IID examples while failing on heldout key-value relations.</figcaption>
+  <img src="assets/figures/dataset_geometry_split_axes.svg" alt="Dataset split axes">
+  <figcaption><strong>Figure 3. Split geometry.</strong> The benchmark separates ordinary validation from heldout answer-pair and structural tests.</figcaption>
 </figure>
 
 <figure class="paper-figure">
-  <img src="assets/figures/dataset_geometry_answer_pair_matrix.svg" alt="Dataset answer pair matrix">
-  <figcaption><strong>Figure 4. Heldout answer-pair structure.</strong> The heldout-pair split separates key-value combinations from the training set. This makes heldout success more meaningful than memorizing seen pairs.</figcaption>
+  <img src="assets/figures/dataset_geometry_answer_pair_matrix.svg" alt="Answer pair matrix">
+  <figcaption><strong>Figure 4. Answer-pair matrix.</strong> Heldout-pair evaluation checks whether the model can answer key-value combinations excluded from training.</figcaption>
 </figure>
 
-The dataset geometry report records:
-
-| split | records | queries | active keys | writes | overwrites | query lag |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| train | 8000 | 52105 | 2.502 | 10.502 | 8.000 | 1.182 |
-| validation_iid | 1024 | 6667 | 2.505 | 10.505 | 8.000 | 1.179 |
-| heldout_pairs | 1024 | 6686 | 2.483 | 10.483 | 8.000 | 1.176 |
-| structural_ood | 1024 | 9255 | 4.507 | 15.472 | 10.965 | 2.425 |
-
-The heldout-pairs split has zero pair overlap with train in the dataset report.
-
-## Model And Reference Run
-
-The reference run is:
-
-| property | value |
-| --- | --- |
-| model | decoder-only transformer |
-| layers | 3 |
-| heads per layer | 4 |
-| width | 128 |
-| reference seed | 7 |
-| training steps | 16000 |
-| batch size | 128 |
-| optimizer | AdamW |
-
-The best-checkpoint report records heldout-pairs answer accuracy around `0.872`.
-
-The important windows are:
-
-| window | step range | role in the analysis |
-| --- | ---: | --- |
-| early feature movement | `1750 -> 2500` | feature-family and coalition signals |
-| QK route birth | `750 -> 3500` | low-rank `W_QK` route formation |
-| main route geometry | `4500 -> 8250` | trained route and output geometry |
-| exact AdamW trace | `0 -> 6000` | from-initialization optimizer decomposition |
-| cross-seed validation | `750 -> 2500` | exact Adam-state attribution on selected heads |
-
-## The Proof Object
-
-The behavioral scalar is answer margin:
-
-```text
-m_t(x, y) = logit_t(y | x) - max_{z != y} logit_t(z | x)
-```
-
-where `y` is the correct value token and `z` ranges over wrong value tokens.
-
-For an internal route, we need a scalar with task meaning. The current route scalar is:
-
-```text
-C_r(theta)
-  = E[ score_r(prediction, support_value)
-       - mean score_r(prediction, value_distractors) ]
-```
-
-Here `score_r` is the route-local score produced by the measurement instrument for route `r`. Depending on the experiment, it is instantiated as an attention-score margin, a bilinear QK matcher score, or a patched-transfer route score. The important point is not one universal scoring function. The important point is that every instantiation measures the same role-level question:
-
-```text
-does this route separate the real support value from distractor values?
-```
-
-So `C_r` is best understood as a task-specific progress measure, not as a universal importance metric for all circuits. Direct Logit Attribution, patching, and causal ablations remain supporting tools in the paper. `C_r` plays a different role: it is the scalar we use to watch one algorithmic subproblem form during training.
-
-For the reference seed, the strongest version is:
+The reference run uses a small transformer:
 
 | field | value |
 | --- | --- |
-| head | `L2H1` |
-| matrix | `W_QK = W_Q W_K^T` |
-| rank | `8` |
-| context stage | `layer_1_post_mlp` |
-| query role | `prediction` |
-| support role | `support_value` |
-| distractor role | `value_distractors` |
+| reference seed | 7 |
+| layers / heads | 3 / 4 |
+| `d_model` / `d_ff` | 128 / 512 |
+| parameters | 626,048 |
+| batch size / steps | 128 / 16,000 |
+| optimizer | AdamW |
+| learning rate | 0.0004 |
+| betas / weight decay | 0.9, 0.95 / 0.01 |
+| gradient clip / warmup | 1.0 / 200 steps |
 
-In plain terms:
+The selected heldout-generalization run reaches heldout-pair answer accuracy around `0.8730`. Structural OOD remains much weaker, around `0.5082`. That is enough behavior to study formation, but not enough to pretend every generalization question is solved.
 
-```text
-Does the prediction position match the real support value more than distractor values?
-```
+## How The Search Changed
 
-For local update attribution, the key first-order identity is:
+We did not start with QK. We started with the obvious maps.
 
-```text
-Delta C_r ~= grad_theta C_r(theta_t) dot Delta theta_actual
-```
+First we asked which components mattered. That found real load-bearing pieces, but it did not explain the computation. Late components often had clean direct readout toward the answer. Early components were different: they were causally important, but their direct logit attribution could be weak or even point the wrong way.
 
-If the optimizer were plain SGD:
+That told us early components were not dead. They were shaping the residual workspace that later components read.
 
-```text
-Delta theta_t ~= -eta grad_theta L_batch(theta_t)
-```
+Then we looked for feature families and neurons. This also found structure, but not atoms. The feature-family phase exposed superposition instead of escaping it. In one coalition map, hundreds of neurons were shared by candidate stories, hundreds opposed both, and hundreds were sign-conflicted. A neuron intervention was not isolating one clean variable.
 
-then:
+That was the first important lesson:
 
 ```text
-Delta C_r
-  ~= eta < -grad_theta L_batch(theta_t), grad_theta C_r(theta_t) >
+the circuit was real,
+but the unit of explanation was not a neuron.
 ```
 
-This inner product is the first mathematical bridge from loss to route growth. The later optimizer experiments show why plain SGD is not enough in this run.
+So the search moved from components to roles. A role is a computation-level object: "prefer the true support value over distractors" or "write a prediction-position residual change that the answer readout can use." A role can be implemented by different heads in different seeds.
 
-## Why We Stopped Treating Neurons As The Main Object
+This changed the paper from a component hunt into a formation audit.
 
-The first deep analysis tried to explain formation through activation features and neuron coalitions. That was useful, but it failed as a final proof object.
+## The QK Role
 
-At `layer_2_post_mlp`, two feature families looked important:
+QK is the clean half because QK is routing.
 
-| family | features | interpretation during discovery |
-| --- | --- | --- |
-| family7 | 27, 54 | stronger useful/generalizing candidate |
-| family4 | 1, 59 | related sibling candidate with stronger raw pre-birth score |
-
-The candidate mechanism report found:
-
-| candidate | useful | heldout | score drive |
-| --- | ---: | ---: | ---: |
-| family7 top2 | 0.408211 | 0.196319 | 0.109958 |
-| family4 top2 | 0.234053 | 0.021933 | 0.147239 |
-
-The first transparent birth model predicted the wrong family:
-
-| candidate | birth-model score | predicted rank | actual useful birth |
-| --- | ---: | ---: | ---: |
-| family4 top2 | 4 | 1 | 2500 |
-| family7 top2 | 0 | 2 | 2250 |
-
-That mistake mattered. It showed that a feature-family scoring model could describe some movement without explaining why the generalizing mechanism formed first.
-
-<figure class="paper-figure">
-  <img src="assets/figures/layer_2_post_mlp_feature_family_trajectories.svg" alt="Layer 2 feature family trajectories">
-  <figcaption><strong>Figure 5. Feature-family trajectories.</strong> Feature families exposed meaningful structure, but their identities are analysis coordinates. They are not automatically the model's natural mechanism units.</figcaption>
-</figure>
-
-The coalition map made the problem sharper:
-
-| coalition category | neurons |
-| --- | ---: |
-| shared positive | 484 |
-| shared negative | 316 |
-| conflict | 224 |
-
-<figure class="paper-figure">
-  <img src="assets/figures/candidate_coalition_shared_specific.svg" alt="Candidate coalition shared and specific neurons">
-  <figcaption><strong>Figure 6. Dense shared neuron substrate.</strong> Family7 and family4 were not cleanly separate circuits. Hundreds of neurons were shared or sign-conflicted across the two families.</figcaption>
-</figure>
-
-The lesson is:
-
-```text
-single neurons and feature families are discovery tools;
-they are not the final proof object in this dense model.
-```
-
-The right move was not to stop looking inside. It was to move to a better anchor: a task-meaningful route scalar, then decompose that route into weights, residual directions, gradients, and optimizer state.
-
-## The Trained-Model Causal Picture And The OV Gap
-
-Transformer attention naturally separates into two pieces:
-
-```text
-QK decides where a head reads from.
-OV decides what gets written after reading.
-```
-
-For this task, a useful route needs:
-
-```text
-retrieval:
-  prediction position finds the correct support value
-  over distractor values
-
-write/readout:
-  the retrieved value moves the residual stream toward the correct answer token
-```
-
-The attention geometry trace identified `L2H1` as the strongest late support-value retrieval/write head. At final traced step `8250`:
-
-| measurement | strongest head | value |
-| --- | --- | ---: |
-| support-value attention | L2H1 | 0.787570 |
-| support-value QK margin | L2H1 | 0.571587 |
-| attended OV value margin | L2H1 | 2.490426 |
-| low entropy | L2H1 | 0.455578 |
-
-<figure class="paper-figure">
-  <img src="assets/figures/attention_retrieval_chain_trajectory.svg" alt="L2H1 retrieval chain trajectory">
-  <figcaption><strong>Figure 7. L2H1 retrieval trajectory.</strong> During the `5500 -> 7500` window, L2H1 increasingly separates the correct support value from value distractors.</figcaption>
-</figure>
-
-Direct Logit Attribution asks how much a component directly writes toward the correct answer:
-
-```text
-DLA(component, y) = r_component dot W_U[y]
-```
-
-Late components behave more like direct answer writers:
-
-| component | scalar | causal effect | DLA | sign agreement | corr | R2 |
-| --- | --- | ---: | ---: | ---: | ---: | ---: |
-| L2MLP | fixed-source margin | 3.364054 | 1.850016 | 0.880 | 0.985 | 0.897 |
-| L2H1 | fixed-source margin | 7.345897 | 5.444075 | 0.921 | 0.881 | 0.626 |
-| L1H2 | fixed-source margin | 6.553232 | 3.990044 | 0.922 | 0.725 | 0.293 |
-
-Early components were causally huge but not direct answer writers:
-
-| component | scalar | causal effect | DLA | sign agreement |
-| --- | --- | ---: | ---: | ---: |
-| L0MLP | correct-value logit | 27.738898 | -7.652493 | 0.162 |
-| L1H3 | correct-value logit | 21.515125 | -2.711512 | 0.318 |
-| L1MLP | correct-value logit | 15.712419 | -0.387060 | 0.495 |
-
-<figure class="paper-figure">
-  <img src="assets/figures/output_component_causal_validation_top_effects.svg" alt="Output component causal validation top effects">
-  <figcaption><strong>Figure 8. Direct attribution versus causal effect.</strong> Late components have cleaner direct readout. Early components are load-bearing but mostly shape the residual state used by later computation.</figcaption>
-</figure>
-
-Mediation and residual-rescue experiments support the same dense picture. Some early effects flow through later components:
-
-| path | mediated correct-logit effect |
-| --- | ---: |
-| L0MLP -> L2H1 | 7.4515 |
-| L0MLP -> L1H2 | 5.1969 |
-| L0MLP -> L2MLP | 3.1648 |
-| L1H3 -> L2H1 | 6.5816 |
-| L1H3 -> L2MLP | 3.3300 |
-| L1MLP -> L2MLP | 6.1051 |
-| L1MLP -> L2H1 | 2.8337 |
-
-But all-later mediation did not close the gap. Some later components help and some oppose. The trained model is not a clean additive chain.
-
-Residual-state rescue then asked:
-
-```text
-If removing an early component damages behavior,
-can we rescue behavior by patching the full residual state after that component?
-```
-
-The answer was yes at the expected boundary:
-
-| source | first stage that rescues target correct logit | rescue fraction |
-| --- | --- | ---: |
-| L0MLP | layer_0_post_mlp | 1.000 |
-| L1H3 | layer_1_post_attn | 1.000 |
-| L1MLP | layer_1_post_mlp | 1.000 |
-
-<figure class="paper-figure">
-  <img src="assets/figures/residual_state_rescue_fraction.svg" alt="Residual state rescue fraction">
-  <figcaption><strong>Figure 9. Residual-state rescue.</strong> Full residual patching rescues early-component damage once the patch is placed after the source component. This localizes where the missing information enters the residual stream.</figcaption>
-</figure>
-
-The current trained-model picture is:
-
-<figure class="paper-figure">
-  <img src="assets/figures/dense_residual_mechanism.svg" alt="Dense residual mechanism diagram">
-  <figcaption><strong>Figure 10. Dense residual mechanism.</strong> Early components shape a shared residual workspace. Later components are closer to direct output/readout. The arrows are supported causal structure, not a closed serial circuit.</figcaption>
-</figure>
-
-Simple version:
-
-```text
-early components build usable residual geometry;
-late attention and MLP routes read and write closer to the answer;
-the mechanism is dense, sign-conflicted, and distributed.
-```
-
-The right interpretation is not that density ruined the explanation. Density is the setting in which the explanation has to work. The current trained-model evidence already localizes an OV/write side: late components have cleaner direct readout, attended OV value margins grow, and residual rescue localizes where early infrastructure enters the stream. But the exact optimizer-level closure is asymmetric:
-
-```text
-QK side:
-  weight birth + exact AdamW route attribution
-
-OV side:
-  trained-model causal localization + mediation + rescue
-  but not yet the same from-init optimizer decomposition
-```
-
-That asymmetry matters. The current paper explains the birth of the routing half more cleanly than the write/readout half.
-
-## Weight-Level Birth Of The QK Route
-
-Routes tell us where computation appears to flow. To study formation, we need to watch the weights change.
-
-For each checkpoint we decomposed attention-head functional matrices:
+For one attention head, the effective route map is:
 
 ```text
 W_QK = W_Q W_K^T
-W_QK = U Sigma V^T
 ```
 
-The singular values tell us whether a head is developing concentrated low-rank structure. We also measured effective rank:
+The attention score between a prediction-position query and a candidate source position is:
 
 ```text
-effective_rank = (sum_i sigma_i)^2 / sum_i sigma_i^2
+score(prediction, source) = q_prediction^T W_QK k_source
 ```
 
-For `L2H1 W_QK`, the weight-SVD pattern report found:
-
-| matrix | start -> end | sv1 delta | relative delta | effective-rank delta | top-3 mass delta |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| L2H1 W_QK | 250 -> 5500 | 2.8336 | 4.2500 | -10.4120 | 0.1587 |
-
-In words:
+The route scalar asks whether the head prefers the true support-value position over value distractors:
 
 ```text
-L2H1 W_QK starts weak and mixed.
-Its top singular value grows strongly.
-Its effective rank drops.
-Its top-3 spectral mass rises.
+C_QK(theta)
+  = E[ score(prediction, support_value)
+       - mean score(prediction, value_distractors) ]
 ```
 
-That is a weight-level birth pattern: the head is not merely activating differently; its QK matrix is becoming a more concentrated matcher.
+This is not a universal importance metric. It is a task-specific progress scalar. It asks one concrete question:
+
+```text
+is this route learning to look at the right previous value?
+```
+
+In the reference seed, `L2H1` becomes the clearest route carrier. During the main formation window, rank-8 support-value separation increases by `+4.19295`. The route score tracks QK singular-value growth with correlation `0.9934`.
 
 <figure class="paper-figure">
-  <img src="assets/figures/weight_qk_birth_timeline.svg" alt="L2H1 QK weight birth timeline">
-  <figcaption><strong>Figure 11. Weight-level birth.</strong> `L2H1 W_QK` becomes more concentrated while rank-8 support-value retrieval separation grows. The plotted curves are min-max normalized to compare timing.</figcaption>
+  <img src="assets/figures/weight_qk_birth_timeline.svg" alt="QK birth timeline">
+  <figcaption><strong>Figure 5. QK crystallization.</strong> The support-value route becomes concentrated in `L2H1 W_QK`: singular mass grows while effective rank compresses.</figcaption>
 </figure>
 
-The bilinear QK match separation run connected that weight pattern to task semantics:
-
-| quantity | value |
-| --- | ---: |
-| formation window | `750 -> 3500` |
-| support-value separation delta | +4.19295 |
-| separation vs top singular value correlation | 0.9934 |
-| separation vs answer margin correlation | 0.6664 |
-
-So the SVD result is not only:
-
-```text
-some singular value grew
-```
-
-It is:
-
-```text
-the growing low-rank direction tracks support-value-over-distractor retrieval.
-```
-
-The semantic object is contextual. Static token embeddings are not the whole story. The route reads residual states produced by earlier layers.
+The singular vectors are not best understood as raw token-embedding directions. The useful route aligns with contextual residual state: what earlier layers have made the key and value positions mean inside the network.
 
 <figure class="paper-figure">
   <img src="assets/figures/contextual_semantic_alignment.svg" alt="Contextual semantic alignment">
-  <figcaption><strong>Figure 12. Contextual semantic target.</strong> The useful question is how `W_QK` aligns with contextual residual states at the prediction/support roles, not whether it is merely close to raw token embeddings.</figcaption>
+  <figcaption><strong>Figure 6. Context matters.</strong> The route aligns with contextual residual directions more cleanly than with a naive static embedding story.</figcaption>
 </figure>
 
-This is why the result is a dense-circuit result:
+This gives the first complete computational object:
 
 ```text
-early layers transform token/context information into residual geometry;
-L2H1 W_QK learns a low-rank route that reads that geometry;
-the route separates the real support value from distractors.
+prediction-position query
+  scores
+true support-value state
+  above
+value distractor states
 ```
 
-But correlation is still not a training explanation. A growing singular direction can track retrieval quality and still leave open whether that route was actually selected by the realized optimizer update, or whether it only co-moved with other changing quantities. To cross that gap we need to stop looking only at trajectories and start attributing the actual parameter movement.
-
-## Optimizer-Level Why This Route Forms
-
-Weight growth still does not explain why the route formed. For that, we need the actual optimizer update.
-
-This is the paper's main contribution. Everything before this section establishes that the route is real, causal, and visible in weight space. This section asks the harder training-dynamics question:
+And it gives a weight-level object:
 
 ```text
-which part of the realized optimizer update actually writes the route?
+W_QK = U Sigma V^T
 ```
 
-The checkpoint update question is:
+The top singular structure of `W_QK` is not just decorative. It grows when the support-value route grows.
+
+## The Optimizer Accounting
+
+The raw gradient did not explain the route birth in the traced run. AdamW's actual update did.
+
+For every adjacent checkpoint, we measured:
 
 ```text
-actual route change:
-  C(theta_{t+1}) - C(theta_t)
-
-first-order predicted route change:
-  grad C(theta_t) dot Delta theta_actual
+Delta C_QK ~= grad_theta C_QK(theta_t) . Delta theta_actual
 ```
 
-For the formation-window update attribution:
-
-| rank | window | actual delta | predicted delta | sign match |
-| ---: | --- | ---: | ---: | ---: |
-| 8 | 750 -> 3500 | +2.03547 | +2.21138 | 11 / 11 |
-
-That says the actual parameter movement points in the direction that grows the rank-8 retrieval matcher.
-
-But this still leaves a deeper question:
+Then we decomposed the actual update into pieces:
 
 ```text
-Is the current raw batch gradient itself large enough to build the route?
+raw SGD-equivalent update
+clipped SGD-equivalent update
+Adam current-gradient component
+Adam historical momentum component
+weight decay
+reconstructed AdamW update
 ```
 
-The answer is no. In the actual-batch attribution window `750 -> 1000`:
-
-| quantity | value |
-| --- | ---: |
-| actual route growth | +0.0275398 |
-| actual-update predicted growth | +0.0263239 |
-| actual-batch route support | +0.0654552 |
-| SGD-equivalent contribution | +0.00002618 |
-
-The SGD-equivalent contribution is about `0.095%` of actual route growth. This falsifies the naive story:
+For the reference seed route over `0 -> 6000`:
 
 ```text
-wrong:
-  the immediate raw gradient directly pushes the route hard enough to build it
+actual route growth:              +4.11462
+reconstructed AdamW prediction:   +5.21734
+raw SGD-equivalent / actual:       0.76%
+Adam current / actual:            57.7%
+Adam momentum / actual:           74.0%
+weight decay / actual:            -4.9%
 ```
 
-The stronger run traced training from initialization through step `6000` and decomposed the actual AdamW update.
+The percentages can sum above 100% because components reinforce and oppose each other. The important fact is that the raw SGD-equivalent update is tiny.
 
-The trace status is:
+The trace is not one uniform story. It has phases:
 
 ```text
-instrumented_from_initialization_exact_for_this_trace
+0 -> 750:
+  weak setup; actual +0.070, momentum +0.067
+
+750 -> 2500:
+  clean route birth; actual +1.665, raw SGD-equivalent -0.003, momentum +1.605
+
+2500 -> 3500:
+  fresh gradients join; actual +1.673, current +1.165, momentum +1.137
+
+3500 -> 6000:
+  optimizer still pushes; actual +0.706, current +1.205, momentum +0.236
 ```
 
-For `0 -> 6000`, rank-8 `L2H1` support-value route:
-
-| quantity | value |
-| --- | ---: |
-| actual route growth | +4.11462 |
-| actual-update prediction | +5.21768 |
-| reconstructed AdamW prediction | +5.21734 |
-| reconstruction sign match | 6000 / 6000 |
-
-AdamW decomposition:
-
-| component | contribution | fraction of actual growth |
-| --- | ---: | ---: |
-| raw SGD | +0.03136 | 0.76% |
-| clipped SGD | +0.02404 | 0.58% |
-| Adam current gradient | +2.37417 | 57.7% |
-| Adam historical momentum | +3.04547 | 74.0% |
-| Adam preconditioned total | +5.41964 | 131.7% |
-| weight decay | -0.20230 | -4.9% |
+The critical window is `750 -> 2500`. The route grows, but the raw SGD-equivalent term is slightly negative and the current Adam gradient is almost zero. Momentum carries the useful movement.
 
 <figure class="paper-figure">
-  <img src="assets/figures/adam_route_growth_decomposition.svg" alt="Adam route growth decomposition">
-  <figcaption><strong>Figure 13. Optimizer-level explanation.</strong> Raw SGD is tiny. AdamW's preconditioned current-gradient and historical-momentum terms carry the support-value route growth.</figcaption>
+  <img src="assets/figures/qk_optimizer_phase_structure.svg" alt="QK optimizer phase structure">
+  <figcaption><strong>Figure 7. QK formation has phases.</strong> The cleanest birth window is `750 -> 2500`: the route grows while the raw SGD-equivalent term is slightly negative and Adam momentum carries the useful direction.</figcaption>
 </figure>
 
-The phase structure matters:
+This does not mean gradients are irrelevant. AdamW is built from gradients. It means the object that wrote the route was not the instantaneous raw gradient alone. The object was the optimizer trajectory: accumulated state, adaptive scaling, and preconditioning.
 
-| window | actual growth | raw SGD | Adam current | Adam momentum | interpretation |
-| --- | ---: | ---: | ---: | ---: | --- |
-| 0 -> 750 | +0.07007 | -0.00142 | -0.00101 | +0.06746 | weak setup, mostly momentum |
-| 750 -> 2500 | +1.66529 | -0.00302 | +0.00495 | +1.60536 | clean momentum-driven formation |
-| 2500 -> 3500 | +1.67303 | +0.01987 | +1.16475 | +1.13675 | fresh gradients and momentum amplify route |
-| 3500 -> 6000 | +0.70622 | +0.01593 | +1.20549 | +0.23590 | optimizer still pushes, realized growth saturates |
+The gradient was not literally lying. It was answering a local-slope question in a dense competition phase. Several candidate routes are being trained at once. Their instantaneous gradient contributions can cancel in the shared parameters, so the raw gradient can look near-zero or even point against the role that will win. Momentum integrates those noisy local samples across steps. The consistent signal survives the cancellation.
 
-The current answer to “why did it form?” is therefore:
+This is not a claim that plain SGD could never learn this role. We did not run that ablation. The measured claim is narrower: in the AdamW-trained runs studied here, the realized route growth is carried by AdamW-preconditioned update components, while the instantaneous raw-gradient, SGD-equivalent direction is far too small to account for the observed movement.
 
-```text
-the loss supplies many small gradient signals;
-AdamW accumulates and preconditions those signals;
-the optimizer state repeatedly pushes W_QK toward a support-value matcher;
-once the route becomes useful, fresh preconditioned gradients reinforce it.
-```
+## The Ghost Moves Rooms
 
-This is not “SGD selected exactly L2H1 for a universal reason.” It is a measured optimizer-level explanation for this reference run.
+A circuit story that only works for one head in one seed is weak. So we repeated the route search across five additional seeds.
 
-## Cross-Seed Validation
-
-A single seed can be a case study. To test whether the role is real, we trained and analyzed 5 additional seeds:
+The support-value retrieval role repeated. The address changed.
 
 ```text
-11, 13, 17, 23, 29
+seed 0011: QK winner L2H0
+seed 0013: QK winner L2H2
+seed 0017: QK winner L2H3
+seed 0023: QK winner L2H1
+seed 0029: QK winner L1H2
 ```
 
-The replication target was not:
+Winner heads grew positively in all five seeds. Bottom-control heads moved negatively in all five seeds. The raw SGD-equivalent term remained small across winners, with mean raw-gradient fraction around `0.74%`.
+
+This is one of the paper's main interpretability lessons:
 
 ```text
-L2H1 wins every time.
+component address is unstable;
+role pattern is stable.
 ```
 
-The replication target was:
+If the question is "does `L2H1` always do it?", the answer is no. If the question is "does a support-value retrieval role form?", the answer is yes.
+
+## Why OV Was Harder
+
+QK asks where to read. OV/write asks what useful state gets created after reading.
+
+Those are not the same kind of object.
+
+QK produces a score:
 
 ```text
-some head forms the same support-value retrieval role.
+query dot key -> attention preference
 ```
 
-For each seed, we scanned all 12 heads, selected winner / runner-up / bottom-control heads by rank-8 support-value-over-distractor QK growth, then ran exact Adam-state attribution for `750 -> 2500`.
+OV writes a vector into the residual stream:
 
-Winning heads:
+```text
+head_output = attention @ V
+residual_write = head_output W_O
+```
 
-| seed | winning head | scan score | sep vs singular value | sep vs answer margin | support-win delta |
-| ---: | --- | ---: | ---: | ---: | ---: |
-| 11 | L2H0 | 2.815 | 0.882 | 0.668 | 0.157 |
-| 13 | L2H2 | 2.727 | 0.956 | 0.670 | 0.523 |
-| 17 | L2H3 | 1.463 | 0.484 | 0.561 | 0.183 |
-| 23 | L2H1 | 6.361 | 0.868 | 0.918 | 0.843 |
-| 29 | L1H2 | 2.428 | 0.502 | 0.891 | 0.248 |
+That vector is not judged immediately. It is added to the residual stream, normalized, passed through later attention and MLP blocks, normalized again, and finally unembedded into logits. So the naive question is wrong:
 
-The winning head changes. Four of five winners are in layer 2; one winner is in layer 1.
+```text
+does W_OV point directly at the answer embedding?
+```
+
+The useful question is:
+
+```text
+does the source write a residual change that the mature model can read as answer-useful?
+```
+
+That is why the write scalar is defined through a readout direction:
+
+```text
+C_write(theta) = E_x [ g_ref(x) . delta_write_theta(x) ]
+```
+
+Here `delta_write_theta(x)` is the residual change caused by a source at a specific position, and `g_ref(x)` is the mature answer-scalar gradient direction at the readout boundary.
 
 <figure class="paper-figure">
-  <img src="assets/figures/cross_seed_role_replication.svg" alt="Cross seed role replication">
-  <figcaption><strong>Figure 14. Cross-seed role replication.</strong> Winner heads grow in the support-value retrieval direction. Runner-up heads often grow too. Bottom-control heads move in the opposite direction.</figcaption>
+  <img src="assets/figures/write_side_mechanism.svg" alt="Write-side residual coupling">
+  <figcaption><strong>Figure 8. The write proof object.</strong> The measured write is a residual coupling, not a static `W_OV` answer-vector claim.</figcaption>
 </figure>
 
-Exact Adam-state attribution gives the stronger control:
+The value content matters. In the reference seed, forcing `L0H0` to read the correct support-value vector gave a positive OV map score. Keeping the same forced support attention but shuffling the value vector made the score strongly negative. The head had to read the right value-bearing content, not merely attend to a plausible place.
 
-| seed | winner | winner actual | runner-up | runner-up actual | bottom | bottom actual |
-| ---: | --- | ---: | --- | ---: | --- | ---: |
-| 11 | L2H0 | 1.448 | L2H2 | 0.509 | L0H0 | -0.190 |
-| 13 | L2H2 | 1.451 | L1H2 | 0.719 | L1H1 | -0.230 |
-| 17 | L2H3 | 3.178 | L2H0 | 0.680 | L0H2 | -0.254 |
-| 23 | L2H1 | 1.500 | L2H3 | 1.437 | L1H2 | -0.114 |
-| 29 | L1H2 | 1.439 | L2H0 | 0.712 | L1H0 | -2.577 |
-
-Across winners:
-
-| seed | winner | raw SGD / actual | clipped SGD / actual | current-gradient / actual | momentum / actual | sign match |
-| ---: | --- | ---: | ---: | ---: | ---: | ---: |
-| 11 | L2H0 | -0.13% | -0.65% | 39.0% | 79.7% | 99.7% |
-| 13 | L2H2 | 0.83% | 0.55% | 63.8% | 62.5% | 99.7% |
-| 17 | L2H3 | 1.26% | 1.31% | 101.3% | 47.8% | 98.3% |
-| 23 | L2H1 | 1.15% | 1.04% | 91.0% | 55.4% | 99.4% |
-| 29 | L1H2 | 0.60% | 0.75% | 52.8% | 66.9% | 99.3% |
-
-The repeated pattern is:
+The write lives mostly at the prediction position. Position rescue showed a large prediction-slot effect and almost no useful support-slot effect for the same write scalar. So the story is not "write an answer at the support slot, then carry it forward." The better story is:
 
 ```text
-winner actual growth is positive in all 5 seeds;
-bottom-control actual growth is negative in all 5 seeds;
-raw SGD is consistently tiny;
-AdamW preconditioned state consistently carries useful route growth.
+the source changes the current prediction residual state;
+downstream readout geometry knows how to use that change.
 ```
 
-The cross-seed conclusion is:
+## The Write Coupling Turns On
+
+The write direction was not born from nothing. Mature-looking directions are partly present early. What changes sharply is their coupling to answer-readout directions.
+
+This is the key difference from QK. At step `750`, the L0H0-caused input residual delta already overlaps the step-2500 input-delta basis by about `0.661`; the MLP-output delta overlaps the step-2500 MLP-output basis by about `0.721`. So the direction is not random early and mature later. The direction is already partly there. What is missing early is functional coupling: the scalar-relevant write effect is only about `2.864` at step `750`, then jumps to about `50.185` by step `1750` and `91.624` by step `2500`.
+
+For the reference seed, the clearest write/readout boundary is `L0H0 -> L0MLP` at the prediction position. The local decomposition is:
 
 ```text
-the circuit is stable as a role,
-but unstable as an address.
+F_l(z) = MLP_l(LN_2(z))
+
+delta_in
+  = z_clean[input_stage] - z_L0H0_ablated[input_stage]
+
+mlp_output_delta
+  = F_l(z_clean) - F_l(z_ablated)
+
+post_mlp_total_delta
+  = delta_in + mlp_output_delta
 ```
 
-This is the right replication target for a dense circuit paper. The goal is not one immortal head label. The goal is a role that reappears under different addresses. So this is stronger than saying “seed 7 uses L2H1.” It says the task tends to induce a support-value retrieval role, while random initialization decides which head implements it.
-
-## Current Closure Status
-
-The closure question is:
+Then the scalar-relevant write effect is:
 
 ```text
-how much of actual behavioral improvement is explained by the measured route family?
+C_total = E[ g_ref . post_mlp_total_delta ]
+        = E[ g_ref . delta_in ]
+        + E[ g_ref . mlp_output_delta ]
 ```
 
-The current answer is mixed but useful.
-
-At the route-score level, a 12-route family combining query-key and support-value routes gives only partial direct closure on moving answer margin in the `5500 -> 5550` stepwise window:
-
-| closure object | observations | R squared | interpretation |
-| --- | ---: | ---: | --- |
-| route deltas -> moving answer margin | 6400 | 0.413 | route-family signal is real, but not behaviorally complete |
-| route deltas -> correct-value logit | 6400 | 0.603 | stronger closure on a smoother scalar than on moving margin |
-| route deltas -> fixed-source margin | 6400 | 0.411 | stable but incomplete local closure |
-
-This is already enough to rule out one bad interpretation:
-
-```text
-the measured route family is irrelevant to behavior
-```
-
-That is false. The measured route family clearly tracks meaningful output movement. But it is not yet a full closure result.
-
-The stronger closure result appears one level later, in output space. Using component output-DLA deltas on the same `5500 -> 5550` stepwise window:
-
-| scalar | bucket | observations | R squared |
-| --- | --- | ---: | ---: |
-| correct-value logit | all | 6400 | 0.783 |
-| fixed-source competitor margin | all | 6400 | 0.612 |
-| fixed-target competitor margin | all | 6400 | 0.613 |
-| moving answer margin | all | 6400 | 0.099 |
-| negative answer loss | all | 6400 | 0.842 |
-
-The weak raw moving-margin result turned out to be mostly a branch problem, not a total mechanism failure. When the wrong-token identity is held fixed, or when the branch term is added back exactly:
-
-| moving-margin closure variant | all rows R squared | competitor-switch rows R squared |
-| --- | ---: | ---: |
-| direct moving margin | 0.099 | 0.161 |
-| fixed-source + exact branch correction | 0.606 | 0.713 |
-| fixed-target + exact branch correction | 0.608 | 0.738 |
-
-So the current closure story is:
-
-```text
-route-only closure:
-  partial and real
-
-output-space closure:
-  strong for fixed margins and correct-value logit
-
-moving answer margin:
-  branch-sensitive, and therefore misleading unless competitor identity is handled explicitly
-```
-
-This is why the paper treats `negative_answer_loss`, `correct_value_logit`, and fixed-competitor margins as cleaner local proof scalars than raw moving margin. It also explains why full answer-margin closure remains open without contradicting the existing evidence.
-
-## What Is Supported
+In words: split the useful write into the residual skip part and the nonlinear MLP correction.
 
 <figure class="paper-figure">
-  <img src="assets/figures/proof_status_ladder_updated.svg" alt="Updated proof status ladder">
-  <figcaption><strong>Figure 15. Proof status.</strong> The project now has behavior, trained-model causality, weight-level birth, optimizer-level attribution, and cross-seed role replication. Full answer-margin closure and scaling remain open.</figcaption>
+  <img src="assets/figures/write_functional_birth.svg" alt="Functional write birth">
+  <figcaption><strong>Figure 9. Functional write birth.</strong> The write-readout coupling jumps around `1500 -> 1750`, mostly through the residual skip part, with `L0MLP` adding a smaller positive correction.</figcaption>
 </figure>
 
-Current supported claims:
-
-| claim | status |
-| --- | --- |
-| The model learns symbolic latest-write lookup above chance | supported |
-| Heldout-pair behavior is meaningful because heldout train pair overlap is zero | supported |
-| Feature-family analysis reveals real structure but not natural circuit atoms | supported |
-| Neuron coalitions are dense and shared across candidate families | supported |
-| L2H1 develops strong support-value retrieval geometry in the reference seed | supported |
-| `L2H1 W_QK` forms a low-rank support-value matcher in the reference seed | supported |
-| Actual checkpoint updates grow the rank-8 retrieval scalar | supported |
-| Exact AdamW reconstruction explains the update direction in the traced run | supported |
-| Raw SGD is far too small to explain route formation | supported |
-| Adam current-gradient and momentum terms carry most route growth | supported |
-| The support-value retrieval role appears across 5 additional seeds | supported |
-| The exact winning head is seed-dependent | supported |
-| A 12-route QK+support-value family gives partial local answer-margin closure in `5500 -> 5550` | supported |
-| Fixed-competitor and branch-aware closure are much better local proof objects than raw moving margin | supported |
-
-## What Is Not Proven
-
-Current limits:
-
-| claim | status |
-| --- | --- |
-| A small route set fully explains all answer-margin improvement | open |
-| The OV/value-write side has as clean a formation story as QK routing | open |
-| The current/momentum split is seed-dependent and not yet systematically characterized | open |
-| SGD without AdamW would form the same route | not tested |
-| The same role appears for every possible seed | not proven |
-| The same optimizer-level story holds under wider, deeper, or multitask training | not proven |
-| The method scales directly to large language models | not proven |
-| Individual neurons are the right proof object | not supported |
-| Feature-family IDs are natural circuit atoms | not supported |
-
-The most precise current claim is:
+Over `1500 -> 2500`, the reference seed fixed-readout write scalar grows by about `+4.06` across the four endpoint/scalar rows. The split is:
 
 ```text
-In this symbolic KV setting, training repeatedly forms a dense support-value retrieval role.
-The role is not tied to one head identity.
-In the reference seed, rank-8 L2H1 W_QK becomes the clearest low-rank matcher.
-That matcher's route growth is explained by actual AdamW updates,
-while raw per-batch SGD is far too small to account for it.
+input/residual part:       about 78% of the growth
+L0MLP output part:         about 22% of the growth
+raw SGD-equivalent on total scalar: about 0.13% of actual growth
+Adam momentum on total:    about 93% of actual growth
 ```
 
-The most precise closure claim is:
+This is not the same mechanism as QK. QK visibly forms a low-rank route map. The write side looks more like an already-available residual direction becoming functionally coupled to the mature readout.
+
+<figure class="paper-figure">
+  <img src="assets/figures/reference_write_optimizer_split.svg" alt="Reference write optimizer split">
+  <figcaption><strong>Figure 10. Reference write optimizer split.</strong> In the reference seed and this fixed-readout scalar, the write coupling is momentum-heavy. This is not the same measurement as the later cross-seed aggregate.</figcaption>
+</figure>
+
+## Cross-Seed Write Validation
+
+The write role also repeats across seeds, and the address also moves.
+
+The selected write/readout paths are not always the same:
 
 ```text
-in the traced 5500 -> 5550 local window,
-a measured QK+support-value route family explains part of answer-margin movement,
-and output-space branch-aware closure explains substantially more,
-but a small causal route family that closes most behavioral improvement is still not proven.
+seed 0011: L1H3 -> L1MLP
+seed 0013: L1H3 -> L1MLP
+seed 0017: L1H1 -> L1MLP
+seed 0023: L2H1 -> L2MLP
+seed 0029: L1H1 -> L1MLP
 ```
 
-## Raising The OV-Side Standard
+Winner write paths have much larger final functional write effects than bottom controls. For fixed-source competitor margin, winners average about `510`, runners about `388`, and bottoms about `177`. For negative answer loss, winners average about `416`, runners about `195`, and bottoms about `10`.
 
-The next research-quality target is not another QK plot. It is to make the OV/value-write side answerable with the same discipline used on the QK side.
+Most of the winner effect is the residual write itself. The winning paths are about `90%` residual-skip effect and about `10%` local MLP-output correction on the two cross-seed write scalars.
 
-That means four concrete upgrades:
+Exact AdamW attribution across the five selected winner write paths shows the same broad optimizer lesson:
 
-| step | question | quality bar |
+```text
+raw SGD-equivalent / predicted: about 1.2%
+Adam current / predicted:  about 87%
+Adam momentum / predicted: about 14%
+weight decay / predicted:  about -1.4%
+```
+
+These numbers are different from the reference-seed fixed scalar in Figure 10 because they measure a different object: selected winner write paths across five seeds, aggregated over their write scalars. The current-vs-momentum split varies by seed and address. That matters. The cross-seed write result should be stated as "AdamW-preconditioned updates carry the useful write growth", not "momentum always dominates every write-side run."
+
+<figure class="paper-figure">
+  <img src="assets/figures/cross_seed_qk_write_role_map.svg" alt="Cross-seed QK and write role map">
+  <figcaption><strong>Figure 11. The ghost moves rooms on both sides.</strong> The retrieval role and the write/readout role repeat, while their component addresses vary with seed.</figcaption>
+</figure>
+
+## The Computation Ledger
+
+This is the current end-to-end computation story.
+
+The pointer half:
+
+```text
+q_prediction^T W_QK k_support_value
+  >
+q_prediction^T W_QK k_value_distractor
+```
+
+In words: at the prediction position, a QK route scores the true support-value position above distractor value positions.
+
+The write/readout half:
+
+```text
+delta_write(x)
+  = residual_with_source(x) - residual_without_source(x)
+
+C_write
+  = E_x [ g_ref(x) . delta_write(x) ]
+```
+
+In words: the source creates a prediction-position residual change that points in a direction the mature answer readout uses.
+
+The local boundary:
+
+```text
+post_mlp_total_delta
+  = residual_skip_delta + local_mlp_output_delta
+```
+
+In words: most of the measured fixed-readout write signal is already present in the residual skip, and `L0MLP` adds a smaller positive correction in the reference seed.
+
+The proof ledger is:
+
+| claim | measured object | status |
 | --- | --- | --- |
-| define write-side progress scalars | what exact write/read quantity is being grown? | one scalar per role, not a loose bundle of output metrics |
-| trace weight birth on the write side | does `W_OV` or a downstream MLP write direction show concentrated formation? | weight-space birth pattern, not only trained-model attribution |
-| run exact optimizer decomposition for write-side growth | which part of AdamW writes the value/readout route? | actual update, actual-batch, and Adam-state closure |
-| join routing and writing into one route family | how much answer-margin improvement closes when QK and OV families are measured together? | route-family closure, not isolated-head support |
+| QK route | `C_QK = E[score(pred, support) - mean score(pred, distractors)]` | strong |
+| QK weight birth | `W_QK = W_Q W_K^T = U Sigma V^T` | strong |
+| QK optimizer cause | `Delta C_QK ~= grad C_QK . Delta theta_actual` | strong for AdamW-trained runs |
+| cross-seed QK role | winner / runner / bottom scans across five seeds | strong |
+| write functional subspace | `C_write = E[g_ref . delta_write]` | supported |
+| write optimizer cause | `Delta C_write ~= grad C_write . Delta theta_actual` | supported for AdamW-trained runs |
+| static `W_OV` theorem | raw `W_OV` low-rank answer-vector story | not supported |
+| full answer-margin closure | small route/write family explains all behavior | partial |
+| plain-SGD sufficiency | SGD-only training eventually forms same role or fails | not tested |
 
-The intended end state is:
+The [artifact map](artifact_map.html) links each row of this ledger to the run family that supports it.
 
-```text
-QK explains where the model looks;
-OV explains what the model writes after looking;
-joint route-family closure explains more of answer-margin growth than either half alone.
-```
-
-## Why This Is Hard Even In A Small Model
-
-The external rule is simple, but the implementation is geometric and dense.
-
-In a hand-written program, the state might be:
+The ledger is important because it keeps three claims separate:
 
 ```text
-query_key = K03
-stored_value[K03] = V14
+causal claim:
+  ablating or patching this object changes behavior
+
+dynamic claim:
+  optimizer updates built this object during training
+
+computational claim:
+  this object implements this operation
 ```
 
-The transformer can distribute those variables across:
+We have all three strongly for the QK side. We have causal, dynamic, and functional-subspace evidence for the write side, but not a clean static `W_OV` theorem.
 
-- residual-stream directions
-- QK attention subspaces
-- OV write directions
-- MLP activations
-- neuron combinations
-- layer norm scaling
-- final unembedding directions
+## What Would Weaken This Claim
 
-This is why the neuron-first story failed. A neuron can participate in more than one feature, and a feature can be spread across many neurons. Removing one neuron or family often does not isolate one clean variable.
+The role-level interpretation has concrete failure modes.
 
-The residual stream is a shared workspace. Early MLPs and attention heads can shape a state that later heads read. That means a component can be causally essential even if its direct logit attribution is weak or negative.
+It would be weakened if bottom-control heads showed the same route growth as selected winners, if cross-seed winners failed to separate from runners and bottom controls, or if the support-value route scalar did not survive heldout and distractor controls. It would also be weakened if the AdamW reconstruction failed to track actual route movement.
 
-The optimizer adds another layer. The route is not built by one obvious gradient step. It is built by many small signals accumulated and preconditioned by AdamW. Looking only at the current raw gradient misses most of the actual update.
+The write-side interpretation would be weakened if shuffled-value controls preserved the write scalar, if support-position rescue matched prediction-position rescue, or if the selected write/readout subspaces failed cross-seed validation. Those are the reasons the paper treats QK as strong, the write side as supported but less clean, and full answer-margin closure as still open.
 
-## Why This Matters
+## Closure: What We Explain And What We Do Not
 
-The practical value is not the toy task itself. The value is the method:
+A route can be real without fully explaining the answer margin.
+
+During `1500 -> 2500`, a 14-route family containing QK pointer terms, early write terms, and output proxies gives partial route-to-scalar closure. It explains more of clean fixed or differentiable scalars than of negative answer loss, but it does not close the whole behavior.
+
+Output-space closure is stronger in the same window. For correct-value logit, route/write scalar closure is about `R^2 = 0.37`, while output-space closure reaches about `0.84`. Fixed-source competitor margin improves from about `0.22` to `0.58`; fixed-target competitor margin improves from about `0.25` to `0.51`. Moving answer margin improves only from about `0.25` to `0.34`, because that scalar has an extra branch problem.
+
+<figure class="paper-figure">
+  <img src="assets/figures/closure_boundary.svg" alt="Closure boundary">
+  <figcaption><strong>Figure 12. Closure boundary.</strong> Route/write scalars are meaningful coordinates, but output-space closure is stronger, and nonlinear path curvature explains part of the remaining gap.</figcaption>
+</figure>
+
+There are two reasons moving answer margin is hard.
+
+First, it is branch-sensitive. The "best wrong token" can change. This matters methodologically because moving answer margin is the scalar most people reach for first, but it can be the worst scalar for proving a mechanism. In the late audited window, direct moving-margin closure had only `R^2 = 0.099`. Holding the wrong-token branch fixed and adding the exact branch correction raised closure to `0.606` for fixed-source and `0.608` for fixed-target. Competitor switches were rare, only `298 / 6400` rows (`4.66%`), but on those switch rows the target-branch correction carried about `43%` of moving-margin energy. On switch rows, branch-aware closure rose from `0.161` direct to `0.713 -> 0.738`.
+
+Second, the write side is nonlinear. A first-order endpoint gradient can be badly wrong. The line-integral diagnostic shows that integrating along the path can follow the actual endpoint change much better than a single endpoint linearization, especially for negative answer loss.
+
+So the honest closure statement is:
 
 ```text
-watch a circuit form in weight space;
-connect weight movement to route behavior;
-decompose the actual optimizer update that caused it;
-check whether the role repeats across seeds.
+route/write scalars are meaningful;
+output-space closure is stronger;
+full answer-margin sufficiency by a small route set remains open.
 ```
 
-Most interpretability work can say:
+## What This Means
+
+The important interpretability object is not always a named head or neuron. In this model, the stable object is a role.
+
+This matters because seed-level replication fails if we use the wrong address. `L2H1` is not always the circuit. But a support-value retrieval role appears across seeds. A contextual write/readout role appears across seeds too.
+
+Formation tracking adds something that post-hoc interpretability does not usually give. A trained-model circuit analysis can say:
 
 ```text
-this component matters in the trained model
+this component matters now.
 ```
 
-This work moves toward:
+The formation audit can ask:
 
 ```text
-this optimizer update wrote this route into these weight directions during training
+did training actually write this role into the weights,
+and which optimizer-state terms carried that movement?
 ```
 
-Dense implementation should not be read as a failure case here. Modern circuit work already suggests that dense and overlapping mechanisms are normal. The stronger result is that dense sharing does not prevent a training-dynamics explanation. It forces the explanation to move upward: away from individual neurons and toward role-level routes, weight geometry, and optimizer state.
+That is the difference between a static circuit map and a developmental account.
 
-The AdamW result matters on its own. A lot of circuit-formation reasoning in the field implicitly treats the current raw gradient as if it were the training signal that built the mechanism. In this traced run that would have told the wrong story. Raw SGD is tiny relative to realized route growth, while AdamW's preconditioned current-gradient and momentum terms carry most of the update. So at least on this task, optimizer-state-blind gradient analysis is not just incomplete; it is systematically misleading about which route is actually being reinforced.
+<figure class="paper-figure">
+  <img src="assets/figures/proof_status_ladder_updated.svg" alt="Proof status ladder">
+  <figcaption><strong>Figure 13. Proof status.</strong> The paper has strong QK formation evidence, supported write functional-subspace evidence, and explicit open gaps.</figcaption>
+</figure>
 
-If the method generalizes, it could help with:
+## Limitations
 
-- detecting shortcut circuits during training
-- tracking when factual-recall routes form
-- studying refusal or safety circuits under fine-tuning
-- checking whether a model learned the intended mechanism or a brittle alternative
-- preserving useful circuits across training changes
+This is a controlled mechanistic case study, not a universal theory of transformers.
 
-There are three major walls:
+The main limitations are:
 
-| wall | why it matters |
+| limitation | current status |
 | --- | --- |
-| scale | large models have many more layers, heads, parameters, and simultaneous behaviors |
-| superposition | larger models may distribute the same algorithm across many overlapping directions |
-| task overlap | language models learn many algorithms at once, so one weight direction can support multiple behaviors |
+| full answer-margin closure | partial; output-space closure is stronger than route closure |
+| plain SGD vs AdamW training ablation | not run |
+| scaling across width, depth, and task families | not done here |
+| neuron-level decomposition | blocked by superposition; subspace-level methods are more honest |
+| static `W_OV` low-rank theorem | not supported by current evidence |
 
-The current result is therefore not “we solved interpretability.” It is a concrete step toward training-dynamics interpretability: watching one algorithmic role become implemented in weights under real optimizer updates.
+The write-side current-vs-momentum variation is not a weakness to hide. It is a finding: the reference-seed fixed write scalar is momentum-heavy, while the cross-seed selected-winner aggregate is mostly Adam current-gradient with a smaller momentum contribution. The stable statement is that AdamW-preconditioned updates carry write growth and the raw SGD-equivalent term is tiny.
 
-## Main Artifact Sources
+The strongest next experiments are therefore clear:
 
-| artifact group | path |
-| --- | --- |
-| dataset geometry | `artifacts/runs/symbolic_kv_reference_formation/analysis/dataset_geometry/` |
-| feature families and coalitions | `artifacts/runs/symbolic_kv_reference_formation/analysis/traced_candidates/layer2_family7_family4/` |
-| attention geometry | `artifacts/runs/symbolic_kv_reference_formation/analysis/attention_geometry/` |
-| path logit decomposition | `artifacts/runs/symbolic_kv_reference_formation/analysis/path_logit_decomposition/` |
-| output causal validation | `artifacts/runs/symbolic_kv_reference_formation/analysis/output_component_causal_validation/` |
-| residual-state rescue | `artifacts/runs/symbolic_kv_reference_formation/analysis/residual_state_rescue/` |
-| weight SVD trace | `artifacts/runs/symbolic_kv_reference_formation/analysis/weight_svd_trace/phase1_000250_5500_top16/` |
-| contextual SVD alignment | `artifacts/runs/symbolic_kv_reference_formation/analysis/contextual_svd_alignment/` |
-| contextual key separability | `artifacts/runs/symbolic_kv_reference_formation/analysis/contextual_key_separability/` |
-| bilinear QK match separation | `artifacts/runs/symbolic_kv_reference_formation/analysis/bilinear_qk_match_separation/` |
-| rank update attribution | `artifacts/runs/symbolic_kv_reference_formation/analysis/bilinear_qk_rank_update_attribution/` |
-| exact from-init optimizer trace | `artifacts/runs/symbolic_kv_reference_formation/analysis/optimizer_update_trace/from_init_seed7_0000_6000_stepwise/` |
-| Adam-state route attribution | `artifacts/runs/symbolic_kv_reference_formation/analysis/bilinear_qk_rank_adam_state_attribution/from_init_l2h1_rank8_support_value_0000_6000_stepwise/` |
-| cross-seed validation | `artifacts/runs/symbolic_kv_cross_seed_adam/` |
+```text
+1. run SGD-vs-AdamW optimizer ablations;
+2. scale width/depth and test whether role-address dissociation persists;
+3. apply the role-level method to another task family;
+4. improve closure with residual-state and line-integral proof objects.
+```
 
-Supporting pages:
+## Conclusion
 
-- [Checkpoint Analysis Plan](checkpoint_analysis_plan.md)
-- [Shared Feature Dynamics Plan](shared_feature_dynamics_plan.md)
-- [Analysis CLI Guide](analysis_cli_guide.md)
+This study does not show that all transformer circuits form this way. It shows that, in a controlled symbolic retrieval setting, the stable unit of formation can be a role rather than a component address. The QK side of that role becomes visible as a low-rank support-value matcher, and exact optimizer accounting shows that AdamW-preconditioned updates, not the instantaneous raw-gradient direction alone, carry its growth. The write side repeats across seeds as a contextual residual coupling rather than a clean `W_OV` matrix. The remaining challenge is to test whether this role-level, optimizer-state-aware account survives optimizer ablations, scaling, and less synthetic tasks.
+
+## Audit Trail
+
+The paper page is the narrative. The other pages are the audit surface.
+
+Use the reproducibility page for exact commands, environment notes, and expected outputs. Use the CLI guide for the tools added during this project. Use the artifact map to connect each claim to its run directory.
+
+The most important artifact families are:
+
+```text
+QK birth:
+  weight_svd_trace
+  bilinear_qk_match_separation
+  bilinear_qk_rank_adam_state_attribution
+
+cross-seed QK:
+  symbolic_kv_cross_seed_adam/*/cross_seed_head_selection.json
+  symbolic_kv_cross_seed_adam/*/bilinear_qk_rank_adam_state_attribution
+
+write-side functional subspace:
+  mlp_input_functional_subspace
+  mlp_functional_subspace_trajectory
+  mlp_functional_write_adam_state_attribution
+
+closure:
+  route_to_scalar_closure
+  output_route_closure
+  answer_margin_branch_decomposition
+  component_output_rescue_line_integral
+```
+
+The research claim is intentionally bounded:
+
+```text
+In this small symbolic transformer,
+AdamW-trained circuit formation is best explained at the role and subspace level.
+
+QK forms a low-rank support-value route.
+The write side forms a contextual residual coupling.
+Both roles replicate across seeds while their component addresses move.
+```
+
+## References
+
+- Vaswani, Ashish, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N. Gomez, Lukasz Kaiser, and Illia Polosukhin. [Attention Is All You Need](https://arxiv.org/abs/1706.03762). 2017.
+- Kingma, Diederik P., and Jimmy Ba. [Adam: A Method for Stochastic Optimization](https://arxiv.org/abs/1412.6980). 2014.
+- Loshchilov, Ilya, and Frank Hutter. [Decoupled Weight Decay Regularization](https://arxiv.org/abs/1711.05101). 2017.
+- Elhage, Nelson, Neel Nanda, Catherine Olsson, et al. [A Mathematical Framework for Transformer Circuits](https://transformer-circuits.pub/2021/framework/index.html). Transformer Circuits Thread, 2021.
+- Olsson, Catherine, Nelson Elhage, Neel Nanda, et al. [In-context Learning and Induction Heads](https://transformer-circuits.pub/2022/in-context-learning-and-induction-heads/index.html). Transformer Circuits Thread, 2022.
+- Elhage, Nelson, Tristan Hume, Catherine Olsson, et al. [Toy Models of Superposition](https://transformer-circuits.pub/2022/toy_model/index.html). Transformer Circuits Thread, 2022.
+- Meng, Kevin, David Bau, Alex Andonian, and Yonatan Belinkov. [Locating and Editing Factual Associations in GPT](https://arxiv.org/abs/2202.05262). 2022.
+- Power, Alethea, Yuri Burda, Harri Edwards, Igor Babuschkin, and Vedant Misra. [Grokking: Generalization Beyond Overfitting on Small Algorithmic Datasets](https://arxiv.org/abs/2201.02177). 2022.

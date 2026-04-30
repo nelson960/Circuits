@@ -12062,6 +12062,8 @@ ATTENTION_DOWNSTREAM_UPDATE_SCALARS = [
     "head_value_margin_dla",
     "support_ov_value_margin",
     "attended_support_ov_value_margin",
+    "support_mass_ov_value_margin",
+    "qk_ov_product",
     "head_margin_dla_fixed_readout",
     "answer_margin",
     "negative_answer_loss",
@@ -13100,12 +13102,17 @@ def _attention_downstream_scalar_entries_for_payload(
         support_position_tensor = torch.tensor(support_positions, device=device, dtype=torch.long)
         distractor_position_tensor = torch.tensor(distractor_positions, device=device, dtype=torch.long)
         attention_row = payload["attention"][batch_row, query_position, :]
+        score_row = payload["scores"][batch_row, query_position, :]
+        support_scores = score_row.index_select(0, support_position_tensor)
+        distractor_scores = score_row.index_select(0, distractor_position_tensor)
         support_attention = attention_row.index_select(0, support_position_tensor)
         distractor_attention = attention_row.index_select(0, distractor_position_tensor)
         support_attention_mean = support_attention.mean()
+        support_attention_mass = support_attention.sum()
         distractor_attention_mean = distractor_attention.mean()
+        qk_separation = support_scores.mean() - distractor_scores.mean()
         attention_separation = support_attention_mean - distractor_attention_mean
-        attention_mass_separation = support_attention.sum() - distractor_attention.sum()
+        attention_mass_separation = support_attention_mass - distractor_attention.sum()
 
         head_output = torch.matmul(attention_row, payload["v"][batch_row])
         head_write = torch.matmul(head_output, payload["out_head"].T)
@@ -13139,6 +13146,8 @@ def _attention_downstream_scalar_entries_for_payload(
             "head_value_margin_dla": head_value_margin_dla,
             "support_ov_value_margin": support_ov_value_margin,
             "attended_support_ov_value_margin": support_attention_mean * support_ov_value_margin,
+            "support_mass_ov_value_margin": support_attention_mass * support_ov_value_margin,
+            "qk_ov_product": qk_separation * support_ov_value_margin,
             "head_margin_dla_fixed_readout": head_margin_dla_fixed_readout,
             "answer_margin": payload["answer_margins"][pair_index],
             "negative_answer_loss": -payload["answer_losses"][pair_index],
@@ -14265,6 +14274,12 @@ def run_attention_downstream_update_attribution(
             "predicted_delta": "grad_theta scalar(theta_source) . (theta_target - theta_source)",
             "head_margin_dla_fixed_readout": (
                 "head output at the query role dotted with the source checkpoint answer-margin readout vector"
+            ),
+            "support_mass_ov_value_margin": (
+                "total support attention mass times the value-token margin of the support-position OV write"
+            ),
+            "qk_ov_product": (
+                "QK support-minus-distractor score separation times the value-token margin of the support-position OV write"
             ),
             "negative_answer_loss": "-cross_entropy(answer_logits, answer_target)",
             "group_contribution": "grad_group scalar(theta_source) . Delta theta_group",

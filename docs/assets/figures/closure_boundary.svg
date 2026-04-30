@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="535" viewBox="0 0 980 535" role="img">
+<defs>
+<marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+<path d="M0,0 L0,6 L9,3 z" fill="#343434" />
+</marker>
+<style>
+.title{font:700 22px Georgia,serif;fill:#171615}.subtitle{font:15px Georgia,serif;fill:#4a4741}.label{font:14px Georgia,serif;fill:#2a2927}.small{font:12px Georgia,serif;fill:#5a5247}.tiny{font:10.5px Georgia,serif;fill:#5a5247}.axis{stroke:#4a4741;stroke-width:1}.grid{stroke:#ddd6c8;stroke-width:1}.box{fill:#fffdf8;stroke:#9b8f7e;stroke-width:1.4;rx:8}.ok{fill:#e7f3ed;stroke:#4f8f6f}.warn{fill:#fff4dc;stroke:#b78b3b}.open{fill:#f8e8e6;stroke:#aa615b}</style>
+</defs>
+<text x="32.0" y="36.0" class="title" text-anchor="start">Closure boundary: routes help, output space helps more, nonlinear paths still matter</text>
+<text x="32.0" y="61.0" class="subtitle" text-anchor="start">Formation-window 1500 -&gt; 2500 closure on 512 observations.</text>
+<line x1="66.0" y1="310.0" x2="910.0" y2="310.0" class="grid" stroke="#ddd6c8" stroke-width="1"/>
+<text x="58.0" y="314.0" class="tiny" text-anchor="end">0.00</text>
+<line x1="66.0" y1="258.8" x2="910.0" y2="258.8" class="grid" stroke="#ddd6c8" stroke-width="1"/>
+<text x="58.0" y="262.8" class="tiny" text-anchor="end">0.25</text>
+<line x1="66.0" y1="207.5" x2="910.0" y2="207.5" class="grid" stroke="#ddd6c8" stroke-width="1"/>
+<text x="58.0" y="211.5" class="tiny" text-anchor="end">0.50</text>
+<line x1="66.0" y1="156.2" x2="910.0" y2="156.2" class="grid" stroke="#ddd6c8" stroke-width="1"/>
+<text x="58.0" y="160.2" class="tiny" text-anchor="end">0.75</text>
+<line x1="66.0" y1="105.0" x2="910.0" y2="105.0" class="grid" stroke="#ddd6c8" stroke-width="1"/>
+<text x="58.0" y="109.0" class="tiny" text-anchor="end">1.00</text>
+<line x1="66.0" y1="310.0" x2="910.0" y2="310.0" stroke="#4a4741" stroke-width="1.2"/>
+<rect x="86.0" y="233.6" width="42" height="76.4" fill="#d69b3a" opacity="0.9"/>
+<text x="107.0" y="226.6" class="tiny" text-anchor="middle">0.37</text>
+<rect x="134.0" y="138.4" width="42" height="171.6" fill="#245f73" opacity="0.9"/>
+<text x="155.0" y="131.4" class="tiny" text-anchor="middle">0.84</text>
+<text x="131.0" y="334.0" class="tiny" text-anchor="middle">correct logit</text>
+<rect x="246.0" y="265.5" width="42" height="44.5" fill="#d69b3a" opacity="0.9"/>
+<text x="267.0" y="258.5" class="tiny" text-anchor="middle">0.22</text>
+<rect x="294.0" y="192.0" width="42" height="118.0" fill="#245f73" opacity="0.9"/>
+<text x="315.0" y="185.0" class="tiny" text-anchor="middle">0.58</text>
+<text x="291.0" y="334.0" class="tiny" text-anchor="middle">fixed source</text>
+<rect x="406.0" y="258.1" width="42" height="51.9" fill="#d69b3a" opacity="0.9"/>
+<text x="427.0" y="251.1" class="tiny" text-anchor="middle">0.25</text>
+<rect x="454.0" y="205.8" width="42" height="104.2" fill="#245f73" opacity="0.9"/>
+<text x="475.0" y="198.8" class="tiny" text-anchor="middle">0.51</text>
+<text x="451.0" y="334.0" class="tiny" text-anchor="middle">fixed target</text>
+<rect x="566.0" y="259.0" width="42" height="51.0" fill="#d69b3a" opacity="0.9"/>
+<text x="587.0" y="252.0" class="tiny" text-anchor="middle">0.25</text>
+<rect x="614.0" y="240.2" width="42" height="69.8" fill="#245f73" opacity="0.9"/>
+<text x="635.0" y="233.2" class="tiny" text-anchor="middle">0.34</text>
+<text x="611.0" y="334.0" class="tiny" text-anchor="middle">moving margin</text>
+<rect x="726.0" y="289.9" width="42" height="20.1" fill="#d69b3a" opacity="0.9"/>
+<text x="747.0" y="282.9" class="tiny" text-anchor="middle">0.10</text>
+<rect x="774.0" y="305.5" width="42" height="4.5" fill="#245f73" opacity="0.9"/>
+<text x="795.0" y="298.5" class="tiny" text-anchor="middle">0.02</text>
+<text x="771.0" y="334.0" class="tiny" text-anchor="middle">neg loss</text>
+<line x1="650.0" y1="350.0" x2="686.0" y2="350.0" stroke="#d69b3a" stroke-width="4"/>
+<text x="695.0" y="355.0" class="small" text-anchor="start">route/write scalar closure</text>
+<line x1="650.0" y1="374.0" x2="686.0" y2="374.0" stroke="#245f73" stroke-width="4"/>
+<text x="695.0" y="379.0" class="small" text-anchor="start">output-space closure</text>
+<rect x="42.0" y="386.0" width="875.0" height="58.0" class="warn" />
+<text x="58.0" y="412.0" class="small" text-anchor="start">Branch accounting: moving-margin direct R2 0.099; fixed-source+branch 0.606; fixed-target+branch 0.608.</text>
+<text x="58.0" y="434.0" class="small" text-anchor="start">On switch rows: direct 0.161 -&gt; 0.713/0.738; target branch energy fraction 0.431.</text>
+<rect x="42.0" y="454.0" width="875.0" height="58.0" class="warn" />
+<text x="58.0" y="480.0" class="small" text-anchor="start">Line integral: fixed-source actual 0.978, endpoint first-order 1.125, line integral 0.986.</text>
+<text x="58.0" y="502.0" class="small" text-anchor="start">Negative loss: endpoint first-order 0.823, line integral 0.089, actual 0.085.</text>
+</svg>

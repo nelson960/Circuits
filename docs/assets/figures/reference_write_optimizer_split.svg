@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="405" viewBox="0 0 900 405" role="img">
+<defs>
+<marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+<path d="M0,0 L0,6 L9,3 z" fill="#343434" />
+</marker>
+<style>
+.title{font:700 22px Georgia,serif;fill:#171615}.subtitle{font:15px Georgia,serif;fill:#4a4741}.label{font:14px Georgia,serif;fill:#2a2927}.small{font:12px Georgia,serif;fill:#5a5247}.tiny{font:10.5px Georgia,serif;fill:#5a5247}.axis{stroke:#4a4741;stroke-width:1}.grid{stroke:#ddd6c8;stroke-width:1}.box{fill:#fffdf8;stroke:#9b8f7e;stroke-width:1.4;rx:8}.ok{fill:#e7f3ed;stroke:#4f8f6f}.warn{fill:#fff4dc;stroke:#b78b3b}.open{fill:#f8e8e6;stroke:#aa615b}</style>
+</defs>
+<text x="32.0" y="36.0" class="title" text-anchor="start">Reference-seed write scalar is momentum-heavy</text>
+<text x="32.0" y="61.0" class="subtitle" text-anchor="start">L0H0 -&gt; L0MLP, prediction position, fixed step-2500 readout, 1500 -&gt; 2500.</text>
+<line x1="76.0" y1="280.0" x2="844.0" y2="280.0" stroke="#4a4741" stroke-width="1.2"/>
+<rect x="76.0" y="124.9" width="92.0" height="155.1" fill="#245f73" opacity="0.9"/>
+<text x="122.0" y="116.9" class="small" text-anchor="middle">+4.062</text>
+<text x="122.0" y="315.0" class="tiny" text-anchor="middle">actual</text>
+<rect x="196.0" y="122.0" width="92.0" height="158.0" fill="#4f7f54" opacity="0.9"/>
+<text x="242.0" y="114.0" class="small" text-anchor="middle">+4.136</text>
+<text x="242.0" y="315.0" class="tiny" text-anchor="middle">reconstructed</text>
+<rect x="316.0" y="279.8" width="92.0" height="0.2" fill="#b95f56" opacity="0.9"/>
+<text x="362.0" y="271.8" class="small" text-anchor="middle">+0.005</text>
+<text x="362.0" y="315.0" class="tiny" text-anchor="middle">raw</text>
+<text x="362.0" y="330.0" class="tiny" text-anchor="middle">SGD-eq</text>
+<rect x="436.0" y="261.9" width="92.0" height="18.1" fill="#7b5ea7" opacity="0.9"/>
+<text x="482.0" y="253.9" class="small" text-anchor="middle">+0.474</text>
+<text x="482.0" y="315.0" class="tiny" text-anchor="middle">Adam</text>
+<text x="482.0" y="330.0" class="tiny" text-anchor="middle">current</text>
+<rect x="556.0" y="135.7" width="92.0" height="144.3" fill="#8f5a24" opacity="0.9"/>
+<text x="602.0" y="127.7" class="small" text-anchor="middle">+3.778</text>
+<text x="602.0" y="315.0" class="tiny" text-anchor="middle">Adam</text>
+<text x="602.0" y="330.0" class="tiny" text-anchor="middle">momentum</text>
+<rect x="676.0" y="280.0" width="92.0" height="4.4" fill="#777777" opacity="0.9"/>
+<text x="722.0" y="302.4" class="small" text-anchor="middle">-0.116</text>
+<text x="722.0" y="315.0" class="tiny" text-anchor="middle">weight</text>
+<text x="722.0" y="330.0" class="tiny" text-anchor="middle">decay</text>
+<text x="32.0" y="370.0" class="small" text-anchor="start">Relative to actual growth: raw SGD-eq 0.13%, Adam current 11.7%, Adam momentum 93.0%.</text>
+</svg>

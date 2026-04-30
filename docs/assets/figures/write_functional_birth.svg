@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="460" viewBox="0 0 980 460" role="img">
+<defs>
+<marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+<path d="M0,0 L0,6 L9,3 z" fill="#343434" />
+</marker>
+<style>
+.title{font:700 22px Georgia,serif;fill:#171615}.subtitle{font:15px Georgia,serif;fill:#4a4741}.label{font:14px Georgia,serif;fill:#2a2927}.small{font:12px Georgia,serif;fill:#5a5247}.tiny{font:10.5px Georgia,serif;fill:#5a5247}.axis{stroke:#4a4741;stroke-width:1}.grid{stroke:#ddd6c8;stroke-width:1}.box{fill:#fffdf8;stroke:#9b8f7e;stroke-width:1.4;rx:8}.ok{fill:#e7f3ed;stroke:#4f8f6f}.warn{fill:#fff4dc;stroke:#b78b3b}.open{fill:#f8e8e6;stroke:#aa615b}</style>
+</defs>
+<text x="32.0" y="36.0" class="title" text-anchor="start">Functional write coupling turns on before the late behavior plateau</text>
+<text x="32.0" y="61.0" class="subtitle" text-anchor="start">Reference seed L0H0 -&gt; L0MLP, prediction position, grouped by answer value.</text>
+<line x1="78.0" y1="376.9" x2="946.0" y2="376.9" class="grid" stroke="#ddd6c8" stroke-width="1"/>
+<text x="68.0" y="380.9" class="tiny" text-anchor="end">0</text>
+<line x1="78.0" y1="311.2" x2="946.0" y2="311.2" class="grid" stroke="#ddd6c8" stroke-width="1"/>
+<text x="68.0" y="315.2" class="tiny" text-anchor="end">25</text>
+<line x1="78.0" y1="245.6" x2="946.0" y2="245.6" class="grid" stroke="#ddd6c8" stroke-width="1"/>
+<text x="68.0" y="249.6" class="tiny" text-anchor="end">50</text>
+<line x1="78.0" y1="179.9" x2="946.0" y2="179.9" class="grid" stroke="#ddd6c8" stroke-width="1"/>
+<text x="68.0" y="183.9" class="tiny" text-anchor="end">75</text>
+<line x1="78.0" y1="114.3" x2="946.0" y2="114.3" class="grid" stroke="#ddd6c8" stroke-width="1"/>
+<text x="68.0" y="118.3" class="tiny" text-anchor="end">100</text>
+<line x1="78.0" y1="390.0" x2="946.0" y2="390.0" class="axis" stroke="#4a4741" stroke-width="1.2"/>
+<line x1="78.0" y1="88.0" x2="78.0" y2="390.0" class="axis" stroke="#4a4741" stroke-width="1.2"/>
+<line x1="78.0" y1="390.0" x2="78.0" y2="396.0" stroke="#4a4741" stroke-width="1"/>
+<text x="78.0" y="414.0" class="tiny" text-anchor="middle">750</text>
+<line x1="314.7" y1="390.0" x2="314.7" y2="396.0" stroke="#4a4741" stroke-width="1"/>
+<text x="314.7" y="414.0" class="tiny" text-anchor="middle">1500</text>
+<line x1="393.6" y1="390.0" x2="393.6" y2="396.0" stroke="#4a4741" stroke-width="1"/>
+<text x="393.6" y="414.0" class="tiny" text-anchor="middle">1750</text>
+<line x1="630.4" y1="390.0" x2="630.4" y2="396.0" stroke="#4a4741" stroke-width="1"/>
+<text x="630.4" y="414.0" class="tiny" text-anchor="middle">2500</text>
+<line x1="946.0" y1="390.0" x2="946.0" y2="396.0" stroke="#4a4741" stroke-width="1"/>
+<text x="946.0" y="414.0" class="tiny" text-anchor="middle">3500</text>
+<line x1="314.7" y1="88.0" x2="314.7" y2="390.0" stroke="#a67c00" stroke-width="1.2"/>
+<text x="320.7" y="104.0" class="tiny" text-anchor="start">coupling starts</text>
+<line x1="393.6" y1="88.0" x2="393.6" y2="390.0" stroke="#a67c00" stroke-width="1.2"/>
+<text x="399.6" y="122.0" class="tiny" text-anchor="start">sharp jump</text>
+<polyline fill="none" stroke="#245f73" stroke-width="3" points="78.0,369.3 156.9,370.0 235.8,371.0 314.7,369.9 393.6,245.1 472.5,206.7 551.5,201.7 630.4,136.3 709.3,101.9 788.2,115.8 867.1,167.4 946.0,133.6" />
+<polyline fill="none" stroke="#4f7f54" stroke-width="3" points="78.0,380.2 156.9,379.3 235.8,377.3 314.7,370.4 393.6,291.3 472.5,250.8 551.5,242.8 630.4,192.6 709.3,169.0 788.2,179.4 867.1,207.0 946.0,169.3" />
+<polyline fill="none" stroke="#8f5a24" stroke-width="3" points="78.0,366.0 156.9,367.6 235.8,370.6 314.7,376.4 393.6,330.6 472.5,332.8 551.5,335.8 630.4,320.5 709.3,309.8 788.2,313.3 867.1,337.3 946.0,341.2" />
+<line x1="670.0" y1="97.0" x2="706.0" y2="97.0" stroke="#245f73" stroke-width="3"/>
+<text x="715.0" y="102.0" class="small" text-anchor="start">total functional write</text>
+<line x1="670.0" y1="119.0" x2="706.0" y2="119.0" stroke="#4f7f54" stroke-width="3"/>
+<text x="715.0" y="124.0" class="small" text-anchor="start">residual skip part</text>
+<line x1="670.0" y1="141.0" x2="706.0" y2="141.0" stroke="#8f5a24" stroke-width="3"/>
+<text x="715.0" y="146.0" class="small" text-anchor="start">L0MLP nonlinear part</text>
+<text x="32.0" y="432.0" class="small" text-anchor="start">The direction is not born from zero. What changes sharply is its coupling to the mature answer-readout direction.</text>
+</svg>

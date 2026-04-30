@@ -43,14 +43,33 @@ from circuit.analysis.geometric_mechanisms import (
     run_route_gradient_decomposition,
 )
 from circuit.analysis.actual_batch_route_attribution import run_actual_batch_route_attribution
+from circuit.analysis.adam_state_geometry_report import run_adam_state_geometry_report
+from circuit.analysis.attention_downstream_adam_state_attribution import run_attention_downstream_adam_state_attribution
 from circuit.analysis.answer_margin_delta_decomposition import run_answer_margin_delta_decomposition
 from circuit.analysis.answer_margin_branch_decomposition import run_answer_margin_branch_decomposition
 from circuit.analysis.answer_scalar_residual_diagnosis import run_answer_scalar_residual_diagnosis
+from circuit.analysis.causal_write_subspace_rescue import run_causal_write_subspace_rescue
+from circuit.analysis.causal_write_gradient_subspace_rescue import run_causal_write_gradient_subspace_rescue
+from circuit.analysis.component_output_rescue_adam_state_attribution import (
+    run_component_output_rescue_adam_state_attribution,
+)
+from circuit.analysis.component_output_rescue_line_integral import run_component_output_rescue_line_integral
+from circuit.analysis.component_output_rescue import run_component_output_rescue
+from circuit.analysis.mlp_functional_subspace_trajectory import run_mlp_functional_subspace_trajectory_report
+from circuit.analysis.mlp_functional_write_adam_state_attribution import (
+    run_mlp_functional_write_adam_state_attribution,
+)
+from circuit.analysis.mlp_input_functional_subspace_report import run_mlp_input_functional_subspace_report
+from circuit.analysis.mlp_local_write_adam_state_attribution import run_mlp_local_write_adam_state_attribution
+from circuit.analysis.mlp_local_write_map_report import run_mlp_local_write_map_report
 from circuit.analysis.optimizer_update_trace import run_optimizer_update_trace
+from circuit.analysis.ov_write_progress_report import run_ov_write_progress_report
 from circuit.analysis.output_component_causal_validation import run_output_component_causal_validation
 from circuit.analysis.output_mediated_causal_decomposition import run_output_mediated_causal_decomposition
 from circuit.analysis.output_route_closure import run_output_route_closure
-from circuit.analysis.residual_state_rescue import run_residual_state_rescue
+from circuit.analysis.residual_component_delta_report import run_residual_component_delta_report
+from circuit.analysis.residual_delta_vector_report import run_residual_delta_vector_report
+from circuit.analysis.residual_state_rescue import run_residual_position_rescue, run_residual_state_rescue
 from circuit.analysis.route_family_closure import run_route_family_closure_report
 from circuit.analysis.route_to_margin_closure import run_route_to_margin_closure
 from circuit.analysis.route_to_scalar_closure import run_route_to_scalar_closure
@@ -886,6 +905,53 @@ def main() -> None:
     attention_downstream_update_parser.add_argument("--top-k-groups", type=int, default=24)
     attention_downstream_update_parser.add_argument("--min-error-denominator", type=float, default=1.0e-9)
 
+    attention_downstream_adam_parser = subparsers.add_parser("attention-downstream-adam-state-attribution")
+    attention_downstream_adam_parser.add_argument("--config", type=Path, required=True)
+    attention_downstream_adam_parser.add_argument("--probe-set", type=Path, required=True)
+    attention_downstream_adam_parser.add_argument("--optimizer-trace-dir", type=Path, required=True)
+    attention_downstream_adam_parser.add_argument("--output-dir", type=Path, required=True)
+    attention_downstream_adam_parser.add_argument("--device", type=str, default="cpu")
+    attention_downstream_adam_parser.add_argument("--checkpoint", type=Path, action="append", default=None)
+    attention_downstream_adam_parser.add_argument("--head-layer", type=int, required=True)
+    attention_downstream_adam_parser.add_argument("--head", type=int, required=True)
+    attention_downstream_adam_parser.add_argument("--score-query-role", type=str, required=True)
+    attention_downstream_adam_parser.add_argument("--support-key-role", type=str, required=True)
+    attention_downstream_adam_parser.add_argument("--distractor-key-role", type=str, required=True)
+    attention_downstream_adam_parser.add_argument("--record-side", type=str, default="clean")
+    attention_downstream_adam_parser.add_argument("--scalar", type=str, action="append", default=None)
+    attention_downstream_adam_parser.add_argument("--objective-pair-type", type=str, required=True)
+    attention_downstream_adam_parser.add_argument("--route-pair-source-type", type=str, action="append", required=True)
+    attention_downstream_adam_parser.add_argument("--objective-route-split", type=str, default="__all__")
+    attention_downstream_adam_parser.add_argument("--route-split-filter", type=str, action="append", default=None)
+    attention_downstream_adam_parser.add_argument("--train-split", type=str, default="train")
+    attention_downstream_adam_parser.add_argument("--max-route-pairs-per-type", type=int, default=64)
+    attention_downstream_adam_parser.add_argument("--min-route-pairs-per-type", type=int, default=1)
+    attention_downstream_adam_parser.add_argument("--loss-scope", type=str, default="full_lm")
+    attention_downstream_adam_parser.add_argument("--loss-match-tolerance", type=float, default=1.0e-4)
+    attention_downstream_adam_parser.add_argument("--grad-norm-match-tolerance", type=float, default=1.0e-4)
+    attention_downstream_adam_parser.add_argument("--min-error-denominator", type=float, default=1.0e-9)
+    attention_downstream_adam_parser.add_argument("--parameter-group", type=str, action="append", default=None)
+    attention_downstream_adam_parser.add_argument("--overwrite", action="store_true")
+
+    ov_write_progress_parser = subparsers.add_parser("ov-write-progress-report")
+    ov_write_progress_parser.add_argument("--config", type=Path, required=True)
+    ov_write_progress_parser.add_argument("--probe-set", type=Path, required=True)
+    ov_write_progress_parser.add_argument("--checkpoint-dir", type=Path, required=True)
+    ov_write_progress_parser.add_argument("--output-dir", type=Path, required=True)
+    ov_write_progress_parser.add_argument("--device", type=str, default="mps")
+    ov_write_progress_parser.add_argument("--checkpoint", type=Path, action="append", default=None)
+    ov_write_progress_parser.add_argument("--head", type=str, action="append", required=True)
+    ov_write_progress_parser.add_argument("--score-query-role", type=str, required=True)
+    ov_write_progress_parser.add_argument("--support-key-role", type=str, required=True)
+    ov_write_progress_parser.add_argument("--distractor-key-role", type=str, required=True)
+    ov_write_progress_parser.add_argument("--record-side", type=str, action="append", default=None)
+    ov_write_progress_parser.add_argument("--pair-type", type=str, action="append", required=True)
+    ov_write_progress_parser.add_argument("--max-pairs-per-type", type=int, default=64)
+    ov_write_progress_parser.add_argument("--min-pairs-per-type", type=int, default=2)
+    ov_write_progress_parser.add_argument("--split", type=str, action="append", default=None)
+    ov_write_progress_parser.add_argument("--top-k-correlations", type=int, default=24)
+    ov_write_progress_parser.add_argument("--overwrite", action="store_true")
+
     optimizer_trace_parser = subparsers.add_parser("optimizer-update-trace")
     optimizer_trace_parser.add_argument("--config", type=Path, required=True)
     optimizer_trace_start = optimizer_trace_parser.add_mutually_exclusive_group(required=True)
@@ -963,6 +1029,8 @@ def main() -> None:
     answer_scalar_residual_parser.add_argument("--output-dir", type=Path, required=True)
     answer_scalar_residual_parser.add_argument("--device", type=str, default="mps")
     answer_scalar_residual_parser.add_argument("--checkpoint", type=Path, action="append", default=None)
+    answer_scalar_residual_parser.add_argument("--start-step", type=int, default=None)
+    answer_scalar_residual_parser.add_argument("--end-step", type=int, default=None)
     answer_scalar_residual_parser.add_argument("--pair-type", type=str, action="append", required=True)
     answer_scalar_residual_parser.add_argument("--margin-side", type=str, action="append", default=None)
     answer_scalar_residual_parser.add_argument("--scalar", type=str, action="append", default=None)
@@ -1081,6 +1149,353 @@ def main() -> None:
     residual_rescue_parser.add_argument("--markdown-top-k-rows", type=int, default=120)
     residual_rescue_parser.add_argument("--plot-top-k-rows", type=int, default=48)
     residual_rescue_parser.add_argument("--overwrite", action="store_true")
+
+    residual_position_rescue_parser = subparsers.add_parser("residual-position-rescue")
+    residual_position_rescue_parser.add_argument("--config", type=Path, required=True)
+    residual_position_rescue_parser.add_argument("--probe-set", type=Path, required=True)
+    residual_position_rescue_parser.add_argument("--scalar-pair-rows", type=Path, required=True)
+    residual_position_rescue_parser.add_argument("--output-dir", type=Path, required=True)
+    residual_position_rescue_parser.add_argument("--device", type=str, default="mps")
+    residual_position_rescue_parser.add_argument("--pair-type", type=str, action="append", required=True)
+    residual_position_rescue_parser.add_argument("--source-component", type=str, action="append", required=True)
+    residual_position_rescue_parser.add_argument("--patch-stage", type=str, action="append", required=True)
+    residual_position_rescue_parser.add_argument("--position-role", type=str, action="append", required=True)
+    residual_position_rescue_parser.add_argument("--scalar", type=str, action="append", default=None)
+    residual_position_rescue_parser.add_argument("--margin-side", type=str, action="append", default=None)
+    residual_position_rescue_parser.add_argument("--endpoint-role", type=str, action="append", default=None)
+    residual_position_rescue_parser.add_argument("--split", type=str, action="append", default=None)
+    residual_position_rescue_parser.add_argument("--max-pairs-per-type", type=int, default=64)
+    residual_position_rescue_parser.add_argument("--min-pairs-per-type", type=int, default=1)
+    residual_position_rescue_parser.add_argument("--scalar-value-tolerance", type=float, default=1.0e-4)
+    residual_position_rescue_parser.add_argument("--denominator-threshold", type=float, default=1.0e-6)
+    residual_position_rescue_parser.add_argument("--markdown-top-k-rows", type=int, default=160)
+    residual_position_rescue_parser.add_argument("--plot-top-k-rows", type=int, default=64)
+    residual_position_rescue_parser.add_argument("--overwrite", action="store_true")
+
+    residual_delta_vector_parser = subparsers.add_parser("residual-delta-vector-report")
+    residual_delta_vector_parser.add_argument("--config", type=Path, required=True)
+    residual_delta_vector_parser.add_argument("--probe-set", type=Path, required=True)
+    residual_delta_vector_parser.add_argument("--scalar-pair-rows", type=Path, required=True)
+    residual_delta_vector_parser.add_argument("--output-dir", type=Path, required=True)
+    residual_delta_vector_parser.add_argument("--device", type=str, default="mps")
+    residual_delta_vector_parser.add_argument("--pair-type", type=str, action="append", required=True)
+    residual_delta_vector_parser.add_argument("--source-component", type=str, action="append", required=True)
+    residual_delta_vector_parser.add_argument("--stage", type=str, action="append", required=True)
+    residual_delta_vector_parser.add_argument("--position-role", type=str, action="append", required=True)
+    residual_delta_vector_parser.add_argument("--group-by", type=str, action="append", required=True)
+    residual_delta_vector_parser.add_argument("--scalar", type=str, action="append", default=None)
+    residual_delta_vector_parser.add_argument("--margin-side", type=str, action="append", default=None)
+    residual_delta_vector_parser.add_argument("--endpoint-role", type=str, action="append", default=None)
+    residual_delta_vector_parser.add_argument("--split", type=str, action="append", default=None)
+    residual_delta_vector_parser.add_argument("--max-pairs-per-type", type=int, default=64)
+    residual_delta_vector_parser.add_argument("--min-pairs-per-type", type=int, default=1)
+    residual_delta_vector_parser.add_argument("--pca-rank", type=int, default=4)
+    residual_delta_vector_parser.add_argument("--markdown-top-k-rows", type=int, default=120)
+    residual_delta_vector_parser.add_argument("--plot-top-k-rows", type=int, default=48)
+    residual_delta_vector_parser.add_argument("--overwrite", action="store_true")
+
+    residual_component_delta_parser = subparsers.add_parser("residual-component-delta-report")
+    residual_component_delta_parser.add_argument("--config", type=Path, required=True)
+    residual_component_delta_parser.add_argument("--probe-set", type=Path, required=True)
+    residual_component_delta_parser.add_argument("--scalar-pair-rows", type=Path, required=True)
+    residual_component_delta_parser.add_argument("--output-dir", type=Path, required=True)
+    residual_component_delta_parser.add_argument("--device", type=str, default="mps")
+    residual_component_delta_parser.add_argument("--pair-type", type=str, action="append", required=True)
+    residual_component_delta_parser.add_argument("--source-component", type=str, action="append", required=True)
+    residual_component_delta_parser.add_argument("--component", type=str, action="append", required=True)
+    residual_component_delta_parser.add_argument("--position-role", type=str, action="append", required=True)
+    residual_component_delta_parser.add_argument("--group-by", type=str, action="append", required=True)
+    residual_component_delta_parser.add_argument("--scalar", type=str, action="append", default=None)
+    residual_component_delta_parser.add_argument("--margin-side", type=str, action="append", default=None)
+    residual_component_delta_parser.add_argument("--endpoint-role", type=str, action="append", default=None)
+    residual_component_delta_parser.add_argument("--split", type=str, action="append", default=None)
+    residual_component_delta_parser.add_argument("--max-pairs-per-type", type=int, default=64)
+    residual_component_delta_parser.add_argument("--min-pairs-per-type", type=int, default=1)
+    residual_component_delta_parser.add_argument("--pca-rank", type=int, default=4)
+    residual_component_delta_parser.add_argument("--markdown-top-k-rows", type=int, default=160)
+    residual_component_delta_parser.add_argument("--plot-top-k-rows", type=int, default=64)
+    residual_component_delta_parser.add_argument("--overwrite", action="store_true")
+
+    mlp_local_write_parser = subparsers.add_parser("mlp-local-write-map-report")
+    mlp_local_write_parser.add_argument("--config", type=Path, required=True)
+    mlp_local_write_parser.add_argument("--probe-set", type=Path, required=True)
+    mlp_local_write_parser.add_argument("--scalar-pair-rows", type=Path, required=True)
+    mlp_local_write_parser.add_argument("--output-dir", type=Path, required=True)
+    mlp_local_write_parser.add_argument("--device", type=str, default="mps")
+    mlp_local_write_parser.add_argument("--pair-type", type=str, action="append", required=True)
+    mlp_local_write_parser.add_argument("--source-component", type=str, action="append", required=True)
+    mlp_local_write_parser.add_argument("--component", type=str, action="append", required=True)
+    mlp_local_write_parser.add_argument("--position-role", type=str, action="append", required=True)
+    mlp_local_write_parser.add_argument("--group-by", type=str, action="append", required=True)
+    mlp_local_write_parser.add_argument("--scalar", type=str, action="append", default=None)
+    mlp_local_write_parser.add_argument("--margin-side", type=str, action="append", default=None)
+    mlp_local_write_parser.add_argument("--endpoint-role", type=str, action="append", default=None)
+    mlp_local_write_parser.add_argument("--split", type=str, action="append", default=None)
+    mlp_local_write_parser.add_argument("--max-pairs-per-type", type=int, default=64)
+    mlp_local_write_parser.add_argument("--min-pairs-per-type", type=int, default=1)
+    mlp_local_write_parser.add_argument("--pca-rank", type=int, default=4)
+    mlp_local_write_parser.add_argument("--markdown-top-k-rows", type=int, default=160)
+    mlp_local_write_parser.add_argument("--plot-top-k-rows", type=int, default=64)
+    mlp_local_write_parser.add_argument("--overwrite", action="store_true")
+
+    mlp_input_functional_parser = subparsers.add_parser("mlp-input-functional-subspace-report")
+    mlp_input_functional_parser.add_argument("--config", type=Path, required=True)
+    mlp_input_functional_parser.add_argument("--probe-set", type=Path, required=True)
+    mlp_input_functional_parser.add_argument("--scalar-pair-rows", type=Path, required=True)
+    mlp_input_functional_parser.add_argument("--output-dir", type=Path, required=True)
+    mlp_input_functional_parser.add_argument("--device", type=str, default="mps")
+    mlp_input_functional_parser.add_argument("--pair-type", type=str, action="append", required=True)
+    mlp_input_functional_parser.add_argument("--source-component", type=str, required=True)
+    mlp_input_functional_parser.add_argument("--component", type=str, required=True)
+    mlp_input_functional_parser.add_argument("--position-role", type=str, action="append", required=True)
+    mlp_input_functional_parser.add_argument("--group-by", type=str, action="append", required=True)
+    mlp_input_functional_parser.add_argument("--scalar", type=str, action="append", default=None)
+    mlp_input_functional_parser.add_argument("--margin-side", type=str, action="append", default=None)
+    mlp_input_functional_parser.add_argument("--endpoint-role", type=str, action="append", default=None)
+    mlp_input_functional_parser.add_argument("--endpoint-step", type=int, action="append", default=None)
+    mlp_input_functional_parser.add_argument("--split", type=str, action="append", default=None)
+    mlp_input_functional_parser.add_argument("--max-pairs-per-type", type=int, default=64)
+    mlp_input_functional_parser.add_argument("--min-pairs-per-type", type=int, default=1)
+    mlp_input_functional_parser.add_argument("--batch-size", type=int, default=None)
+    mlp_input_functional_parser.add_argument("--subspace-rank", type=int, default=4)
+    mlp_input_functional_parser.add_argument("--markdown-top-k-rows", type=int, default=160)
+    mlp_input_functional_parser.add_argument("--overwrite", action="store_true")
+
+    mlp_functional_trajectory_parser = subparsers.add_parser("mlp-functional-subspace-trajectory-report")
+    mlp_functional_trajectory_parser.add_argument("--config", type=Path, required=True)
+    mlp_functional_trajectory_parser.add_argument("--probe-set", type=Path, required=True)
+    mlp_functional_trajectory_parser.add_argument("--scalar-pair-rows", type=Path, required=True)
+    mlp_functional_trajectory_parser.add_argument("--output-dir", type=Path, required=True)
+    mlp_functional_trajectory_parser.add_argument("--device", type=str, default="mps")
+    mlp_functional_trajectory_parser.add_argument("--pair-type", type=str, action="append", required=True)
+    mlp_functional_trajectory_parser.add_argument("--source-component", type=str, required=True)
+    mlp_functional_trajectory_parser.add_argument("--component", type=str, required=True)
+    mlp_functional_trajectory_parser.add_argument("--position-role", type=str, action="append", required=True)
+    mlp_functional_trajectory_parser.add_argument("--group-by", type=str, action="append", required=True)
+    mlp_functional_trajectory_parser.add_argument("--scalar", type=str, action="append", default=None)
+    mlp_functional_trajectory_parser.add_argument("--margin-side", type=str, action="append", default=None)
+    mlp_functional_trajectory_parser.add_argument("--endpoint-role", type=str, action="append", default=None)
+    mlp_functional_trajectory_parser.add_argument("--endpoint-step", type=int, action="append", default=None)
+    mlp_functional_trajectory_parser.add_argument("--reference-step", type=int, action="append", required=True)
+    mlp_functional_trajectory_parser.add_argument("--reference-basis-kind", type=str, action="append", required=True)
+    mlp_functional_trajectory_parser.add_argument("--split", type=str, action="append", default=None)
+    mlp_functional_trajectory_parser.add_argument("--max-pairs-per-type", type=int, default=64)
+    mlp_functional_trajectory_parser.add_argument("--min-pairs-per-type", type=int, default=1)
+    mlp_functional_trajectory_parser.add_argument("--batch-size", type=int, default=None)
+    mlp_functional_trajectory_parser.add_argument("--subspace-rank", type=int, default=4)
+    mlp_functional_trajectory_parser.add_argument("--markdown-top-k-rows", type=int, default=160)
+    mlp_functional_trajectory_parser.add_argument("--overwrite", action="store_true")
+
+    mlp_functional_write_adam_parser = subparsers.add_parser("mlp-functional-write-adam-state-attribution")
+    mlp_functional_write_adam_parser.add_argument("--config", type=Path, required=True)
+    mlp_functional_write_adam_parser.add_argument("--probe-set", type=Path, required=True)
+    mlp_functional_write_adam_parser.add_argument("--scalar-pair-rows", type=Path, required=True)
+    mlp_functional_write_adam_parser.add_argument("--optimizer-trace-dir", type=Path, required=True)
+    mlp_functional_write_adam_parser.add_argument("--output-dir", type=Path, required=True)
+    mlp_functional_write_adam_parser.add_argument("--device", type=str, default="cpu")
+    mlp_functional_write_adam_parser.add_argument("--checkpoint", type=Path, action="append", default=None)
+    mlp_functional_write_adam_parser.add_argument("--start-step", type=int, default=None)
+    mlp_functional_write_adam_parser.add_argument("--end-step", type=int, default=None)
+    mlp_functional_write_adam_parser.add_argument("--source-component", type=str, required=True)
+    mlp_functional_write_adam_parser.add_argument("--component", type=str, required=True)
+    mlp_functional_write_adam_parser.add_argument("--position-role", type=str, action="append", required=True)
+    mlp_functional_write_adam_parser.add_argument("--group-by", type=str, action="append", required=True)
+    mlp_functional_write_adam_parser.add_argument("--scalar", type=str, action="append", default=None)
+    mlp_functional_write_adam_parser.add_argument("--margin-side", type=str, action="append", default=None)
+    mlp_functional_write_adam_parser.add_argument("--endpoint-role", type=str, action="append", default=None)
+    mlp_functional_write_adam_parser.add_argument("--pair-type", type=str, action="append", required=True)
+    mlp_functional_write_adam_parser.add_argument("--reference-step", type=int, required=True)
+    mlp_functional_write_adam_parser.add_argument("--reference-vector-kind", type=str, required=True)
+    mlp_functional_write_adam_parser.add_argument("--target-vector-kind", type=str, required=True)
+    mlp_functional_write_adam_parser.add_argument("--record-side", type=str, default="clean")
+    mlp_functional_write_adam_parser.add_argument("--split", type=str, action="append", default=None)
+    mlp_functional_write_adam_parser.add_argument("--train-split", type=str, default="train")
+    mlp_functional_write_adam_parser.add_argument("--max-pairs-per-type", type=int, default=64)
+    mlp_functional_write_adam_parser.add_argument("--min-pairs-per-type", type=int, default=1)
+    mlp_functional_write_adam_parser.add_argument("--batch-size", type=int, default=None)
+    mlp_functional_write_adam_parser.add_argument("--loss-scope", type=str, default="full_lm")
+    mlp_functional_write_adam_parser.add_argument("--loss-match-tolerance", type=float, default=1.0e-4)
+    mlp_functional_write_adam_parser.add_argument("--grad-norm-match-tolerance", type=float, default=1.0e-4)
+    mlp_functional_write_adam_parser.add_argument("--min-error-denominator", type=float, default=1.0e-9)
+    mlp_functional_write_adam_parser.add_argument("--parameter-group", type=str, action="append", default=None)
+    mlp_functional_write_adam_parser.add_argument("--overwrite", action="store_true")
+
+    mlp_local_write_adam_parser = subparsers.add_parser("mlp-local-write-adam-state-attribution")
+    mlp_local_write_adam_parser.add_argument("--config", type=Path, required=True)
+    mlp_local_write_adam_parser.add_argument("--probe-set", type=Path, required=True)
+    mlp_local_write_adam_parser.add_argument("--optimizer-trace-dir", type=Path, required=True)
+    mlp_local_write_adam_parser.add_argument("--output-dir", type=Path, required=True)
+    mlp_local_write_adam_parser.add_argument("--device", type=str, default="cpu")
+    mlp_local_write_adam_parser.add_argument("--checkpoint", type=Path, action="append", default=None)
+    mlp_local_write_adam_parser.add_argument("--start-step", type=int, default=None)
+    mlp_local_write_adam_parser.add_argument("--end-step", type=int, default=None)
+    mlp_local_write_adam_parser.add_argument("--source-component", type=str, required=True)
+    mlp_local_write_adam_parser.add_argument("--component", type=str, action="append", required=True)
+    mlp_local_write_adam_parser.add_argument("--position-role", type=str, action="append", required=True)
+    mlp_local_write_adam_parser.add_argument("--group-by", type=str, action="append", required=True)
+    mlp_local_write_adam_parser.add_argument("--record-side", type=str, default="clean")
+    mlp_local_write_adam_parser.add_argument("--route-pair-source-type", type=str, action="append", required=True)
+    mlp_local_write_adam_parser.add_argument("--route-pair-type", type=str, required=True)
+    mlp_local_write_adam_parser.add_argument("--route-split", type=str, default="__all__")
+    mlp_local_write_adam_parser.add_argument("--route-split-filter", type=str, action="append", default=None)
+    mlp_local_write_adam_parser.add_argument("--train-split", type=str, default="train")
+    mlp_local_write_adam_parser.add_argument("--max-route-pairs-per-type", type=int, default=64)
+    mlp_local_write_adam_parser.add_argument("--min-route-pairs-per-type", type=int, default=1)
+    mlp_local_write_adam_parser.add_argument("--pca-rank", type=int, default=4)
+    mlp_local_write_adam_parser.add_argument("--loss-scope", type=str, default="full_lm")
+    mlp_local_write_adam_parser.add_argument("--loss-match-tolerance", type=float, default=1.0e-4)
+    mlp_local_write_adam_parser.add_argument("--grad-norm-match-tolerance", type=float, default=1.0e-4)
+    mlp_local_write_adam_parser.add_argument("--min-error-denominator", type=float, default=1.0e-9)
+    mlp_local_write_adam_parser.add_argument("--parameter-group", type=str, action="append", default=None)
+    mlp_local_write_adam_parser.add_argument("--overwrite", action="store_true")
+
+    adam_state_geometry_parser = subparsers.add_parser("adam-state-geometry-report")
+    adam_state_geometry_parser.add_argument("--config", type=Path, required=True)
+    adam_state_geometry_parser.add_argument("--optimizer-trace-dir", type=Path, required=True)
+    adam_state_geometry_parser.add_argument("--output-dir", type=Path, required=True)
+    adam_state_geometry_parser.add_argument("--device", type=str, default="cpu")
+    adam_state_geometry_parser.add_argument("--checkpoint", type=Path, action="append", default=None)
+    adam_state_geometry_parser.add_argument("--start-step", type=int, default=None)
+    adam_state_geometry_parser.add_argument("--end-step", type=int, default=None)
+    adam_state_geometry_parser.add_argument("--checkpoint-stride", type=int, default=1)
+    adam_state_geometry_parser.add_argument("--target", type=str, action="append", required=True)
+    adam_state_geometry_parser.add_argument("--source-kind", type=str, action="append", default=None)
+    adam_state_geometry_parser.add_argument("--train-split", type=str, default="train")
+    adam_state_geometry_parser.add_argument("--loss-scope", type=str, default="full_lm")
+    adam_state_geometry_parser.add_argument("--top-k", type=int, default=8)
+    adam_state_geometry_parser.add_argument("--top-vector-ranks", type=int, default=2)
+    adam_state_geometry_parser.add_argument("--loss-match-tolerance", type=float, default=1.0e-4)
+    adam_state_geometry_parser.add_argument("--grad-norm-match-tolerance", type=float, default=1.0e-4)
+    adam_state_geometry_parser.add_argument("--markdown-top-k-rows", type=int, default=80)
+    adam_state_geometry_parser.add_argument("--overwrite", action="store_true")
+
+    causal_write_subspace_parser = subparsers.add_parser("causal-write-subspace-rescue")
+    causal_write_subspace_parser.add_argument("--config", type=Path, required=True)
+    causal_write_subspace_parser.add_argument("--probe-set", type=Path, required=True)
+    causal_write_subspace_parser.add_argument("--scalar-pair-rows", type=Path, required=True)
+    causal_write_subspace_parser.add_argument("--output-dir", type=Path, required=True)
+    causal_write_subspace_parser.add_argument("--device", type=str, default="mps")
+    causal_write_subspace_parser.add_argument("--pair-type", type=str, action="append", required=True)
+    causal_write_subspace_parser.add_argument("--source-component", type=str, action="append", required=True)
+    causal_write_subspace_parser.add_argument("--component", type=str, action="append", default=None)
+    causal_write_subspace_parser.add_argument("--component-group", type=str, action="append", default=None)
+    causal_write_subspace_parser.add_argument("--position-role", type=str, action="append", default=None)
+    causal_write_subspace_parser.add_argument("--position-group", type=str, action="append", default=None)
+    causal_write_subspace_parser.add_argument("--group-by", type=str, required=True)
+    causal_write_subspace_parser.add_argument("--basis-kind", type=str, action="append", default=None)
+    causal_write_subspace_parser.add_argument("--subspace-rank", type=int, action="append", default=None)
+    causal_write_subspace_parser.add_argument("--scalar", type=str, action="append", default=None)
+    causal_write_subspace_parser.add_argument("--margin-side", type=str, action="append", default=None)
+    causal_write_subspace_parser.add_argument("--endpoint-role", type=str, action="append", default=None)
+    causal_write_subspace_parser.add_argument("--split", type=str, action="append", default=None)
+    causal_write_subspace_parser.add_argument("--max-pairs-per-type", type=int, default=64)
+    causal_write_subspace_parser.add_argument("--min-pairs-per-type", type=int, default=1)
+    causal_write_subspace_parser.add_argument("--scalar-value-tolerance", type=float, default=1.0e-4)
+    causal_write_subspace_parser.add_argument("--denominator-threshold", type=float, default=1.0e-6)
+    causal_write_subspace_parser.add_argument("--markdown-top-k-rows", type=int, default=160)
+    causal_write_subspace_parser.add_argument("--overwrite", action="store_true")
+
+    causal_write_gradient_parser = subparsers.add_parser("causal-write-gradient-subspace-rescue")
+    causal_write_gradient_parser.add_argument("--config", type=Path, required=True)
+    causal_write_gradient_parser.add_argument("--probe-set", type=Path, required=True)
+    causal_write_gradient_parser.add_argument("--scalar-pair-rows", type=Path, required=True)
+    causal_write_gradient_parser.add_argument("--output-dir", type=Path, required=True)
+    causal_write_gradient_parser.add_argument("--device", type=str, default="mps")
+    causal_write_gradient_parser.add_argument("--pair-type", type=str, action="append", required=True)
+    causal_write_gradient_parser.add_argument("--source-component", type=str, action="append", required=True)
+    causal_write_gradient_parser.add_argument("--component", type=str, action="append", default=None)
+    causal_write_gradient_parser.add_argument("--component-group", type=str, action="append", default=None)
+    causal_write_gradient_parser.add_argument("--position-role", type=str, action="append", default=None)
+    causal_write_gradient_parser.add_argument("--position-group", type=str, action="append", default=None)
+    causal_write_gradient_parser.add_argument("--subspace-rank", type=int, action="append", default=None)
+    causal_write_gradient_parser.add_argument("--scalar", type=str, action="append", default=None)
+    causal_write_gradient_parser.add_argument("--margin-side", type=str, action="append", default=None)
+    causal_write_gradient_parser.add_argument("--endpoint-role", type=str, action="append", default=None)
+    causal_write_gradient_parser.add_argument("--split", type=str, action="append", default=None)
+    causal_write_gradient_parser.add_argument("--max-pairs-per-type", type=int, default=64)
+    causal_write_gradient_parser.add_argument("--min-pairs-per-type", type=int, default=1)
+    causal_write_gradient_parser.add_argument("--scalar-value-tolerance", type=float, default=1.0e-4)
+    causal_write_gradient_parser.add_argument("--denominator-threshold", type=float, default=1.0e-6)
+    causal_write_gradient_parser.add_argument("--markdown-top-k-rows", type=int, default=160)
+    causal_write_gradient_parser.add_argument("--overwrite", action="store_true")
+
+    component_output_rescue_parser = subparsers.add_parser("component-output-rescue")
+    component_output_rescue_parser.add_argument("--config", type=Path, required=True)
+    component_output_rescue_parser.add_argument("--probe-set", type=Path, required=True)
+    component_output_rescue_parser.add_argument("--scalar-pair-rows", type=Path, required=True)
+    component_output_rescue_parser.add_argument("--output-dir", type=Path, required=True)
+    component_output_rescue_parser.add_argument("--device", type=str, default="mps")
+    component_output_rescue_parser.add_argument("--pair-type", type=str, action="append", required=True)
+    component_output_rescue_parser.add_argument("--source-component", type=str, action="append", required=True)
+    component_output_rescue_parser.add_argument("--patch-component", type=str, action="append", default=None)
+    component_output_rescue_parser.add_argument("--patch-group", type=str, action="append", default=None)
+    component_output_rescue_parser.add_argument("--scalar", type=str, action="append", default=None)
+    component_output_rescue_parser.add_argument("--margin-side", type=str, action="append", default=None)
+    component_output_rescue_parser.add_argument("--endpoint-role", type=str, action="append", default=None)
+    component_output_rescue_parser.add_argument("--split", type=str, action="append", default=None)
+    component_output_rescue_parser.add_argument("--max-pairs-per-type", type=int, default=64)
+    component_output_rescue_parser.add_argument("--min-pairs-per-type", type=int, default=1)
+    component_output_rescue_parser.add_argument("--scalar-value-tolerance", type=float, default=1.0e-4)
+    component_output_rescue_parser.add_argument("--denominator-threshold", type=float, default=1.0e-6)
+    component_output_rescue_parser.add_argument("--markdown-top-k-rows", type=int, default=120)
+    component_output_rescue_parser.add_argument("--overwrite", action="store_true")
+
+    component_output_rescue_adam_parser = subparsers.add_parser("component-output-rescue-adam-state-attribution")
+    component_output_rescue_adam_parser.add_argument("--config", type=Path, required=True)
+    component_output_rescue_adam_parser.add_argument("--probe-set", type=Path, required=True)
+    component_output_rescue_adam_parser.add_argument("--scalar-pair-rows", type=Path, required=True)
+    component_output_rescue_adam_parser.add_argument("--optimizer-trace-dir", type=Path, required=True)
+    component_output_rescue_adam_parser.add_argument("--output-dir", type=Path, required=True)
+    component_output_rescue_adam_parser.add_argument("--device", type=str, default="mps")
+    component_output_rescue_adam_parser.add_argument("--checkpoint", type=Path, action="append", default=None)
+    component_output_rescue_adam_parser.add_argument("--start-step", type=int, default=None)
+    component_output_rescue_adam_parser.add_argument("--end-step", type=int, default=None)
+    component_output_rescue_adam_parser.add_argument("--pair-type", type=str, action="append", required=True)
+    component_output_rescue_adam_parser.add_argument("--source-component", type=str, required=True)
+    component_output_rescue_adam_parser.add_argument("--patch-component", type=str, action="append", default=None)
+    component_output_rescue_adam_parser.add_argument("--patch-group", type=str, action="append", default=None)
+    component_output_rescue_adam_parser.add_argument("--scalar", type=str, action="append", default=None)
+    component_output_rescue_adam_parser.add_argument("--margin-side", type=str, action="append", default=None)
+    component_output_rescue_adam_parser.add_argument("--split", type=str, action="append", default=None)
+    component_output_rescue_adam_parser.add_argument("--max-pairs-per-type", type=int, default=64)
+    component_output_rescue_adam_parser.add_argument("--min-pairs-per-type", type=int, default=1)
+    component_output_rescue_adam_parser.add_argument("--batch-size", type=int, default=None)
+    component_output_rescue_adam_parser.add_argument("--loss-scope", type=str, default="full_lm")
+    component_output_rescue_adam_parser.add_argument("--loss-match-tolerance", type=float, default=1.0e-4)
+    component_output_rescue_adam_parser.add_argument("--grad-norm-match-tolerance", type=float, default=1.0e-4)
+    component_output_rescue_adam_parser.add_argument("--scalar-value-tolerance", type=float, default=1.0e-4)
+    component_output_rescue_adam_parser.add_argument("--min-error-denominator", type=float, default=1.0e-9)
+    component_output_rescue_adam_parser.add_argument("--parameter-group", type=str, action="append", default=None)
+    component_output_rescue_adam_parser.add_argument("--overwrite", action="store_true")
+
+    component_output_rescue_line_parser = subparsers.add_parser("component-output-rescue-line-integral")
+    component_output_rescue_line_parser.add_argument("--config", type=Path, required=True)
+    component_output_rescue_line_parser.add_argument("--probe-set", type=Path, required=True)
+    component_output_rescue_line_parser.add_argument("--scalar-pair-rows", type=Path, required=True)
+    component_output_rescue_line_parser.add_argument("--optimizer-trace-dir", type=Path, required=True)
+    component_output_rescue_line_parser.add_argument("--output-dir", type=Path, required=True)
+    component_output_rescue_line_parser.add_argument("--device", type=str, default="mps")
+    component_output_rescue_line_parser.add_argument("--checkpoint", type=Path, action="append", default=None)
+    component_output_rescue_line_parser.add_argument("--start-step", type=int, default=None)
+    component_output_rescue_line_parser.add_argument("--end-step", type=int, default=None)
+    component_output_rescue_line_parser.add_argument("--interval-stride", type=int, default=1)
+    component_output_rescue_line_parser.add_argument("--alpha", type=float, action="append", default=None)
+    component_output_rescue_line_parser.add_argument("--alpha-grid-points", type=int, default=5)
+    component_output_rescue_line_parser.add_argument("--gradient-alpha", type=float, action="append", default=None)
+    component_output_rescue_line_parser.add_argument("--gradient-all-alphas", action="store_true")
+    component_output_rescue_line_parser.add_argument("--interpolation-group", type=str, action="append", default=None)
+    component_output_rescue_line_parser.add_argument("--pair-type", type=str, action="append", required=True)
+    component_output_rescue_line_parser.add_argument("--source-component", type=str, required=True)
+    component_output_rescue_line_parser.add_argument("--patch-component", type=str, action="append", default=None)
+    component_output_rescue_line_parser.add_argument("--patch-group", type=str, action="append", default=None)
+    component_output_rescue_line_parser.add_argument("--scalar", type=str, action="append", default=None)
+    component_output_rescue_line_parser.add_argument("--margin-side", type=str, action="append", default=None)
+    component_output_rescue_line_parser.add_argument("--split", type=str, action="append", default=None)
+    component_output_rescue_line_parser.add_argument("--max-pairs-per-type", type=int, default=64)
+    component_output_rescue_line_parser.add_argument("--min-pairs-per-type", type=int, default=1)
+    component_output_rescue_line_parser.add_argument("--batch-size", type=int, default=None)
+    component_output_rescue_line_parser.add_argument("--scalar-value-tolerance", type=float, default=1.0e-4)
+    component_output_rescue_line_parser.add_argument("--overwrite", action="store_true")
 
     answer_branch_parser = subparsers.add_parser("answer-margin-branch-decomposition")
     answer_branch_parser.add_argument("--scalar-pair-rows", type=Path, required=True)
@@ -2328,6 +2743,95 @@ def main() -> None:
             }
         )
         return
+    if args.command == "attention-downstream-adam-state-attribution":
+        (
+            report_path,
+            markdown_path,
+            metric_rows_path,
+            component_rows_path,
+            group_rows_path,
+            route_pair_rows_path,
+        ) = run_attention_downstream_adam_state_attribution(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            optimizer_trace_dir=args.optimizer_trace_dir,
+            output_dir=args.output_dir,
+            checkpoint_paths=args.checkpoint,
+            device_name=args.device,
+            head_layer=args.head_layer,
+            head=args.head,
+            score_query_role=args.score_query_role,
+            support_key_role=args.support_key_role,
+            distractor_key_role=args.distractor_key_role,
+            record_side=args.record_side,
+            scalar_names=args.scalar,
+            route_pair_types=args.route_pair_source_type,
+            objective_pair_type=args.objective_pair_type,
+            objective_route_split=args.objective_route_split,
+            route_split_filter=args.route_split_filter,
+            train_split=args.train_split,
+            max_route_pairs_per_type=args.max_route_pairs_per_type,
+            min_route_pairs_per_type=args.min_route_pairs_per_type,
+            loss_scope=args.loss_scope,
+            loss_match_tolerance=args.loss_match_tolerance,
+            grad_norm_match_tolerance=args.grad_norm_match_tolerance,
+            min_error_denominator=args.min_error_denominator,
+            parameter_group_ids=args.parameter_group,
+            overwrite=args.overwrite,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "metric_rows": str(metric_rows_path),
+                "component_rows": str(component_rows_path),
+                "group_rows": str(group_rows_path),
+                "route_pair_rows": str(route_pair_rows_path),
+            }
+        )
+        return
+    if args.command == "ov-write-progress-report":
+        (
+            report_path,
+            markdown_path,
+            pair_rows_path,
+            checkpoint_rows_path,
+            pair_delta_rows_path,
+            delta_rows_path,
+            correlation_rows_path,
+            pair_metadata_rows_path,
+        ) = run_ov_write_progress_report(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            checkpoint_dir=args.checkpoint_dir,
+            output_dir=args.output_dir,
+            checkpoint_paths=args.checkpoint,
+            device_name=args.device,
+            heads=args.head,
+            score_query_role=args.score_query_role,
+            support_key_role=args.support_key_role,
+            distractor_key_role=args.distractor_key_role,
+            record_sides=args.record_side,
+            pair_types=args.pair_type,
+            max_pairs_per_type=args.max_pairs_per_type,
+            min_pairs_per_type=args.min_pairs_per_type,
+            split_filter=args.split,
+            top_k_correlations=args.top_k_correlations,
+            overwrite=args.overwrite,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "pair_rows": str(pair_rows_path),
+                "checkpoint_rows": str(checkpoint_rows_path),
+                "pair_delta_rows": str(pair_delta_rows_path),
+                "delta_rows": str(delta_rows_path),
+                "correlation_rows": str(correlation_rows_path),
+                "pair_metadata_rows": str(pair_metadata_rows_path),
+            }
+        )
+        return
     if args.command == "optimizer-update-trace":
         if args.end_step is None and args.num_steps is None:
             raise ValueError("Expected --end-step or --num-steps.")
@@ -2458,6 +2962,8 @@ def main() -> None:
             output_dir=args.output_dir,
             device_name=args.device,
             checkpoint_paths=args.checkpoint,
+            start_step=args.start_step,
+            end_step=args.end_step,
             pair_types=args.pair_type,
             margin_sides=args.margin_side,
             split_filter=args.split,
@@ -2496,6 +3002,8 @@ def main() -> None:
             output_dir=args.output_dir,
             device_name=args.device,
             checkpoint_paths=args.checkpoint,
+            start_step=args.start_step,
+            end_step=args.end_step,
             pair_types=args.pair_type,
             margin_sides=args.margin_side,
             scalar_names=args.scalar,
@@ -2743,6 +3251,625 @@ def main() -> None:
                 "summary_rows": str(summary_rows_path),
                 "pair_rows": str(pair_rows_path),
                 "plots": {key: str(value) for key, value in plot_paths.items()},
+            }
+        )
+        return
+    if args.command == "residual-position-rescue":
+        (
+            report_path,
+            markdown_path,
+            rescue_rows_path,
+            summary_rows_path,
+            pair_rows_path,
+            plot_paths,
+        ) = run_residual_position_rescue(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            scalar_pair_rows_path=args.scalar_pair_rows,
+            output_dir=args.output_dir,
+            device_name=args.device,
+            pair_types=args.pair_type,
+            source_components=args.source_component,
+            patch_stages=args.patch_stage,
+            position_roles=args.position_role,
+            scalar_names=args.scalar,
+            margin_sides=args.margin_side,
+            endpoint_roles=args.endpoint_role,
+            split_filter=args.split,
+            max_pairs_per_type=args.max_pairs_per_type,
+            min_pairs_per_type=args.min_pairs_per_type,
+            scalar_value_tolerance=args.scalar_value_tolerance,
+            denominator_threshold=args.denominator_threshold,
+            markdown_top_k_rows=args.markdown_top_k_rows,
+            plot_top_k_rows=args.plot_top_k_rows,
+            overwrite=args.overwrite,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "rescue_rows": str(rescue_rows_path),
+                "summary_rows": str(summary_rows_path),
+                "pair_rows": str(pair_rows_path),
+                "plots": {key: str(value) for key, value in plot_paths.items()},
+            }
+        )
+        return
+    if args.command == "residual-delta-vector-report":
+        (
+            report_path,
+            markdown_path,
+            delta_rows_path,
+            summary_rows_path,
+            subspace_rows_path,
+            pair_rows_path,
+            plot_paths,
+        ) = run_residual_delta_vector_report(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            scalar_pair_rows_path=args.scalar_pair_rows,
+            output_dir=args.output_dir,
+            device_name=args.device,
+            pair_types=args.pair_type,
+            source_components=args.source_component,
+            stages=args.stage,
+            position_roles=args.position_role,
+            group_by_values=args.group_by,
+            scalar_names=args.scalar,
+            margin_sides=args.margin_side,
+            endpoint_roles=args.endpoint_role,
+            split_filter=args.split,
+            max_pairs_per_type=args.max_pairs_per_type,
+            min_pairs_per_type=args.min_pairs_per_type,
+            pca_rank=args.pca_rank,
+            markdown_top_k_rows=args.markdown_top_k_rows,
+            plot_top_k_rows=args.plot_top_k_rows,
+            overwrite=args.overwrite,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "delta_rows": str(delta_rows_path),
+                "summary_rows": str(summary_rows_path),
+                "subspace_rows": str(subspace_rows_path),
+                "pair_rows": str(pair_rows_path),
+                "plots": {key: str(value) for key, value in plot_paths.items()},
+            }
+        )
+        return
+    if args.command == "residual-component-delta-report":
+        (
+            report_path,
+            markdown_path,
+            component_rows_path,
+            summary_rows_path,
+            subspace_rows_path,
+            pair_rows_path,
+            plot_paths,
+        ) = run_residual_component_delta_report(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            scalar_pair_rows_path=args.scalar_pair_rows,
+            output_dir=args.output_dir,
+            device_name=args.device,
+            pair_types=args.pair_type,
+            source_components=args.source_component,
+            components=args.component,
+            position_roles=args.position_role,
+            group_by_values=args.group_by,
+            scalar_names=args.scalar,
+            margin_sides=args.margin_side,
+            endpoint_roles=args.endpoint_role,
+            split_filter=args.split,
+            max_pairs_per_type=args.max_pairs_per_type,
+            min_pairs_per_type=args.min_pairs_per_type,
+            pca_rank=args.pca_rank,
+            markdown_top_k_rows=args.markdown_top_k_rows,
+            plot_top_k_rows=args.plot_top_k_rows,
+            overwrite=args.overwrite,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "component_rows": str(component_rows_path),
+                "summary_rows": str(summary_rows_path),
+                "subspace_rows": str(subspace_rows_path),
+                "pair_rows": str(pair_rows_path),
+                "plots": {key: str(value) for key, value in plot_paths.items()},
+            }
+        )
+        return
+    if args.command == "mlp-local-write-map-report":
+        (
+            report_path,
+            markdown_path,
+            local_rows_path,
+            summary_rows_path,
+            subspace_rows_path,
+            pair_rows_path,
+            plot_paths,
+        ) = run_mlp_local_write_map_report(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            scalar_pair_rows_path=args.scalar_pair_rows,
+            output_dir=args.output_dir,
+            device_name=args.device,
+            pair_types=args.pair_type,
+            source_components=args.source_component,
+            components=args.component,
+            position_roles=args.position_role,
+            group_by_values=args.group_by,
+            scalar_names=args.scalar,
+            margin_sides=args.margin_side,
+            endpoint_roles=args.endpoint_role,
+            split_filter=args.split,
+            max_pairs_per_type=args.max_pairs_per_type,
+            min_pairs_per_type=args.min_pairs_per_type,
+            pca_rank=args.pca_rank,
+            markdown_top_k_rows=args.markdown_top_k_rows,
+            plot_top_k_rows=args.plot_top_k_rows,
+            overwrite=args.overwrite,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "local_rows": str(local_rows_path),
+                "summary_rows": str(summary_rows_path),
+                "subspace_rows": str(subspace_rows_path),
+                "pair_rows": str(pair_rows_path),
+                "plots": {key: str(value) for key, value in plot_paths.items()},
+            }
+        )
+        return
+    if args.command == "mlp-input-functional-subspace-report":
+        (
+            report_path,
+            markdown_path,
+            functional_rows_path,
+            summary_rows_path,
+            subspace_rows_path,
+            pair_rows_path,
+        ) = run_mlp_input_functional_subspace_report(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            scalar_pair_rows_path=args.scalar_pair_rows,
+            output_dir=args.output_dir,
+            device_name=args.device,
+            pair_types=args.pair_type,
+            source_component=args.source_component,
+            mlp_component=args.component,
+            position_roles=args.position_role,
+            group_by_values=args.group_by,
+            scalar_names=args.scalar,
+            margin_sides=args.margin_side,
+            endpoint_roles=args.endpoint_role,
+            endpoint_steps=args.endpoint_step,
+            split_filter=args.split,
+            max_pairs_per_type=args.max_pairs_per_type,
+            min_pairs_per_type=args.min_pairs_per_type,
+            batch_size=args.batch_size,
+            subspace_rank=args.subspace_rank,
+            markdown_top_k_rows=args.markdown_top_k_rows,
+            overwrite=args.overwrite,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "functional_rows": str(functional_rows_path),
+                "summary_rows": str(summary_rows_path),
+                "subspace_rows": str(subspace_rows_path),
+                "pair_rows": str(pair_rows_path),
+            }
+        )
+        return
+    if args.command == "mlp-functional-subspace-trajectory-report":
+        (
+            report_path,
+            markdown_path,
+            trajectory_rows_path,
+            summary_rows_path,
+            basis_rows_path,
+            functional_summary_rows_path,
+            pair_rows_path,
+        ) = run_mlp_functional_subspace_trajectory_report(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            scalar_pair_rows_path=args.scalar_pair_rows,
+            output_dir=args.output_dir,
+            device_name=args.device,
+            pair_types=args.pair_type,
+            source_component=args.source_component,
+            mlp_component=args.component,
+            position_roles=args.position_role,
+            group_by_values=args.group_by,
+            scalar_names=args.scalar,
+            margin_sides=args.margin_side,
+            endpoint_roles=args.endpoint_role,
+            endpoint_steps=args.endpoint_step,
+            reference_steps=args.reference_step,
+            reference_basis_kinds=args.reference_basis_kind,
+            split_filter=args.split,
+            max_pairs_per_type=args.max_pairs_per_type,
+            min_pairs_per_type=args.min_pairs_per_type,
+            batch_size=args.batch_size,
+            subspace_rank=args.subspace_rank,
+            markdown_top_k_rows=args.markdown_top_k_rows,
+            overwrite=args.overwrite,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "trajectory_rows": str(trajectory_rows_path),
+                "summary_rows": str(summary_rows_path),
+                "basis_rows": str(basis_rows_path),
+                "functional_summary_rows": str(functional_summary_rows_path),
+                "pair_rows": str(pair_rows_path),
+            }
+        )
+        return
+    if args.command == "mlp-functional-write-adam-state-attribution":
+        (
+            report_path,
+            markdown_path,
+            metric_rows_path,
+            component_rows_path,
+            group_rows_path,
+            reference_rows_path,
+            pair_rows_path,
+        ) = run_mlp_functional_write_adam_state_attribution(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            scalar_pair_rows_path=args.scalar_pair_rows,
+            optimizer_trace_dir=args.optimizer_trace_dir,
+            output_dir=args.output_dir,
+            device_name=args.device,
+            checkpoint_paths=args.checkpoint,
+            start_step=args.start_step,
+            end_step=args.end_step,
+            source_component=args.source_component,
+            mlp_component=args.component,
+            position_roles=args.position_role,
+            group_by_values=args.group_by,
+            scalar_names=args.scalar,
+            margin_sides=args.margin_side,
+            endpoint_roles=args.endpoint_role,
+            pair_types=args.pair_type,
+            reference_step=args.reference_step,
+            reference_vector_kind=args.reference_vector_kind,
+            target_vector_kind=args.target_vector_kind,
+            record_side=args.record_side,
+            split_filter=args.split,
+            train_split=args.train_split,
+            max_pairs_per_type=args.max_pairs_per_type,
+            min_pairs_per_type=args.min_pairs_per_type,
+            batch_size=args.batch_size,
+            loss_scope=args.loss_scope,
+            loss_match_tolerance=args.loss_match_tolerance,
+            grad_norm_match_tolerance=args.grad_norm_match_tolerance,
+            min_error_denominator=args.min_error_denominator,
+            parameter_group_ids=args.parameter_group,
+            overwrite=args.overwrite,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "metric_rows": str(metric_rows_path),
+                "component_rows": str(component_rows_path),
+                "group_rows": str(group_rows_path),
+                "reference_rows": str(reference_rows_path),
+                "pair_rows": str(pair_rows_path),
+            }
+        )
+        return
+    if args.command == "mlp-local-write-adam-state-attribution":
+        (
+            report_path,
+            markdown_path,
+            metric_rows_path,
+            component_rows_path,
+            group_rows_path,
+            route_pair_rows_path,
+        ) = run_mlp_local_write_adam_state_attribution(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            optimizer_trace_dir=args.optimizer_trace_dir,
+            output_dir=args.output_dir,
+            device_name=args.device,
+            checkpoint_paths=args.checkpoint,
+            start_step=args.start_step,
+            end_step=args.end_step,
+            source_component=args.source_component,
+            components=args.component,
+            position_roles=args.position_role,
+            group_by_values=args.group_by,
+            record_side=args.record_side,
+            route_pair_types=args.route_pair_source_type,
+            route_pair_type=args.route_pair_type,
+            route_split=args.route_split,
+            route_split_filter=args.route_split_filter,
+            train_split=args.train_split,
+            max_route_pairs_per_type=args.max_route_pairs_per_type,
+            min_route_pairs_per_type=args.min_route_pairs_per_type,
+            pca_rank=args.pca_rank,
+            loss_scope=args.loss_scope,
+            loss_match_tolerance=args.loss_match_tolerance,
+            grad_norm_match_tolerance=args.grad_norm_match_tolerance,
+            min_error_denominator=args.min_error_denominator,
+            parameter_group_ids=args.parameter_group,
+            overwrite=args.overwrite,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "metric_rows": str(metric_rows_path),
+                "component_rows": str(component_rows_path),
+                "group_rows": str(group_rows_path),
+                "route_pair_rows": str(route_pair_rows_path),
+            }
+        )
+        return
+    if args.command == "adam-state-geometry-report":
+        (
+            report_path,
+            markdown_path,
+            singular_rows_path,
+            top_vectors_path,
+            summary_rows_path,
+        ) = run_adam_state_geometry_report(
+            config_path=args.config,
+            optimizer_trace_dir=args.optimizer_trace_dir,
+            output_dir=args.output_dir,
+            device_name=args.device,
+            checkpoint_paths=args.checkpoint,
+            start_step=args.start_step,
+            end_step=args.end_step,
+            checkpoint_stride=args.checkpoint_stride,
+            targets=args.target,
+            source_kinds=args.source_kind,
+            train_split=args.train_split,
+            loss_scope=args.loss_scope,
+            top_k=args.top_k,
+            top_vector_ranks=args.top_vector_ranks,
+            loss_match_tolerance=args.loss_match_tolerance,
+            grad_norm_match_tolerance=args.grad_norm_match_tolerance,
+            markdown_top_k_rows=args.markdown_top_k_rows,
+            overwrite=args.overwrite,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "singular_rows": str(singular_rows_path),
+                "top_vectors": str(top_vectors_path),
+                "summary_rows": str(summary_rows_path),
+            }
+        )
+        return
+    if args.command == "causal-write-subspace-rescue":
+        (
+            report_path,
+            markdown_path,
+            rescue_rows_path,
+            summary_rows_path,
+            subspace_rows_path,
+            pair_rows_path,
+        ) = run_causal_write_subspace_rescue(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            scalar_pair_rows_path=args.scalar_pair_rows,
+            output_dir=args.output_dir,
+            device_name=args.device,
+            pair_types=args.pair_type,
+            source_components=args.source_component,
+            components=args.component,
+            component_groups=args.component_group,
+            position_roles=args.position_role,
+            position_groups=args.position_group,
+            group_by=args.group_by,
+            basis_kinds=args.basis_kind,
+            subspace_ranks=args.subspace_rank,
+            scalar_names=args.scalar,
+            margin_sides=args.margin_side,
+            endpoint_roles=args.endpoint_role,
+            split_filter=args.split,
+            max_pairs_per_type=args.max_pairs_per_type,
+            min_pairs_per_type=args.min_pairs_per_type,
+            scalar_value_tolerance=args.scalar_value_tolerance,
+            denominator_threshold=args.denominator_threshold,
+            markdown_top_k_rows=args.markdown_top_k_rows,
+            overwrite=args.overwrite,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "rescue_rows": str(rescue_rows_path),
+                "summary_rows": str(summary_rows_path),
+                "subspace_rows": str(subspace_rows_path),
+                "pair_rows": str(pair_rows_path),
+            }
+        )
+        return
+    if args.command == "causal-write-gradient-subspace-rescue":
+        (
+            report_path,
+            markdown_path,
+            rescue_rows_path,
+            summary_rows_path,
+            basis_rows_path,
+            pair_rows_path,
+        ) = run_causal_write_gradient_subspace_rescue(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            scalar_pair_rows_path=args.scalar_pair_rows,
+            output_dir=args.output_dir,
+            device_name=args.device,
+            pair_types=args.pair_type,
+            source_components=args.source_component,
+            components=args.component,
+            component_groups=args.component_group,
+            position_roles=args.position_role,
+            position_groups=args.position_group,
+            subspace_ranks=args.subspace_rank,
+            scalar_names=args.scalar,
+            margin_sides=args.margin_side,
+            endpoint_roles=args.endpoint_role,
+            split_filter=args.split,
+            max_pairs_per_type=args.max_pairs_per_type,
+            min_pairs_per_type=args.min_pairs_per_type,
+            scalar_value_tolerance=args.scalar_value_tolerance,
+            denominator_threshold=args.denominator_threshold,
+            markdown_top_k_rows=args.markdown_top_k_rows,
+            overwrite=args.overwrite,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "rescue_rows": str(rescue_rows_path),
+                "summary_rows": str(summary_rows_path),
+                "basis_rows": str(basis_rows_path),
+                "pair_rows": str(pair_rows_path),
+            }
+        )
+        return
+    if args.command == "component-output-rescue":
+        (
+            report_path,
+            markdown_path,
+            rescue_rows_path,
+            summary_rows_path,
+            pair_rows_path,
+        ) = run_component_output_rescue(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            scalar_pair_rows_path=args.scalar_pair_rows,
+            output_dir=args.output_dir,
+            device_name=args.device,
+            pair_types=args.pair_type,
+            source_components=args.source_component,
+            patch_components=args.patch_component,
+            patch_groups=args.patch_group,
+            scalar_names=args.scalar,
+            margin_sides=args.margin_side,
+            endpoint_roles=args.endpoint_role,
+            split_filter=args.split,
+            max_pairs_per_type=args.max_pairs_per_type,
+            min_pairs_per_type=args.min_pairs_per_type,
+            scalar_value_tolerance=args.scalar_value_tolerance,
+            denominator_threshold=args.denominator_threshold,
+            markdown_top_k_rows=args.markdown_top_k_rows,
+            overwrite=args.overwrite,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "rescue_rows": str(rescue_rows_path),
+                "summary_rows": str(summary_rows_path),
+                "pair_rows": str(pair_rows_path),
+            }
+        )
+        return
+    if args.command == "component-output-rescue-adam-state-attribution":
+        (
+            report_path,
+            markdown_path,
+            metric_rows_path,
+            component_rows_path,
+            group_rows_path,
+            pair_rows_path,
+        ) = run_component_output_rescue_adam_state_attribution(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            scalar_pair_rows_path=args.scalar_pair_rows,
+            optimizer_trace_dir=args.optimizer_trace_dir,
+            output_dir=args.output_dir,
+            device_name=args.device,
+            checkpoint_paths=args.checkpoint,
+            start_step=args.start_step,
+            end_step=args.end_step,
+            pair_types=args.pair_type,
+            source_component=args.source_component,
+            patch_components=args.patch_component,
+            patch_groups=args.patch_group,
+            scalar_names=args.scalar,
+            margin_sides=args.margin_side,
+            split_filter=args.split,
+            max_pairs_per_type=args.max_pairs_per_type,
+            min_pairs_per_type=args.min_pairs_per_type,
+            batch_size=args.batch_size,
+            loss_scope=args.loss_scope,
+            loss_match_tolerance=args.loss_match_tolerance,
+            grad_norm_match_tolerance=args.grad_norm_match_tolerance,
+            scalar_value_tolerance=args.scalar_value_tolerance,
+            min_error_denominator=args.min_error_denominator,
+            parameter_group_ids=args.parameter_group,
+            overwrite=args.overwrite,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "metric_rows": str(metric_rows_path),
+                "component_rows": str(component_rows_path),
+                "group_rows": str(group_rows_path),
+                "pair_rows": str(pair_rows_path),
+            }
+        )
+        return
+    if args.command == "component-output-rescue-line-integral":
+        (
+            report_path,
+            markdown_path,
+            curve_rows_path,
+            interval_rows_path,
+            group_rows_path,
+            pair_rows_path,
+        ) = run_component_output_rescue_line_integral(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            scalar_pair_rows_path=args.scalar_pair_rows,
+            optimizer_trace_dir=args.optimizer_trace_dir,
+            output_dir=args.output_dir,
+            device_name=args.device,
+            checkpoint_paths=args.checkpoint,
+            start_step=args.start_step,
+            end_step=args.end_step,
+            interval_stride=args.interval_stride,
+            alpha_values=args.alpha,
+            alpha_grid_points=args.alpha_grid_points,
+            gradient_alpha_values=args.gradient_alpha,
+            gradient_all_alphas=args.gradient_all_alphas,
+            interpolation_group_specs=args.interpolation_group,
+            pair_types=args.pair_type,
+            source_component=args.source_component,
+            patch_components=args.patch_component,
+            patch_groups=args.patch_group,
+            scalar_names=args.scalar,
+            margin_sides=args.margin_side,
+            split_filter=args.split,
+            max_pairs_per_type=args.max_pairs_per_type,
+            min_pairs_per_type=args.min_pairs_per_type,
+            batch_size=args.batch_size,
+            scalar_value_tolerance=args.scalar_value_tolerance,
+            overwrite=args.overwrite,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "curve_rows": str(curve_rows_path),
+                "interval_rows": str(interval_rows_path),
+                "group_rows": str(group_rows_path),
+                "pair_rows": str(pair_rows_path),
             }
         )
         return
