@@ -12,11 +12,11 @@ Living draft: 2026-04-30
 
 ## Abstract
 
-We study circuit formation in a 3-layer decoder-only transformer trained on a symbolic key-value lookup task. Because the task has a known algorithmic structure, we can define role-level progress measures for support-value retrieval and write/readout coupling. We find that the trained mechanism is dense and not localized to a stable head or neuron identity. Instead, a support-value retrieval role repeatedly forms across random seeds, while its implementing head changes. In the reference seed, the QK side appears as a low-rank `W_QK` matcher whose route growth is predicted by exact AdamW update accounting. The instantaneous raw-gradient, SGD-equivalent update explains only a small fraction of this growth, while AdamW-preconditioned current and momentum terms carry the movement. The write side does not reduce to a clean static `W_OV` matrix; it appears as a contextual residual perturbation at the prediction position used by downstream readout directions. These results support role-level, optimizer-state-aware circuit formation in a controlled model, while leaving full answer-margin closure, optimizer ablations, and scaling open.
+I study circuit formation in a 3-layer decoder-only transformer trained on a symbolic key-value lookup task. Because the task has a known algorithmic structure, I can define role-level progress measures for support-value retrieval and write/readout coupling. I find that the trained mechanism is dense and not localized to a stable head or neuron identity. Instead, a support-value retrieval role repeatedly forms across random seeds, while its implementing head changes. In the reference seed, the QK side appears as a low-rank `W_QK` matcher whose route growth is predicted by exact AdamW update accounting. The instantaneous raw-gradient, SGD-equivalent update explains only a small fraction of this growth, while AdamW-preconditioned current and momentum terms carry the movement. The write side does not reduce to a clean static `W_OV` matrix; it appears as a contextual residual perturbation at the prediction position used by downstream readout directions. These results support role-level, optimizer-state-aware circuit formation in a controlled model, while leaving full answer-margin closure, optimizer ablations, and scaling open.
 
 ## Contributions
 
-The paper makes six claims that can be checked against the artifact map.
+I make six claims that can be checked against the artifact map.
 
 1. A controlled symbolic key-value benchmark for studying circuit formation under autoregressive training.
 2. A role-level route scalar for support-value retrieval.
@@ -33,9 +33,9 @@ How does training find a circuit?
 
 The usual answer is "the gradient found it." That is not precise enough. A model is not updated by a slogan. It is updated by a particular optimizer, on particular batches, through particular weights, over a particular trajectory.
 
-We ran into this early. A transparent feature-family birth model used activation support, amplification, feature-score drive, and aggregate gradient alignment. It predicted `family4` should form first. The model actually formed the more generalizing `family7` first: `family7` became useful at step `2250`, while `family4` followed at step `2500`. `family7` also had the larger useful delta (`0.408` versus `0.234`) and heldout-gap delta (`0.196` versus `0.022`). That failure was useful. It told us a gradient-flavored feature score was not enough. We needed to track the role being written, not just the most tempting feature family.
+I ran into this early. A transparent feature-family birth model used activation support, amplification, feature-score drive, and aggregate gradient alignment. It predicted `family4` should form first. The model actually formed the more generalizing `family7` first: `family7` became useful at step `2250`, while `family4` followed at step `2500`. `family7` also had the larger useful delta (`0.408` versus `0.234`) and heldout-gap delta (`0.196` versus `0.022`). That failure was useful. It told me a gradient-flavored feature score was not enough. I needed to track the role being written, not just the most tempting feature family.
 
-This paper follows one small transformer's lookup circuit from the outside inward: behavior, activations, residual states, route geometry, weight movement, optimizer state, and then cross-seed replication. The result is not a clean neuron story. It is a role story.
+I follow one small transformer's lookup circuit from the outside inward: behavior, activations, residual states, route geometry, weight movement, optimizer state, and then cross-seed replication. The result is not a clean neuron story. It is a role story.
 
 The strongest claim is this:
 
@@ -51,12 +51,12 @@ That is the core finding. The write side is real too, but it is not QK again. QK
 
 <figure class="paper-figure">
   <img src="assets/figures/updated_loss_to_lookup_chain.svg" alt="Loss to lookup chain">
-  <figcaption><strong>Figure 1. The measured chain.</strong> The paper follows one role from loss pressure, to optimizer state, to weight geometry, to route separation, to output behavior.</figcaption>
+  <figcaption><strong>Figure 1. The measured chain.</strong> I follow one role from loss pressure, to optimizer state, to weight geometry, to route separation, to output behavior.</figcaption>
 </figure>
 
 ## The Short Version
 
-We trained a 3-layer decoder-only transformer on symbolic key-value lookup. The model sees writes and reads:
+I trained a 3-layer decoder-only transformer on symbolic key-value lookup. The model sees writes and reads:
 
 ```text
 W K03 V14   W K01 V09   R K03   W K03 V02   R K03
@@ -64,7 +64,7 @@ W K03 V14   W K01 V09   R K03   W K03 V02   R K03
 
 The correct answer is the latest previous value for the queried key. In the example above, the last read of `K03` should return `V02`, not `V14`, because `V02` is the latest write for that key.
 
-The task is small on purpose. It is not meant to be language modeling. It is meant to be a controlled world where we can ask a sharper question:
+The task is small on purpose. It is not meant to be language modeling. It is meant to be a controlled world where I can ask a sharper question:
 
 ```text
 when lookup behavior appears, what exactly changed inside the model?
@@ -90,11 +90,11 @@ The ghost moves rooms. The computation repeats, but the named component changes.
 
 This work sits between mechanistic interpretability and training dynamics.
 
-The transformer architecture comes from [Vaswani et al. 2017](https://arxiv.org/abs/1706.03762). The QK/OV language and the habit of decomposing attention heads into route and write maps follows the transformer-circuits line of work, especially [Elhage et al. 2021](https://transformer-circuits.pub/2021/framework/index.html). The closest circuit-formation precedent is the induction-head work of [Olsson et al. 2022](https://transformer-circuits.pub/2022/in-context-learning-and-induction-heads/index.html), which connects a learned attention circuit to a training-time phase change. This paper asks a narrower but more optimizer-specific question: which update components actually moved the role scalar during formation?
+The transformer architecture comes from [Vaswani et al. 2017](https://arxiv.org/abs/1706.03762). The QK/OV language and the habit of decomposing attention heads into route and write maps follows the transformer-circuits line of work, especially [Elhage et al. 2021](https://transformer-circuits.pub/2021/framework/index.html). The closest circuit-formation precedent is the induction-head work of [Olsson et al. 2022](https://transformer-circuits.pub/2022/in-context-learning-and-induction-heads/index.html), which connects a learned attention circuit to a training-time phase change. I ask a narrower but more optimizer-specific question: which update components actually moved the role scalar during formation?
 
-The superposition framing follows [Elhage et al. 2022](https://transformer-circuits.pub/2022/toy_model/index.html). That is why the paper does not force a neuron-level theorem when the evidence says the useful object is a subspace. The causal-intervention style is related to causal tracing and model-editing work such as [Meng et al. 2022](https://arxiv.org/abs/2202.05262), but the target here is not just where a finished model stores a fact. The target is how training wrote a role into the model.
+The superposition framing follows [Elhage et al. 2022](https://transformer-circuits.pub/2022/toy_model/index.html). That is why I do not force a neuron-level theorem when the evidence says the useful object is a subspace. The causal-intervention style is related to causal tracing and model-editing work such as [Meng et al. 2022](https://arxiv.org/abs/2202.05262), but the target here is not just where a finished model stores a fact. The target is how training wrote a role into the model.
 
-The optimizer accounting is specific to AdamW. Adam was introduced by [Kingma and Ba 2014](https://arxiv.org/abs/1412.6980), and decoupled weight decay for AdamW by [Loshchilov and Hutter 2017](https://arxiv.org/abs/1711.05101). Small algorithmic tasks have also been used to study delayed generalization and training dynamics, most famously in grokking work by [Power et al. 2022](https://arxiv.org/abs/2201.02177). This paper uses a small symbolic task for a different purpose: to make a role-level circuit formation story auditable end to end.
+The optimizer accounting is specific to AdamW. Adam was introduced by [Kingma and Ba 2014](https://arxiv.org/abs/1412.6980), and decoupled weight decay for AdamW by [Loshchilov and Hutter 2017](https://arxiv.org/abs/1711.05101). Small algorithmic tasks have also been used to study delayed generalization and training dynamics, most famously in grokking work by [Power et al. 2022](https://arxiv.org/abs/2201.02177). I use a small symbolic task for a different purpose: to make a role-level circuit formation story auditable end to end.
 
 ## The Tiny World
 
@@ -135,13 +135,13 @@ The selected heldout-generalization run reaches heldout-pair answer accuracy aro
 
 ## How The Search Changed
 
-We did not start with QK. We started with the obvious maps.
+I did not start with QK. I started with the obvious maps.
 
-First we asked which components mattered. That found real load-bearing pieces, but it did not explain the computation. Late components often had clean direct readout toward the answer. Early components were different: they were causally important, but their direct logit attribution could be weak or even point the wrong way.
+First I asked which components mattered. That found real load-bearing pieces, but it did not explain the computation. Late components often had clean direct readout toward the answer. Early components were different: they were causally important, but their direct logit attribution could be weak or even point the wrong way.
 
-That told us early components were not dead. They were shaping the residual workspace that later components read.
+That told me early components were not dead. They were shaping the residual workspace that later components read.
 
-Then we looked for feature families and neurons. This also found structure, but not atoms. The feature-family phase exposed superposition instead of escaping it. In one coalition map, hundreds of neurons were shared by candidate stories, hundreds opposed both, and hundreds were sign-conflicted. A neuron intervention was not isolating one clean variable.
+Then I looked for feature families and neurons. This also found structure, but not atoms. The feature-family phase exposed superposition instead of escaping it. In one coalition map, hundreds of neurons were shared by candidate stories, hundreds opposed both, and hundreds were sign-conflicted. A neuron intervention was not isolating one clean variable.
 
 That was the first important lesson:
 
@@ -152,7 +152,7 @@ but the unit of explanation was not a neuron.
 
 So the search moved from components to roles. A role is a computation-level object: "prefer the true support value over distractors" or "write a prediction-position residual change that the answer readout can use." A role can be implemented by different heads in different seeds.
 
-This changed the paper from a component hunt into a formation audit.
+This changed the project from a component hunt into a formation audit.
 
 ## The QK Role
 
@@ -220,13 +220,13 @@ The top singular structure of `W_QK` is not just decorative. It grows when the s
 
 The raw gradient did not explain the route birth in the traced run. AdamW's actual update did.
 
-For every adjacent checkpoint, we measured:
+For every adjacent checkpoint, I measured:
 
 ```text
 Delta C_QK ~= grad_theta C_QK(theta_t) . Delta theta_actual
 ```
 
-Then we decomposed the actual update into pieces:
+Then I decomposed the actual update into pieces:
 
 ```text
 raw SGD-equivalent update
@@ -277,11 +277,11 @@ This does not mean gradients are irrelevant. AdamW is built from gradients. It m
 
 The gradient was not literally lying. It was answering a local-slope question in a dense competition phase. Several candidate routes are being trained at once. Their instantaneous gradient contributions can cancel in the shared parameters, so the raw gradient can look near-zero or even point against the role that will win. Momentum integrates those noisy local samples across steps. The consistent signal survives the cancellation.
 
-This is not a claim that plain SGD could never learn this role. We did not run that ablation. The measured claim is narrower: in the AdamW-trained runs studied here, the realized route growth is carried by AdamW-preconditioned update components, while the instantaneous raw-gradient, SGD-equivalent direction is far too small to account for the observed movement.
+This is not a claim that plain SGD could never learn this role. I did not run that ablation. The measured claim is narrower: in the AdamW-trained runs studied here, the realized route growth is carried by AdamW-preconditioned update components, while the instantaneous raw-gradient, SGD-equivalent direction is far too small to account for the observed movement.
 
 ## The Ghost Moves Rooms
 
-A circuit story that only works for one head in one seed is weak. So we repeated the route search across five additional seeds.
+A circuit story that only works for one head in one seed is weak. So I repeated the route search across five additional seeds.
 
 The support-value retrieval role repeated. The address changed.
 
@@ -295,7 +295,7 @@ seed 0029: QK winner L1H2
 
 Winner heads grew positively in all five seeds. Bottom-control heads moved negatively in all five seeds. The raw SGD-equivalent term remained small across winners, with mean raw-gradient fraction around `0.74%`.
 
-This is one of the paper's main interpretability lessons:
+This is one of my main interpretability lessons:
 
 ```text
 component address is unstable;
@@ -507,7 +507,7 @@ computational claim:
   this object implements this operation
 ```
 
-We have all three strongly for the QK side. We have causal, dynamic, and functional-subspace evidence for the write side, but not a clean static `W_OV` theorem.
+I have all three strongly for the QK side. I have causal, dynamic, and functional-subspace evidence for the write side, but not a clean static `W_OV` theorem.
 
 ## What Would Weaken This Claim
 
@@ -515,9 +515,9 @@ The role-level interpretation has concrete failure modes.
 
 It would be weakened if bottom-control heads showed the same route growth as selected winners, if cross-seed winners failed to separate from runners and bottom controls, or if the support-value route scalar did not survive heldout and distractor controls. It would also be weakened if the AdamW reconstruction failed to track actual route movement.
 
-The write-side interpretation would be weakened if shuffled-value controls preserved the write scalar, if support-position rescue matched prediction-position rescue, or if the selected write/readout subspaces failed cross-seed validation. Those are the reasons the paper treats QK as strong, the write side as supported but less clean, and full answer-margin closure as still open.
+The write-side interpretation would be weakened if shuffled-value controls preserved the write scalar, if support-position rescue matched prediction-position rescue, or if the selected write/readout subspaces failed cross-seed validation. Those are the reasons I treat QK as strong, the write side as supported but less clean, and full answer-margin closure as still open.
 
-## Closure: What We Explain And What We Do Not
+## Closure: What I Explain And What I Do Not
 
 A route can be real without fully explaining the answer margin.
 
@@ -548,7 +548,7 @@ full answer-margin sufficiency by a small route set remains open.
 
 The important interpretability object is not always a named head or neuron. In this model, the stable object is a role.
 
-This matters because seed-level replication fails if we use the wrong address. `L2H1` is not always the circuit. But a support-value retrieval role appears across seeds. A contextual write/readout role appears across seeds too.
+This matters because seed-level replication fails if I use the wrong address. `L2H1` is not always the circuit. But a support-value retrieval role appears across seeds. A contextual write/readout role appears across seeds too.
 
 Formation tracking adds something that post-hoc interpretability does not usually give. A trained-model circuit analysis can say:
 
@@ -567,7 +567,7 @@ That is the difference between a static circuit map and a developmental account.
 
 <figure class="paper-figure">
   <img src="assets/figures/proof_status_ladder_updated.svg" alt="Proof status ladder">
-  <figcaption><strong>Figure 13. Proof status.</strong> The paper has strong QK formation evidence, supported write functional-subspace evidence, and explicit open gaps.</figcaption>
+  <figcaption><strong>Figure 13. Proof status.</strong> I have strong QK formation evidence, supported write functional-subspace evidence, and explicit open gaps.</figcaption>
 </figure>
 
 ## Limitations

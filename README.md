@@ -8,7 +8,7 @@ The project is not only about whether the model solves the task. The motivating 
 How does training find a circuit at all?
 ```
 
-The current paper sharpens that question into a version we can actually measure:
+The current paper sharpens that question into a version I can actually measure:
 
 ```text
 How does AdamW-trained gradient-based learning
@@ -38,7 +38,7 @@ that downstream readout directions can use.
 
 Across additional seeds, both the QK retrieval role and the write/readout role repeat at the functional level while their component addresses move. The ghost moves rooms.
 
-The paper is deliberately more precise than "full circuit formation is solved." It gives a strong QK formation account, a supported contextual write/readout account, and explicit limits around full answer-margin closure, optimizer ablations, and scaling.
+I am deliberately more precise than "full circuit formation is solved." I give a strong QK formation account, a supported contextual write/readout account, and explicit limits around full answer-margin closure, optimizer ablations, and scaling.
 
 This is a detailed mechanistic account for one task family. It is not a theorem about all transformers.
 
