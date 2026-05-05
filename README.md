@@ -35,12 +35,12 @@ The write side is not a clean static `W_OV` theorem. The current evidence suppor
 
 ```text
 a contextual residual perturbation at the prediction position
-that downstream readout directions can use.
+that creates a broad value-token identity code the answer readout uses.
 ```
 
 Across additional seeds, both the QK retrieval role and the write/readout role repeat at the functional level while their component addresses move. The ghost moves rooms.
 
-I am deliberately more precise than "full circuit formation is solved." I give a strong QK formation account, a supported contextual write/readout account, a bounded optimizer-ablation result, and explicit limits around full answer-margin closure, broader optimizer sweeps, and scaling.
+I am deliberately more precise than "full circuit formation is solved." I give a strong QK formation account, a supported contextual write/readout account, causal evidence for a broad prediction-position value-code state, a bounded optimizer-ablation result, and explicit limits around the exact write operator, full answer-margin closure, broader optimizer sweeps, and scaling.
 
 This is a detailed mechanistic account for one task family. It is not a theorem about all transformers.
 
@@ -145,6 +145,7 @@ That guide documents the analysis stack actually used in the current paper:
 - actual-batch and Adam-state attribution
 - cross-seed validation
 - contextual write/readout subspace validation
+- value-code trajectory and causal subspace intervention
 - branch-aware answer-margin diagnostics
 - matched AdamW-vs-SGD optimizer ablations
 
@@ -164,6 +165,8 @@ These are the commands that matter most for the current research result:
 - `optimizer-update-trace`
 - `bilinear-qk-rank-actual-batch-attribution`
 - `bilinear-qk-rank-adam-state-attribution`
+- `value-code-subspace-report`
+- `geometry-subspace-intervention`
 - `scripts/cross_seed_adam_pipeline.py`
 
 ## What to read first
@@ -189,12 +192,14 @@ The repo has strong support for:
 - exact optimizer-state attribution for traced windows
 - cross-seed role-level validation
 - contextual write/readout subspace analysis
+- causal prediction-position value-code analysis
 - branch-aware and output-space closure diagnostics
 
 It does not yet establish:
 
 - full answer-margin closure from a small route family
 - a clean static `W_OV` theorem analogous to the QK story
+- a closed-form operator from support-value residual state to prediction-position value-code state
 - that plain SGD could never form the same route under broader schedules or longer budgets
 - that the same method scales directly to large language models
 

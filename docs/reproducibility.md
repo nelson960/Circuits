@@ -386,6 +386,92 @@ Expected output:
 artifacts/runs/symbolic_kv_reference_formation/analysis/mlp_input_functional_subspace/l0h0_to_l0mlp_support_prediction_1500_2500/
 ```
 
+### Value-Code Readout
+
+This reproduces the result that the mature prediction-position residual carries a broad value-token identity code. The trajectory command measures when the value code becomes readable.
+
+```bash
+RUN=artifacts/runs/symbolic_kv_reference_formation
+TRACE_CKPTS=$RUN/analysis/optimizer_update_trace/from_init_seed7_0000_6000_stepwise/checkpoints
+
+PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli value-code-subspace-report \
+  --config $RUN/run_config.json \
+  --probe-set $RUN/analysis/probe_set.jsonl \
+  --checkpoint-dir $TRACE_CKPTS \
+  --checkpoint $TRACE_CKPTS/step_000750.pt \
+  --checkpoint $TRACE_CKPTS/step_001000.pt \
+  --checkpoint $TRACE_CKPTS/step_001250.pt \
+  --checkpoint $TRACE_CKPTS/step_001500.pt \
+  --checkpoint $TRACE_CKPTS/step_001750.pt \
+  --checkpoint $TRACE_CKPTS/step_002000.pt \
+  --checkpoint $TRACE_CKPTS/step_002250.pt \
+  --checkpoint $TRACE_CKPTS/step_002500.pt \
+  --checkpoint $TRACE_CKPTS/step_002750.pt \
+  --checkpoint $TRACE_CKPTS/step_003000.pt \
+  --checkpoint $TRACE_CKPTS/step_003250.pt \
+  --checkpoint $TRACE_CKPTS/step_003500.pt \
+  --output-dir $RUN/analysis/value_code_subspace/prediction_answer_value_0750_3500 \
+  --device mps \
+  --stage layer_0_post_mlp \
+  --stage layer_1_post_mlp \
+  --stage layer_2_post_mlp \
+  --stage final_norm \
+  --position-role prediction \
+  --position-role support_value \
+  --group-by answer_value \
+  --group-by support_value \
+  --split validation_iid \
+  --max-records 256 \
+  --pca-rank 4 \
+  --overwrite
+```
+
+Expected output:
+
+```text
+artifacts/runs/symbolic_kv_reference_formation/analysis/value_code_subspace/prediction_answer_value_0750_3500/value_code_subspace_report.json
+```
+
+The causal intervention removes value identity from `layer_2_post_mlp / prediction`.
+
+```bash
+RUN=artifacts/runs/symbolic_kv_reference_formation
+TRACE_CKPTS=$RUN/analysis/optimizer_update_trace/from_init_seed7_0000_6000_stepwise/checkpoints
+
+PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli geometry-subspace-intervention \
+  --config $RUN/run_config.json \
+  --probe-set $RUN/analysis/probe_set.jsonl \
+  --checkpoint-dir $TRACE_CKPTS \
+  --checkpoint $TRACE_CKPTS/step_001500.pt \
+  --checkpoint $TRACE_CKPTS/step_001750.pt \
+  --checkpoint $TRACE_CKPTS/step_002000.pt \
+  --checkpoint $TRACE_CKPTS/step_002500.pt \
+  --checkpoint $TRACE_CKPTS/step_003000.pt \
+  --checkpoint $TRACE_CKPTS/step_003500.pt \
+  --output-dir $RUN/analysis/value_code_causal_intervention/embedding_value_identity_prediction_layer2_remove_rank16_1500_3500 \
+  --device mps \
+  --stage layer_2_post_mlp \
+  --subspace embedding_value_identity \
+  --rank 16 \
+  --operation remove \
+  --position-role prediction \
+  --query-mode single_query
+```
+
+Expected output:
+
+```text
+artifacts/runs/symbolic_kv_reference_formation/analysis/value_code_causal_intervention/embedding_value_identity_prediction_layer2_remove_rank16_1500_3500/geometry_subspace_intervention_report.json
+```
+
+The key control and high-rank sufficiency check use the same command shape. Keep the same config, probe set, stage, position role, and query mode, but change the listed arguments:
+
+| purpose | changed arguments |
+| --- | --- |
+| rank-matched key control | `--output-dir $RUN/analysis/value_code_causal_intervention/embedding_key_identity_prediction_layer2_remove_rank7_1500_3500 --subspace embedding_key_identity --rank 7 --operation remove` |
+| rank-matched value control | `--output-dir $RUN/analysis/value_code_causal_intervention/embedding_value_identity_prediction_layer2_remove_rank7_1500_3500 --subspace embedding_value_identity --rank 7 --operation remove` |
+| high-rank value keep | replace the checkpoint list with `step_002000.pt`, `step_002500.pt`, `step_003000.pt`, `step_003500.pt`; use `--output-dir $RUN/analysis/value_code_causal_intervention/embedding_value_identity_prediction_layer2_keep_rank127_2000_3500 --subspace embedding_value_identity --rank 127 --operation keep` |
+
 ### Write AdamW Attribution
 
 The cross-seed write AdamW result uses one selected winner path per seed. After the relevant cross-seed traces are produced, the expected reports are:

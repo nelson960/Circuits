@@ -50,6 +50,7 @@ Use the tools in this order.
 | Did the actual training batch grow the route? | `optimizer-update-trace`, `bilinear-qk-rank-actual-batch-attribution`, `actual-batch-route-attribution` | Uses exact traced batches and parameter updates |
 | Why did the QK route grow? | `bilinear-qk-rank-adam-state-attribution` | Decomposes actual update into raw SGD-equivalent, clipped SGD-equivalent, Adam current, momentum, weight decay for a rank-limited QK matcher |
 | Why did the OV/write scalar grow? | `attention-downstream-adam-state-attribution` | Decomposes actual update into AdamW pieces and splits pressure over the traced head's `W_Q`, `W_K`, `W_V`, and `W_O` slices |
+| What value code does the readout use? | `value-code-subspace-report`, `geometry-subspace-intervention` | Tracks prediction-position value identity and tests whether removing/keeping that subspace changes behavior |
 | Does the same role repeat across seeds? | `scripts/cross_seed_adam_pipeline.py` | Winner / runner-up / bottom-control comparison across seeds |
 
 ## Minimal Decision Tree
@@ -88,6 +89,14 @@ Run:
 - `optimizer-update-trace`
 - `attention-downstream-update-attribution`
 - `attention-downstream-adam-state-attribution`
+
+### I want to know what the write side writes into readout
+
+Run:
+
+- `value-code-subspace-report`
+- `geometry-subspace-intervention` with `--subspace embedding_value_identity`
+- a rank-matched `embedding_key_identity` control
 
 ### I want to know whether this is seed-specific
 
@@ -853,7 +862,100 @@ Does shuffling the support value destroy the write signal?
 Which write scalar best tracks fixed-competitor margin, correct-value logit, or negative loss?
 ```
 
-### 9. Route-family closure
+### 9. Value-code readout
+
+#### `value-code-subspace-report`
+
+Use this after the write-side audit when the question is no longer "does the residual change matter?" but "what code does the mature readout use?"
+
+This command tracks whether prediction-position residual states become separable by answer value, support value, or both.
+
+```bash
+TRACE_CKPTS=$ANALYSIS/optimizer_update_trace/from_init_seed7_0000_6000_stepwise/checkpoints
+
+PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli value-code-subspace-report \
+  --config $CONFIG \
+  --probe-set $PROBE \
+  --checkpoint-dir $TRACE_CKPTS \
+  --checkpoint $TRACE_CKPTS/step_001500.pt \
+  --checkpoint $TRACE_CKPTS/step_001750.pt \
+  --checkpoint $TRACE_CKPTS/step_002000.pt \
+  --checkpoint $TRACE_CKPTS/step_002500.pt \
+  --checkpoint $TRACE_CKPTS/step_003000.pt \
+  --checkpoint $TRACE_CKPTS/step_003500.pt \
+  --output-dir $ANALYSIS/value_code_subspace/prediction_answer_value_1500_3500_cli \
+  --device mps \
+  --stage layer_0_post_mlp \
+  --stage layer_1_post_mlp \
+  --stage layer_2_post_mlp \
+  --stage final_norm \
+  --position-role prediction \
+  --position-role support_value \
+  --group-by answer_value \
+  --group-by support_value \
+  --split validation_iid \
+  --max-records 256 \
+  --pca-rank 4 \
+  --overwrite
+```
+
+Important outputs:
+
+- `value_code_rows`
+- `summary_rows`
+- `subspace_rows`
+
+This command answers:
+
+```text
+When does the prediction residual start reading out the answer value?
+Is the readable code grouped by answer value or just by support position?
+Is the value-code object low-rank or broad?
+```
+
+#### `geometry-subspace-intervention`
+
+Use this to test whether a geometry subspace is causal, not merely readable.
+
+For the value-code claim, remove value identity from `layer_2_post_mlp / prediction` and compare it against a rank-matched key-identity control.
+
+```bash
+TRACE_CKPTS=$ANALYSIS/optimizer_update_trace/from_init_seed7_0000_6000_stepwise/checkpoints
+
+PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli geometry-subspace-intervention \
+  --config $CONFIG \
+  --probe-set $PROBE \
+  --checkpoint-dir $TRACE_CKPTS \
+  --checkpoint $TRACE_CKPTS/step_001500.pt \
+  --checkpoint $TRACE_CKPTS/step_001750.pt \
+  --checkpoint $TRACE_CKPTS/step_002000.pt \
+  --checkpoint $TRACE_CKPTS/step_002500.pt \
+  --checkpoint $TRACE_CKPTS/step_003000.pt \
+  --checkpoint $TRACE_CKPTS/step_003500.pt \
+  --output-dir $ANALYSIS/value_code_causal_intervention/embedding_value_identity_prediction_layer2_remove_rank16_1500_3500 \
+  --device mps \
+  --stage layer_2_post_mlp \
+  --subspace embedding_value_identity \
+  --rank 16 \
+  --operation remove \
+  --position-role prediction \
+  --query-mode single_query
+```
+
+Important outputs:
+
+- `aggregate_rows`
+- `query_rows`
+- `plots.margin_drop`
+- `plots.accuracy_drop`
+
+Use it for:
+
+- value-identity removal: `--subspace embedding_value_identity --operation remove`
+- rank-matched key control: `--subspace embedding_key_identity --rank 7 --operation remove`
+- sufficiency checks: `--operation keep` at higher value-identity rank
+
+### 10. Route-family closure
 
 #### `route-family-closure-report`
 
@@ -888,7 +990,7 @@ Use it for:
 - whether full QK+OV route-family closure improves answer-margin closure
 - deciding whether the OV side is head-local or residual-family-local
 
-### 10. Output-side validation
+### 11. Output-side validation
 
 Use these after route-level closure, not before.
 
@@ -947,7 +1049,7 @@ Key outputs:
 - `summary_rows`
 - `pair_rows`
 
-### 11. Cross-seed pipeline
+### 12. Cross-seed pipeline
 
 #### `scripts/cross_seed_adam_pipeline.py`
 
