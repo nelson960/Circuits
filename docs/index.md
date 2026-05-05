@@ -92,7 +92,7 @@ The answer is developmental. The model starts as a dense shared substrate with m
 
 <figure class="paper-figure">
   <img src="assets/figures/growth_phase_timeline.svg" alt="Circuit growth phase timeline">
-  <figcaption><strong>Figure 2. Circuit growth timeline.</strong> The paper follows the model's formation phases: dense candidate competition, early scaffold, QK pointer crystallization, optimizer pressure, write/readout coupling, broad value-code readout, and role migration across seeds.</figcaption>
+  <figcaption><strong>Figure 2. Circuit growth timeline.</strong> The paper follows the model's formation phases: dense candidate competition, early scaffold, QK pointer crystallization, optimizer pressure, write/readout coupling, broad value-code readout, later heldout consolidation, and role migration across seeds.</figcaption>
 </figure>
 
 The next sections unpack those phases. The short technical version has two halves.
@@ -156,6 +156,8 @@ The task rule is deliberately simple: a read asks for the latest previous write 
 
 The split is part of the experiment. IID validation asks whether the model learned the training distribution. Heldout-pair validation asks whether it learned the relation rather than memorizing value pairs.
 
+The benchmark also has shortcut checks. Exact sequence overlap across splits is `0`, latent-program overlap is `0`, and heldout leakage outside the heldout split is `0`. Trivial rules are weak: `first_value_for_key` and `last_value_before_query` score `0`, and the strongest tested `most_frequent_value_before_query` heuristic is only about `0.146`.
+
 <figure class="paper-figure">
   <img src="assets/figures/dataset_geometry_split_axes.svg" alt="Dataset split axes">
   <figcaption><strong>Figure 4. Split geometry.</strong> The benchmark separates ordinary validation from heldout answer-pair and structural tests.</figcaption>
@@ -166,7 +168,9 @@ The split is part of the experiment. IID validation asks whether the model learn
   <figcaption><strong>Figure 5. Answer-pair matrix.</strong> Heldout-pair evaluation checks whether the model can answer key-value combinations excluded from training.</figcaption>
 </figure>
 
-The reference run uses a small transformer:
+There are two closely related seed-7 runs in the paper. `symbolic_kv_heldout_generalization` is the sparse-checkpoint selection run used to choose a strong heldout-generalizing model. `symbolic_kv_reference_formation` uses the same model and optimizer recipe with dense checkpoints, and most of the exact optimizer/SVD formation microscope is taken from its `0 -> 6000` horizon.
+
+The shared model recipe is:
 
 | field | value |
 | --- | --- |
@@ -180,7 +184,7 @@ The reference run uses a small transformer:
 | betas / weight decay | 0.9, 0.95 / 0.01 |
 | gradient clip / warmup | 1.0 / 200 steps |
 
-The selected heldout-generalization run reaches heldout-pair answer accuracy around `0.8730`. Structural OOD remains much weaker, around `0.5082`. That is enough behavior to study formation, but not enough to pretend every generalization question is solved.
+The selected heldout-generalization run reaches heldout-pair answer accuracy around `0.8730`. Structural OOD remains much weaker, around `0.5082`. The formation microscope is not a different architecture; it is the dense-checkpoint view of the same recipe. That is enough behavior to study formation, but not enough to pretend every generalization question is solved.
 
 ## Phase 0: Candidate Circuits Compete
 
@@ -452,7 +456,18 @@ The critical window is `750 -> 2500`. The route grows, but the raw SGD-equivalen
 
 This does not mean gradients are irrelevant. AdamW is built from gradients. It means the object that wrote the route was not the instantaneous raw gradient alone. The object was the optimizer trajectory: accumulated state, adaptive scaling, and preconditioning.
 
+The update does not land symmetrically inside QK. In the traced `5500 -> 5550` diagnostic window, `L2H1` route sharpening is mostly query-side:
+
+```text
+L2H1 query-side actual growth: +0.155511
+L2H1 key-side actual growth:   -0.076688
+```
+
+The same query-side dominance appears for `L1H2` and `L0H0`, although their key-side terms do not oppose growth as strongly. This is a useful mechanistic detail: AdamW is not merely enlarging a QK matrix. It is mostly shaping the prediction-side residual geometry that asks the right lookup question.
+
 The gradient was not literally lying. It was answering a local-slope question in a dense competition phase. Several candidate routes are being trained at once. Their instantaneous gradient contributions can cancel in the shared parameters, so the raw gradient can look near-zero or even point against the role that will win. Momentum integrates those noisy local samples across steps. The consistent signal survives the cancellation.
+
+The data support is also uneven. A source-checkpoint data-update attribution asks whether data-group loss gradients point along the route gradient. Validation query-key gradients point against the route (`-3.332346`), while train clean query-key gradients support it (`+1.691921`). The support is not uniform across keys: `K07` is strongest at about `+4.25`, while `K01` is weakest at about `+0.16`. So the route is not just an optimizer artifact in the abstract; the train distribution supplies a structured pressure for it.
 
 This raised the obvious control question: if AdamW's actual update explains the route, would plain SGD build the same route under the same experimental recipe?
 
@@ -473,6 +488,8 @@ best SGD + momentum LR sweep: validation answer accuracy 0.0085
 best observed SGD QK sep:     about 0.118
 ```
 
+The best SGD+momentum run is not random. It reaches about `0.340` validation token accuracy and about `0.349` read-key accuracy, but only `0.0085` answer accuracy. It learns some surface/key-position structure while failing the actual value-retrieval computation.
+
 The `beta1 = 0` result matters. It means first-moment momentum is not strictly necessary in this tested AdamW family. The better statement is not "momentum did everything." The sharper hypothesis is that AdamW-style adaptive/preconditioned update geometry makes the route-forming direction reachable under this recipe, while same-budget SGD and SGD+momentum do not.
 
 <figure class="paper-figure">
@@ -481,6 +498,8 @@ The `beta1 = 0` result matters. It means first-moment momentum is not strictly n
 </figure>
 
 This is still bounded. It does not prove that SGD can never learn with more steps, different schedules, different initialization scale, or broader tuning. The optimizer ablation tests the same seed, same model, same data, same `6000`-step budget, and the tested SGD/SGD+momentum learning-rate sweep. It rules out the simplest objection: same-recipe SGD did not form the same role under this budget.
+
+The early route-birth story is also not the whole 16k training story. The broader run has three visible behavioral windows: `1500 -> 2000`, where usable lookup first appears; `4250 -> 4750`, where heldout-pair behavior consolidates; and `7500 -> 8000`, where upper-layer representations reorganize. The paper focuses on the early and mid formation microscope because that is where the exact stepwise optimizer traces and QK/write diagnostics are strongest.
 
 ## Cross-Seed Proof: The Address Moves
 
@@ -605,7 +624,9 @@ raw SGD-equivalent on total scalar: about 0.13% of actual growth
 Adam momentum on total:    about 93% of actual growth
 ```
 
-This is not the same mechanism as QK. QK visibly forms a low-rank route map. The write side looks more like an already-available residual direction becoming functionally coupled to the mature readout.
+The position split is sharp. The aggregate prediction-position functional write effect is about `+4165.317`, while the support-value position is about `-17.307`. This is why I treat the write object as a prediction-slot residual state, not as a support-slot memory object.
+
+This is not the same mechanism as QK. QK visibly forms a low-rank route map. The write side looks more like an already-available residual direction becoming functionally coupled to the mature readout. Later MLPs mostly preserve this useful state through the residual stream; their local nonlinear output can be weak or even oppose the write scalar. `L0MLP` is the clearest positive local converter, adding the smaller nonlinear correction on top of the residual signal.
 
 <figure class="paper-figure">
   <img src="assets/figures/reference_write_optimizer_split.svg" alt="Reference write optimizer split">

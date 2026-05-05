@@ -24,7 +24,8 @@ If an artifact is missing, do not silently substitute another result. Regenerate
 
 | claim | artifact | proof type |
 | --- | --- | --- |
-| The model learns symbolic latest-write lookup. | `artifacts/runs/symbolic_kv_reference_formation/` | behavior |
+| The heldout-generalization selection run learns symbolic latest-write lookup. | `artifacts/runs/symbolic_kv_heldout_generalization/` | behavior |
+| The dense-checkpoint formation run provides the optimizer/SVD microscope. | `artifacts/runs/symbolic_kv_reference_formation/` | formation trace |
 | Heldout-pair behavior is meaningful. | `artifacts/runs/symbolic_kv_reference_formation/analysis/dataset_geometry/` | dataset audit |
 | Component-level analysis finds dense early and late roles. | `artifacts/runs/symbolic_kv_reference_formation/analysis/output_component_causal_validation/` | causal and DLA validation |
 | Residual-state patching rescues early-component damage. | `artifacts/runs/symbolic_kv_reference_formation/analysis/residual_state_rescue/` | causal patching |
@@ -33,12 +34,15 @@ If an artifact is missing, do not silently substitute another result. Regenerate
 | `L2H1 W_QK` forms a low-rank route matcher. | `artifacts/runs/symbolic_kv_reference_formation/analysis/weight_svd_trace/phase1_000250_5500_top16/` | weight geometry |
 | Contextual residual directions explain QK better than static embeddings. | `artifacts/runs/symbolic_kv_reference_formation/analysis/contextual_svd_alignment/` | contextual alignment |
 | Actual AdamW updates explain QK route growth. | `artifacts/runs/symbolic_kv_reference_formation/analysis/bilinear_qk_rank_adam_state_attribution/from_init_l2h1_rank8_support_value_0000_6000_stepwise/` | optimizer attribution |
+| QK route sharpening is query-side dominated in the traced diagnostic window. | `artifacts/runs/symbolic_kv_reference_formation/analysis/attention_retrieval_separation_update_attribution/l2h1_support_value_5500_5550_stepwise/` | Q/K-side update decomposition |
+| Train query-key gradients support the route while validation gradients oppose it. | `artifacts/runs/symbolic_kv_reference_formation/analysis/data_update_attribution/l2h1_qk_query_rank4_5000_5250_train_clean_query_key/` and `artifacts/runs/symbolic_kv_reference_formation/analysis/data_update_attribution/l2h1_qk_query_rank4_5000_5250_validation_pair_type/` | data-gradient attribution |
 | Cross-seed QK role repeats with different head addresses. | `artifacts/runs/symbolic_kv_cross_seed_adam/` | cross-seed optimizer attribution |
 | AdamW variants form the lookup role under a matched seed-7 ablation. | `artifacts/runs/symbolic_kv_optimizer_ablation/adamw_*/seed_0007/` | optimizer ablation |
-| SGD and SGD+momentum do not form the lookup role under the tested seed-7 LR sweep. | `artifacts/runs/symbolic_kv_optimizer_ablation/sgd_*/seed_0007/` | optimizer ablation |
+| SGD and SGD+momentum learn shallow structure but do not form the lookup role under the tested seed-7 LR sweep. | `artifacts/runs/symbolic_kv_optimizer_ablation/sgd_*/seed_0007/` | optimizer ablation |
 | OV/write is better represented as a contextual residual subspace than a static `W_OV` map. | `artifacts/runs/symbolic_kv_reference_formation/analysis/mlp_input_functional_subspace/` | functional subspace |
 | Prediction-position residual patching localizes much of the write/readout effect. | `artifacts/runs/symbolic_kv_reference_formation/analysis/residual_position_rescue/` | causal patching |
 | Local MLP write maps split residual-skip signal from MLP-output correction. | `artifacts/runs/symbolic_kv_reference_formation/analysis/mlp_local_write_map/` | local Jacobian/readout analysis |
+| Functional write is concentrated at prediction position rather than support-value position. | `artifacts/runs/symbolic_kv_reference_formation/analysis/mlp_local_write_map/l0h0_mlp_write_maps_1500_2500_formation/` | position-split write analysis |
 | Write coupling turns on around the formation window. | `artifacts/runs/symbolic_kv_reference_formation/analysis/mlp_functional_subspace_trajectory/` | trajectory |
 | Prediction-position value identity turns on around the write formation window. | `artifacts/runs/symbolic_kv_reference_formation/analysis/value_code_subspace/prediction_answer_value_0750_3500/` | value-code trajectory |
 | The prediction-position value-code subspace is causally used by the answer readout. | `artifacts/runs/symbolic_kv_reference_formation/analysis/value_code_causal_intervention/embedding_value_identity_prediction_layer2_remove_rank16_1500_3500/` | causal subspace intervention |

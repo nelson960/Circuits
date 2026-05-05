@@ -115,7 +115,8 @@ PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli train \
 ```bash
 PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli evaluate \
   --config artifacts/runs/symbolic_kv_reference_formation/run_config.json \
-  --checkpoint artifacts/runs/symbolic_kv_reference_formation/checkpoints/step_016000.pt
+  --checkpoint artifacts/runs/symbolic_kv_reference_formation/checkpoints/best.pt \
+  --split heldout_pairs
 ```
 
 ### 4. Build a probe set

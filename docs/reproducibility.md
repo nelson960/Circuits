@@ -80,9 +80,20 @@ Expected output:
 artifacts/runs/symbolic_kv_reference_formation/analysis/probe_set.jsonl
 ```
 
+## Runs Used In The Paper
+
+The paper uses two closely related seed-7 runs. They share the same task, model size, optimizer recipe, and `16000`-step training budget, but they serve different purposes.
+
+| run | config | purpose |
+| --- | --- | --- |
+| `symbolic_kv_heldout_generalization` | `configs/train/symbolic_kv_generalization.json` | sparse-checkpoint run used to select a strong heldout-generalizing model |
+| `symbolic_kv_reference_formation` | `configs/train/symbolic_kv_formation.json` | dense-checkpoint run used for formation traces, SVD, causal patching, and exact optimizer accounting |
+
+Most exact formation claims in the paper use `symbolic_kv_reference_formation`, especially the `0 -> 6000` optimizer-trace horizon. Do not mix those numbers with the best-checkpoint selection metrics from `symbolic_kv_heldout_generalization`.
+
 ## Model And Training
 
-The reference training config is:
+The dense formation training config is:
 
 ```text
 configs/train/symbolic_kv_formation.json
@@ -110,7 +121,7 @@ Important values:
 | schedule | constant |
 | checkpoint frequency | 250 steps |
 
-Train:
+Train the dense formation run:
 
 ```bash
 PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli train \
@@ -122,6 +133,14 @@ Expected output:
 
 ```text
 artifacts/runs/symbolic_kv_reference_formation/
+```
+
+To regenerate the sparse heldout-generalization selection run instead, use:
+
+```bash
+PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli train \
+  --config configs/train/symbolic_kv_generalization.json \
+  --overwrite
 ```
 
 Evaluate the best checkpoint:

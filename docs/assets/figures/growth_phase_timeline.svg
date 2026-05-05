@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1180" height="540" viewBox="0 0 1180 540" role="img" aria-labelledby="title desc">
   <title id="title">Circuit growth phase timeline</title>
-  <desc id="desc">A phase timeline from dense candidate competition through QK pointer crystallization, AdamW preconditioning, write coupling, value-code readout, and cross-seed role migration.</desc>
+  <desc id="desc">A phase timeline from dense candidate competition through QK pointer crystallization, AdamW preconditioning, write coupling, value-code readout, later heldout consolidation, and cross-seed role migration.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto">
       <path d="M 0 0 L 10 5 L 0 10 z" fill="#343434"/>
@@ -27,7 +27,7 @@
 
   <rect width="1180" height="540" fill="#f8f5ef"/>
   <text x="42" y="52" class="title">The circuit grows in phases</text>
-  <text x="42" y="82" class="subtitle">The tools enter the story when the model's behavior changes: competition, scaffold, pointer crystallization, write coupling, value-code readout, and role migration.</text>
+  <text x="42" y="82" class="subtitle">The tools enter the story when behavior changes: competition, scaffold, pointer crystallization, write coupling, value-code readout, later consolidation, and role migration.</text>
 
   <line x1="74" y1="128" x2="1104" y2="128" class="axis"/>
   <g>
@@ -126,10 +126,10 @@
 
   <g transform="translate(916 366)">
     <rect x="0" y="0" width="222" height="120" class="box callout"/>
-    <text x="16" y="28" class="phase-title">Boundary</text>
-    <text x="16" y="52" class="phase-text">Pointer is close to closed.</text>
-    <text x="16" y="70" class="phase-text">Value readout is causal</text>
-    <text x="16" y="88" class="phase-text">but broad. Exact write</text>
-    <text x="16" y="106" class="phase-text">operator remains open.</text>
+    <text x="16" y="28" class="phase-title">Later 16k windows</text>
+    <text x="16" y="52" class="phase-text">4250->4750: heldout</text>
+    <text x="16" y="70" class="phase-text">consolidation.</text>
+    <text x="16" y="88" class="phase-text">7500->8000: upper-layer</text>
+    <text x="16" y="106" class="phase-text">reorganization.</text>
   </g>
 </svg>
