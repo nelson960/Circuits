@@ -59,6 +59,7 @@ If an artifact is missing, do not silently substitute another result. Regenerate
 | `task_rule_latest_write_lookup.svg` | task rule diagram |
 | `dataset_geometry_split_axes.svg` | dataset split axes |
 | `dataset_geometry_answer_pair_matrix.svg` | answer-pair split geometry |
+| `growth_phase_timeline.svg` | circuit growth phases and key measured transitions |
 | `lookup_algorithm_evidence_ladder.svg` | lookup algorithm proof boundary |
 | `weight_qk_birth_timeline.svg` | QK singular growth and rank compression |
 | `contextual_semantic_alignment.svg` | contextual residual alignment |

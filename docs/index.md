@@ -8,7 +8,7 @@ description: A narrative paper on how AdamW training forms dense retrieval machi
 
 Nelson Alex
 
-Living draft: 2026-05-05
+Living draft: 2026-05-06
 
 ## Abstract
 
@@ -26,6 +26,22 @@ I make eight claims that can be checked against the artifact map.
 6. A write-side analysis showing contextual residual coupling rather than a clean static `W_OV` theorem.
 7. Causal evidence that the mature prediction residual contains a broad value-token identity code used by the answer readout.
 8. A matched-budget optimizer ablation where AdamW variants form the lookup role and SGD variants do not under the tested recipe.
+
+## The Ghost Moves Rooms
+
+The first surprise was not just that a lookup circuit formed. The surprise was that the same role did not live in the same place.
+
+Across additional seeds, the support-value retrieval role repeated, but the winning head changed:
+
+```text
+seed 0011: QK winner L2H0
+seed 0013: QK winner L2H2
+seed 0017: QK winner L2H3
+seed 0023: QK winner L2H1
+seed 0029: QK winner L1H2
+```
+
+That is the mystery the paper explains. The computation repeats, but the named component changes. The stable object is the role; the unstable object is the address.
 
 The question was simple:
 
@@ -56,7 +72,7 @@ That is the core finding. The write side is real too, but it is not QK again. QK
   <figcaption><strong>Figure 1. The measured chain.</strong> I follow one role from loss pressure, to optimizer state, to weight geometry, to route separation, to output behavior.</figcaption>
 </figure>
 
-## The Short Version
+## The Growth Story
 
 I trained a 3-layer decoder-only transformer on symbolic key-value lookup. The model sees writes and reads:
 
@@ -72,7 +88,14 @@ The task is small on purpose. It is not meant to be language modeling. It is mea
 when lookup behavior appears, what exactly changed inside the model?
 ```
 
-The answer has two halves.
+The answer is developmental. The model starts as a dense shared substrate with many candidate routes and write paths. The task applies pressure for latest-write lookup. AdamW turns that pressure into a parameter trajectory. A compact QK pointer crystallizes. The write/readout side grows differently: not as one clean OV vector, but as a broad value-code state at the prediction position.
+
+<figure class="paper-figure">
+  <img src="assets/figures/growth_phase_timeline.svg" alt="Circuit growth phase timeline">
+  <figcaption><strong>Figure 2. Circuit growth timeline.</strong> The paper follows the model's formation phases: dense candidate competition, early scaffold, QK pointer crystallization, optimizer pressure, write/readout coupling, broad value-code readout, and role migration across seeds.</figcaption>
+</figure>
+
+The next sections unpack those phases. The short technical version has two halves.
 
 The QK half asks where the model reads. In the reference seed, `L2H1 W_QK` becomes a low-rank support-value matcher. Its route score grows during formation, its singular structure crystallizes, and exact AdamW attribution explains the growth. The raw-gradient, SGD-equivalent update accounts for only about `0.76%` of the route growth in the traced from-initialization run.
 
@@ -90,9 +113,9 @@ The residual state that readout uses is now clearer. At `layer_2_post_mlp / pred
 
 Across five additional seeds, both sides repeat at the role level but move at the address level. QK winners include `L2H0`, `L2H2`, `L2H3`, `L2H1`, and `L1H2`. Write winners include paths such as `L1H3 -> L1MLP`, `L1H1 -> L1MLP`, and `L2H1 -> L2MLP`.
 
-The ghost moves rooms. The computation repeats, but the named component changes.
+This is the same role/address split introduced above. The rest of the paper explains how I measured the role strongly enough to see it move.
 
-## The Dense Circuit Premise
+## The Dense Substrate
 
 The first lesson was negative but important: the circuit was real, but the unit of explanation was not a neuron, feature family, or stable head name.
 
@@ -122,25 +145,25 @@ The superposition framing follows [Elhage et al. 2022](https://transformer-circu
 
 The optimizer accounting is specific to AdamW. Adam was introduced by [Kingma and Ba 2014](https://arxiv.org/abs/1412.6980), and decoupled weight decay for AdamW by [Loshchilov and Hutter 2017](https://arxiv.org/abs/1711.05101). Small algorithmic tasks have also been used to study delayed generalization and training dynamics, most famously in grokking work by [Power et al. 2022](https://arxiv.org/abs/2201.02177). I use a small symbolic task for a different purpose: to make a role-level circuit formation story auditable end to end.
 
-## The Tiny World
+## The Growth Medium: A Tiny Lookup World
 
 The task rule is deliberately simple: a read asks for the latest previous write for the same key.
 
 <figure class="paper-figure">
   <img src="assets/figures/task_rule_latest_write_lookup.svg" alt="Latest-write lookup task rule">
-  <figcaption><strong>Figure 2. Latest-write lookup.</strong> The model must return the most recent value written for the queried key, not just any value associated with the key.</figcaption>
+  <figcaption><strong>Figure 3. Latest-write lookup.</strong> The model must return the most recent value written for the queried key, not just any value associated with the key.</figcaption>
 </figure>
 
 The split is part of the experiment. IID validation asks whether the model learned the training distribution. Heldout-pair validation asks whether it learned the relation rather than memorizing value pairs.
 
 <figure class="paper-figure">
   <img src="assets/figures/dataset_geometry_split_axes.svg" alt="Dataset split axes">
-  <figcaption><strong>Figure 3. Split geometry.</strong> The benchmark separates ordinary validation from heldout answer-pair and structural tests.</figcaption>
+  <figcaption><strong>Figure 4. Split geometry.</strong> The benchmark separates ordinary validation from heldout answer-pair and structural tests.</figcaption>
 </figure>
 
 <figure class="paper-figure">
   <img src="assets/figures/dataset_geometry_answer_pair_matrix.svg" alt="Answer pair matrix">
-  <figcaption><strong>Figure 4. Answer-pair matrix.</strong> Heldout-pair evaluation checks whether the model can answer key-value combinations excluded from training.</figcaption>
+  <figcaption><strong>Figure 5. Answer-pair matrix.</strong> Heldout-pair evaluation checks whether the model can answer key-value combinations excluded from training.</figcaption>
 </figure>
 
 The reference run uses a small transformer:
@@ -159,7 +182,7 @@ The reference run uses a small transformer:
 
 The selected heldout-generalization run reaches heldout-pair answer accuracy around `0.8730`. Structural OOD remains much weaker, around `0.5082`. That is enough behavior to study formation, but not enough to pretend every generalization question is solved.
 
-## How The Search Changed
+## Phase 0: Candidate Circuits Compete
 
 I did not start with QK. I started with the obvious maps.
 
@@ -180,7 +203,9 @@ So the search moved from components to roles. A role is a computation-level obje
 
 This changed the project from a component hunt into a formation audit.
 
-## The Lookup Algorithm Implemented By The Model
+The transparent feature-family birth model made the same point quantitatively. It predicted `family4` should form first from activation support, amplification, feature-score drive, and aggregate gradient alignment. The model formed `family7` first instead. `family7` became useful at step `2250`, `family4` followed at step `2500`, and `family7` had the larger useful delta (`0.408` versus `0.234`) and heldout-gap delta (`0.196` versus `0.022`). The local gradient-flavored score picked the tempting sibling; the training trajectory selected the more generalizing role.
+
+## The Mature Form: The Lookup Algorithm
 
 The model is not fully transparent yet, but the current artifacts are enough to state the learned lookup algorithm as a chain with a proof boundary at each link.
 
@@ -205,7 +230,7 @@ contextual key/value states
 
 <figure class="paper-figure">
   <img src="assets/figures/lookup_algorithm_evidence_ladder.svg" alt="Lookup algorithm evidence ladder">
-  <figcaption><strong>Figure 5. Lookup algorithm evidence ladder.</strong> The QK pointer is the cleanest closed link. The write/readout side is now identified as a broad prediction-position value-code state, while the exact support-to-prediction operator and full moving-margin closure remain open.</figcaption>
+  <figcaption><strong>Figure 6. Lookup algorithm evidence ladder.</strong> The QK pointer is the cleanest closed link. The write/readout side is now identified as a broad prediction-position value-code state, while the exact support-to-prediction operator and full moving-margin closure remain open.</figcaption>
 </figure>
 
 The first link is contextualization. The raw token embedding is not enough. Earlier layers turn key, value, and prediction slots into contextual residual states:
@@ -291,7 +316,22 @@ So the current algorithm ledger is:
 
 This is the main difference from a fully closed Fourier-style grokking story. I can explain the pointer in weight, activation, causal, optimizer, and cross-seed terms. I can identify the downstream residual object as a broad value-code state. What I cannot yet write down is a closed-form operator that maps the support-value residual state into the prediction-position value-code state.
 
-## The QK Role
+## Phase 1: The Early Scaffold
+
+The first measured phase is small but informative.
+
+From `0 -> 750`, the support-value QK route has only weak movement:
+
+```text
+actual QK route growth: +0.070
+Adam momentum part:     +0.067
+```
+
+The final QK direction is not fully present yet, but it is beginning to rotate toward its mature form. In the reference seed, the top `L2H1 W_QK` direction has final-direction cosine about `0.188` at step `250`, about `0.588` at step `750`, and about `0.845` by step `2250`.
+
+This is the scaffold stage. It does not yet look like the finished lookup mechanism. But it biases the later route: a direction is being carved out before it becomes behaviorally dominant.
+
+## Phase 2: The QK Pointer Crystallizes
 
 QK is the clean half because QK is routing.
 
@@ -325,14 +365,14 @@ In the reference seed, `L2H1` becomes the clearest route carrier. During the mai
 
 <figure class="paper-figure">
   <img src="assets/figures/weight_qk_birth_timeline.svg" alt="QK birth timeline">
-  <figcaption><strong>Figure 6. QK crystallization.</strong> The support-value route becomes concentrated in `L2H1 W_QK`: singular mass grows while effective rank compresses.</figcaption>
+  <figcaption><strong>Figure 7. QK crystallization.</strong> The support-value route becomes concentrated in `L2H1 W_QK`: singular mass grows while effective rank compresses.</figcaption>
 </figure>
 
 The singular vectors are not best understood as raw token-embedding directions. The useful route aligns with contextual residual state: what earlier layers have made the key and value positions mean inside the network.
 
 <figure class="paper-figure">
   <img src="assets/figures/contextual_semantic_alignment.svg" alt="Contextual semantic alignment">
-  <figcaption><strong>Figure 7. Context matters.</strong> The route aligns with contextual residual directions more cleanly than with a naive static embedding story.</figcaption>
+  <figcaption><strong>Figure 8. Context matters.</strong> The route aligns with contextual residual directions more cleanly than with a naive static embedding story.</figcaption>
 </figure>
 
 This gives the first complete computational object:
@@ -353,7 +393,7 @@ W_QK = U Sigma V^T
 
 The top singular structure of `W_QK` is not just decorative. It grows when the support-value route grows.
 
-## The Optimizer Accounting
+## Phase 3: AdamW Preconditioning Carries The Growth
 
 The raw gradient did not explain the route birth in the traced run. AdamW's actual update did.
 
@@ -407,14 +447,14 @@ The critical window is `750 -> 2500`. The route grows, but the raw SGD-equivalen
 
 <figure class="paper-figure">
   <img src="assets/figures/qk_optimizer_phase_structure.svg" alt="QK optimizer phase structure">
-  <figcaption><strong>Figure 8. QK formation has phases.</strong> The cleanest birth window is `750 -> 2500`: the route grows while the raw SGD-equivalent term is slightly negative and Adam momentum carries the useful direction.</figcaption>
+  <figcaption><strong>Figure 9. QK formation has phases.</strong> The cleanest birth window is `750 -> 2500`: the route grows while the raw SGD-equivalent term is slightly negative and Adam momentum carries the useful direction.</figcaption>
 </figure>
 
 This does not mean gradients are irrelevant. AdamW is built from gradients. It means the object that wrote the route was not the instantaneous raw gradient alone. The object was the optimizer trajectory: accumulated state, adaptive scaling, and preconditioning.
 
 The gradient was not literally lying. It was answering a local-slope question in a dense competition phase. Several candidate routes are being trained at once. Their instantaneous gradient contributions can cancel in the shared parameters, so the raw gradient can look near-zero or even point against the role that will win. Momentum integrates those noisy local samples across steps. The consistent signal survives the cancellation.
 
-This raised the obvious control question: if AdamW's actual update explains the route, would plain SGD build the same route anyway?
+This raised the obvious control question: if AdamW's actual update explains the route, would plain SGD build the same route under the same experimental recipe?
 
 I ran a matched seed-7 optimizer ablation. The AdamW variants learned the task and formed a strong support-value route:
 
@@ -433,18 +473,18 @@ best SGD + momentum LR sweep: validation answer accuracy 0.0085
 best observed SGD QK sep:     about 0.118
 ```
 
-The `beta1 = 0` result matters. It means first-moment momentum is not strictly necessary in this setting. The better statement is that AdamW-style adaptive/preconditioned optimization forms the lookup role under this recipe, while same-budget SGD and SGD+momentum do not.
+The `beta1 = 0` result matters. It means first-moment momentum is not strictly necessary in this tested AdamW family. The better statement is not "momentum did everything." The sharper hypothesis is that AdamW-style adaptive/preconditioned update geometry makes the route-forming direction reachable under this recipe, while same-budget SGD and SGD+momentum do not.
 
 <figure class="paper-figure">
   <img src="assets/figures/optimizer_ablation_summary.svg" alt="Optimizer ablation summary">
-  <figcaption><strong>Figure 9. Optimizer ablation.</strong> AdamW variants learn the lookup role and form a strong support-value route. Same-budget SGD variants do not, even across the tested learning-rate sweep.</figcaption>
+  <figcaption><strong>Figure 10. Optimizer ablation.</strong> AdamW variants learn the lookup role and form a strong support-value route. Same-budget SGD variants do not, even across the tested learning-rate sweep.</figcaption>
 </figure>
 
-This is still bounded. It does not prove that SGD can never learn with more steps, different schedules, different initialization scale, or broader tuning. It does rule out the simplest objection that same-recipe SGD would have formed the same role anyway.
+This is still bounded. It does not prove that SGD can never learn with more steps, different schedules, different initialization scale, or broader tuning. The optimizer ablation tests the same seed, same model, same data, same `6000`-step budget, and the tested SGD/SGD+momentum learning-rate sweep. It rules out the simplest objection: same-recipe SGD did not form the same role under this budget.
 
-## The Ghost Moves Rooms
+## Cross-Seed Proof: The Address Moves
 
-A circuit story that only works for one head in one seed is weak. So I repeated the route search across five additional seeds.
+The opening mystery needs a control. A circuit story that only works for one head in one seed is weak. So I repeated the route search across five additional seeds.
 
 The support-value retrieval role repeated. The address changed.
 
@@ -467,7 +507,7 @@ role pattern is stable.
 
 If the question is "does `L2H1` always do it?", the answer is no. If the question is "does a support-value retrieval role form?", the answer is yes.
 
-## Why OV Was Harder
+## Phase 4: The Write Side Is Not QK Again
 
 QK asks where to read. OV/write asks what useful state gets created after reading.
 
@@ -508,7 +548,7 @@ Here `delta_write_theta(x)` is the residual change caused by a source at a speci
 
 <figure class="paper-figure">
   <img src="assets/figures/write_side_mechanism.svg" alt="Write-side residual coupling">
-  <figcaption><strong>Figure 10. The write proof object.</strong> The measured write is a residual coupling, not a static `W_OV` answer-vector claim.</figcaption>
+  <figcaption><strong>Figure 11. The write proof object.</strong> The measured write is a residual coupling, not a static `W_OV` answer-vector claim.</figcaption>
 </figure>
 
 The value content matters. In the reference seed, forcing `L0H0` to read the correct support-value vector gave a positive OV map score. Keeping the same forced support attention but shuffling the value vector made the score strongly negative. The head had to read the right value-bearing content, not merely attend to a plausible place.
@@ -520,7 +560,7 @@ the source changes the current prediction residual state;
 downstream readout geometry knows how to use that change.
 ```
 
-## The Write Coupling Turns On
+## Phase 5: The Write Coupling Turns On
 
 The write direction was not born from nothing. Mature-looking directions are partly present early. What changes sharply is their coupling to answer-readout directions.
 
@@ -553,7 +593,7 @@ In words: split the useful write into the residual skip part and the nonlinear M
 
 <figure class="paper-figure">
   <img src="assets/figures/write_functional_birth.svg" alt="Functional write birth">
-  <figcaption><strong>Figure 11. Functional write birth.</strong> The write-readout coupling jumps around `1500 -> 1750`, mostly through the residual skip part, with `L0MLP` adding a smaller positive correction.</figcaption>
+  <figcaption><strong>Figure 12. Functional write birth.</strong> The write-readout coupling jumps around `1500 -> 1750`, mostly through the residual skip part, with `L0MLP` adding a smaller positive correction.</figcaption>
 </figure>
 
 Over `1500 -> 2500`, the reference seed fixed-readout write scalar grows by about `+4.06` across the four endpoint/scalar rows. The split is:
@@ -569,10 +609,10 @@ This is not the same mechanism as QK. QK visibly forms a low-rank route map. The
 
 <figure class="paper-figure">
   <img src="assets/figures/reference_write_optimizer_split.svg" alt="Reference write optimizer split">
-  <figcaption><strong>Figure 12. Reference write optimizer split.</strong> In the reference seed and this fixed-readout scalar, the write coupling is momentum-heavy. This is not the same measurement as the later cross-seed aggregate.</figcaption>
+  <figcaption><strong>Figure 13. Reference write optimizer split.</strong> In the reference seed and this fixed-readout scalar, the write coupling is momentum-heavy. This is not the same measurement as the later cross-seed aggregate.</figcaption>
 </figure>
 
-## The Value Code Is Broad
+## Phase 6: The Readout Becomes A Broad Value Code
 
 The write side creates a value-code state, but not a tiny one.
 
@@ -653,9 +693,9 @@ the prediction residual contains a broad value-token identity code
 that is causally used by the answer readout.
 ```
 
-## Cross-Seed Write Validation
+## Phase 7: The Write Role Also Moves Rooms
 
-The write role also repeats across seeds, and the address also moves.
+The write role also repeats across seeds, and the address also moves. This matters because it says the role/address split is not only a QK routing phenomenon.
 
 The selected write/readout paths are not always the same:
 
@@ -680,11 +720,11 @@ Adam momentum / predicted: about 14%
 weight decay / predicted:  about -1.4%
 ```
 
-These numbers are different from the reference-seed fixed scalar in Figure 12 because they measure a different object: selected winner write paths across five seeds, aggregated over their write scalars. The current-vs-momentum split varies by seed and address. That matters. The cross-seed write result should be stated as "AdamW-preconditioned updates carry the useful write growth", not "momentum always dominates every write-side run."
+These numbers are different from the reference-seed fixed scalar in Figure 13 because they measure a different object: selected winner write paths across five seeds, aggregated over their write scalars. The current-vs-momentum split varies by seed and address. That matters. The cross-seed write result should be stated as "AdamW-preconditioned updates carry the useful write growth", not "momentum always dominates every write-side run."
 
 <figure class="paper-figure">
   <img src="assets/figures/cross_seed_qk_write_role_map.svg" alt="Cross-seed QK and write role map">
-  <figcaption><strong>Figure 13. The ghost moves rooms on both sides.</strong> The retrieval role and the write/readout role repeat, while their component addresses vary with seed.</figcaption>
+  <figcaption><strong>Figure 14. The ghost moves rooms on both sides.</strong> The retrieval role and the write/readout role repeat, while their component addresses vary with seed.</figcaption>
 </figure>
 
 ## Methodological Trap: Moving Answer Margins
@@ -801,7 +841,7 @@ Output-space closure is stronger in the same window. For correct-value logit, ro
 
 <figure class="paper-figure">
   <img src="assets/figures/closure_boundary.svg" alt="Closure boundary">
-  <figcaption><strong>Figure 14. Closure boundary.</strong> Route/write scalars are meaningful coordinates, but output-space closure is stronger, and nonlinear path curvature explains part of the remaining gap.</figcaption>
+  <figcaption><strong>Figure 15. Closure boundary.</strong> Route/write scalars are meaningful coordinates, but output-space closure is stronger, and nonlinear path curvature explains part of the remaining gap.</figcaption>
 </figure>
 
 The other closure problem is nonlinear write-side conversion. A first-order endpoint gradient can be badly wrong. The line-integral diagnostic shows that integrating along the path can follow the actual endpoint change much better than a single endpoint linearization, especially for negative answer loss.
@@ -839,7 +879,7 @@ That is the difference between a static circuit map and a developmental account.
 
 <figure class="paper-figure">
   <img src="assets/figures/proof_status_ladder_updated.svg" alt="Proof status ladder">
-  <figcaption><strong>Figure 15. Proof status.</strong> I have strong QK formation evidence, causal value-code readout evidence, and explicit open gaps around the exact write operator and full margin closure.</figcaption>
+  <figcaption><strong>Figure 16. Proof status.</strong> I have strong QK formation evidence, causal value-code readout evidence, and explicit open gaps around the exact write operator and full margin closure.</figcaption>
 </figure>
 
 ## Limitations And Future Tests
@@ -859,7 +899,7 @@ The main limitations are:
 
 The write-side current-vs-momentum variation is not a weakness to hide. It is a finding: the reference-seed fixed write scalar is momentum-heavy, while the cross-seed selected-winner aggregate is mostly Adam current-gradient with a smaller momentum contribution. The stable statement is that AdamW-preconditioned updates carry write growth and the raw SGD-equivalent term is tiny.
 
-The optimizer ablation is still not the final word. It is one seed, one architecture, one training budget, and a finite learning-rate sweep. The current claim is therefore bounded: under the matched seed-7 recipe, AdamW variants learn and form the route, while SGD variants do not. Longer SGD runs, broader schedules, different initialization scales, and cross-seed optimizer ablations remain future tests.
+The optimizer ablation is still not the final word. It is one seed, one architecture, one training budget, and a finite learning-rate sweep. The current claim is therefore bounded: under the matched seed-7 recipe, AdamW variants learn and form the route, while the tested SGD variants do not. Longer SGD runs, broader schedules, different initialization scales, and cross-seed optimizer ablations remain future tests.
 
 Other next experiments are:
 
