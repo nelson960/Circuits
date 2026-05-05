@@ -9,7 +9,7 @@ from typing import Any
 
 import torch
 from torch.nn.utils import clip_grad_norm_
-from torch.optim import AdamW
+from torch.optim import AdamW, SGD
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
@@ -61,12 +61,26 @@ def build_run_context(spec: TrainSpec) -> dict[str, Any]:
     vocab = Vocabulary.from_metadata(metadata["vocabulary"])
     device = require_device(spec.device)
     model = build_model(spec.model, len(vocab.tokens), device)
-    optimizer = AdamW(
-        model.parameters(),
-        lr=spec.optimization.learning_rate,
-        betas=(spec.optimization.beta1, spec.optimization.beta2),
-        weight_decay=spec.optimization.weight_decay,
-    )
+    if spec.optimization.optimizer_type == "adamw":
+        if spec.optimization.beta1 is None or spec.optimization.beta2 is None:
+            raise RuntimeError("AdamW optimizer config is missing beta1/beta2 after validation.")
+        optimizer = AdamW(
+            model.parameters(),
+            lr=spec.optimization.learning_rate,
+            betas=(spec.optimization.beta1, spec.optimization.beta2),
+            weight_decay=spec.optimization.weight_decay,
+        )
+    elif spec.optimization.optimizer_type == "sgd":
+        if spec.optimization.momentum is None:
+            raise RuntimeError("SGD optimizer config is missing momentum after validation.")
+        optimizer = SGD(
+            model.parameters(),
+            lr=spec.optimization.learning_rate,
+            momentum=spec.optimization.momentum,
+            weight_decay=spec.optimization.weight_decay,
+        )
+    else:
+        raise RuntimeError(f"Unsupported optimizer_type after validation: {spec.optimization.optimizer_type}")
     return {
         "metadata": metadata,
         "vocab": vocab,

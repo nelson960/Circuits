@@ -93,6 +93,7 @@ def write_small_train_config(
                 "max_seq_len": 96,
             },
             "optimization": {
+                "optimizer_type": "adamw",
                 "learning_rate": 0.001,
                 "weight_decay": 0.0,
                 "beta1": 0.9,

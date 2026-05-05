@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="980" height="475" viewBox="0 0 980 475" role="img">
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="515" viewBox="0 0 980 515" role="img">
 <defs>
 <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
 <path d="M0,0 L0,6 L9,3 z" fill="#343434" />
@@ -37,19 +37,23 @@
 <text x="445.0" y="308.0" class="small" text-anchor="start">supported</text>
 <text x="640.0" y="308.0" class="small" text-anchor="start">contextual prediction-position residual coupling</text>
 <rect x="55.0" y="322.0" width="840.0" height="31.0" class="ok" />
-<text x="73.0" y="344.0" class="label" text-anchor="start">Write optimizer cause</text>
-<text x="445.0" y="344.0" class="small" text-anchor="start">supported for AdamW</text>
-<text x="640.0" y="344.0" class="small" text-anchor="start">raw SGD-eq tiny, AdamW-preconditioned growth</text>
-<rect x="55.0" y="358.0" width="840.0" height="31.0" class="warn" />
-<text x="73.0" y="380.0" class="label" text-anchor="start">Full answer-margin closure</text>
-<text x="445.0" y="380.0" class="small" text-anchor="start">partial</text>
-<text x="640.0" y="380.0" class="small" text-anchor="start">output closure stronger than route closure</text>
-<rect x="55.0" y="394.0" width="840.0" height="31.0" class="open" />
-<text x="73.0" y="416.0" class="label" text-anchor="start">Plain-SGD sufficiency</text>
-<text x="445.0" y="416.0" class="small" text-anchor="start">open</text>
-<text x="640.0" y="416.0" class="small" text-anchor="start">SGD-only training not tested</text>
-<rect x="55.0" y="430.0" width="840.0" height="31.0" class="open" />
-<text x="73.0" y="452.0" class="label" text-anchor="start">Scaling to LLMs</text>
-<text x="445.0" y="452.0" class="small" text-anchor="start">open</text>
-<text x="640.0" y="452.0" class="small" text-anchor="start">requires candidate filtering</text>
+<text x="73.0" y="344.0" class="label" text-anchor="start">Prediction value code</text>
+<text x="445.0" y="344.0" class="small" text-anchor="start">supported and causal</text>
+<text x="640.0" y="344.0" class="small" text-anchor="start">broad value identity; removal hurts</text>
+<rect x="55.0" y="358.0" width="840.0" height="31.0" class="ok" />
+<text x="73.0" y="380.0" class="label" text-anchor="start">Write optimizer cause</text>
+<text x="445.0" y="380.0" class="small" text-anchor="start">supported for AdamW</text>
+<text x="640.0" y="380.0" class="small" text-anchor="start">raw SGD-eq tiny, AdamW-preconditioned growth</text>
+<rect x="55.0" y="394.0" width="840.0" height="31.0" class="warn" />
+<text x="73.0" y="416.0" class="label" text-anchor="start">Full answer-margin closure</text>
+<text x="445.0" y="416.0" class="small" text-anchor="start">partial</text>
+<text x="640.0" y="416.0" class="small" text-anchor="start">output closure stronger than route closure</text>
+<rect x="55.0" y="430.0" width="840.0" height="31.0" class="warn" />
+<text x="73.0" y="452.0" class="label" text-anchor="start">Matched SGD ablation</text>
+<text x="445.0" y="452.0" class="small" text-anchor="start">supported in seed 7</text>
+<text x="640.0" y="452.0" class="small" text-anchor="start">SGD LR sweep fails; broader SGD open</text>
+<rect x="55.0" y="466.0" width="840.0" height="31.0" class="open" />
+<text x="73.0" y="488.0" class="label" text-anchor="start">Scaling to LLMs</text>
+<text x="445.0" y="488.0" class="small" text-anchor="start">open</text>
+<text x="640.0" y="488.0" class="small" text-anchor="start">requires candidate filtering</text>
 </svg>

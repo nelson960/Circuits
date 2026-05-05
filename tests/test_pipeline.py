@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import shutil
 
+import pytest
 import torch
 from torch.utils.data import DataLoader
 
@@ -1486,6 +1487,7 @@ def test_constant_schedule_accepts_explicit_null_optional_decay_fields(
 
 def test_cosine_decay_learning_rate_schedule() -> None:
     optimization = OptimizationSpec(
+        optimizer_type="adamw",
         learning_rate=4e-4,
         weight_decay=0.01,
         beta1=0.9,
@@ -1505,6 +1507,115 @@ def test_cosine_decay_learning_rate_schedule() -> None:
     midpoint_lr = _compute_learning_rate(optimization, 12000)
     assert 4e-5 < midpoint_lr < 4e-4
     assert torch.isclose(torch.tensor(_compute_learning_rate(optimization, 16000)), torch.tensor(4e-5))
+
+
+def test_optimizer_config_requires_explicit_optimizer_type() -> None:
+    with pytest.raises(ValueError, match="optimizer_type"):
+        OptimizationSpec(
+            optimizer_type="adam",
+            learning_rate=4e-4,
+            weight_decay=0.01,
+            grad_clip_norm=1.0,
+            warmup_steps=0,
+            schedule=LearningRateScheduleSpec(
+                kind="constant",
+                decay_start_step=None,
+                decay_end_step=None,
+                min_learning_rate=None,
+            ),
+            beta1=0.9,
+            beta2=0.95,
+        )
+
+
+def test_adamw_allows_zero_beta1_and_rejects_sgd_momentum() -> None:
+    optimization = OptimizationSpec(
+        optimizer_type="adamw",
+        learning_rate=4e-4,
+        weight_decay=0.01,
+        grad_clip_norm=1.0,
+        warmup_steps=0,
+        schedule=LearningRateScheduleSpec(
+            kind="constant",
+            decay_start_step=None,
+            decay_end_step=None,
+            min_learning_rate=None,
+        ),
+        beta1=0.0,
+        beta2=0.95,
+    )
+
+    assert optimization.beta1 == 0.0
+
+    with pytest.raises(ValueError, match="must not set SGD momentum"):
+        OptimizationSpec(
+            optimizer_type="adamw",
+            learning_rate=4e-4,
+            weight_decay=0.01,
+            grad_clip_norm=1.0,
+            warmup_steps=0,
+            schedule=LearningRateScheduleSpec(
+                kind="constant",
+                decay_start_step=None,
+                decay_end_step=None,
+                min_learning_rate=None,
+            ),
+            beta1=0.9,
+            beta2=0.95,
+            momentum=0.9,
+        )
+
+
+def test_sgd_requires_explicit_momentum_and_rejects_adam_betas() -> None:
+    optimization = OptimizationSpec(
+        optimizer_type="sgd",
+        learning_rate=4e-4,
+        weight_decay=0.01,
+        grad_clip_norm=1.0,
+        warmup_steps=0,
+        schedule=LearningRateScheduleSpec(
+            kind="constant",
+            decay_start_step=None,
+            decay_end_step=None,
+            min_learning_rate=None,
+        ),
+        momentum=0.0,
+    )
+
+    assert optimization.momentum == 0.0
+
+    with pytest.raises(ValueError, match="requires explicit momentum"):
+        OptimizationSpec(
+            optimizer_type="sgd",
+            learning_rate=4e-4,
+            weight_decay=0.01,
+            grad_clip_norm=1.0,
+            warmup_steps=0,
+            schedule=LearningRateScheduleSpec(
+                kind="constant",
+                decay_start_step=None,
+                decay_end_step=None,
+                min_learning_rate=None,
+            ),
+        )
+
+    with pytest.raises(ValueError, match="must not set Adam beta1/beta2"):
+        OptimizationSpec(
+            optimizer_type="sgd",
+            learning_rate=4e-4,
+            weight_decay=0.01,
+            grad_clip_norm=1.0,
+            warmup_steps=0,
+            schedule=LearningRateScheduleSpec(
+                kind="constant",
+                decay_start_step=None,
+                decay_end_step=None,
+                min_learning_rate=None,
+            ),
+            beta1=0.9,
+            beta2=0.95,
+            momentum=0.9,
+        )
 
 
 def test_evaluate_split_reports_token_role_metrics(tmp_path: Path, benchmark_config_path: Path) -> None:

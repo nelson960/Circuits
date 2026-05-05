@@ -26,7 +26,9 @@ training repeatedly builds a support-value retrieval role;
 the role repeats across seeds, while the named head address changes;
 in the reference seed, the QK side is visible as low-rank L2H1 W_QK formation;
 exact AdamW update accounting explains the route growth;
-the instantaneous raw-gradient, SGD-equivalent update is tiny.
+the instantaneous raw-gradient, SGD-equivalent update is tiny;
+a matched seed-7 optimizer ablation learns with AdamW variants but not with
+the tested SGD/SGD+momentum learning-rate sweep.
 ```
 
 The write side is not a clean static `W_OV` theorem. The current evidence supports a different object:
@@ -38,7 +40,7 @@ that downstream readout directions can use.
 
 Across additional seeds, both the QK retrieval role and the write/readout role repeat at the functional level while their component addresses move. The ghost moves rooms.
 
-I am deliberately more precise than "full circuit formation is solved." I give a strong QK formation account, a supported contextual write/readout account, and explicit limits around full answer-margin closure, optimizer ablations, and scaling.
+I am deliberately more precise than "full circuit formation is solved." I give a strong QK formation account, a supported contextual write/readout account, a bounded optimizer-ablation result, and explicit limits around full answer-margin closure, broader optimizer sweeps, and scaling.
 
 This is a detailed mechanistic account for one task family. It is not a theorem about all transformers.
 
@@ -144,6 +146,7 @@ That guide documents the analysis stack actually used in the current paper:
 - cross-seed validation
 - contextual write/readout subspace validation
 - branch-aware answer-margin diagnostics
+- matched AdamW-vs-SGD optimizer ablations
 
 ## Main analysis entry points
 
@@ -192,7 +195,7 @@ It does not yet establish:
 
 - full answer-margin closure from a small route family
 - a clean static `W_OV` theorem analogous to the QK story
-- that plain SGD without AdamW would form the same route
+- that plain SGD could never form the same route under broader schedules or longer budgets
 - that the same method scales directly to large language models
 
 ## Development rule

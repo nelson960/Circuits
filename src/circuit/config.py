@@ -242,21 +242,37 @@ class LearningRateScheduleSpec:
 
 @dataclass(frozen=True)
 class OptimizationSpec:
+    optimizer_type: str
     learning_rate: float
     weight_decay: float
-    beta1: float
-    beta2: float
     grad_clip_norm: float
     warmup_steps: int
     schedule: LearningRateScheduleSpec
+    beta1: float | None = None
+    beta2: float | None = None
+    momentum: float | None = None
 
     def __post_init__(self) -> None:
+        if self.optimizer_type not in {"adamw", "sgd"}:
+            raise ValueError("optimizer_type must be one of ['adamw', 'sgd'].")
         if self.learning_rate <= 0:
             raise ValueError("learning_rate must be positive.")
         if self.weight_decay < 0:
             raise ValueError("weight_decay must be non-negative.")
-        if not 0.0 < self.beta1 < 1.0 or not 0.0 < self.beta2 < 1.0:
-            raise ValueError("Adam betas must be in (0, 1).")
+        if self.optimizer_type == "adamw":
+            if self.beta1 is None or self.beta2 is None:
+                raise ValueError("AdamW optimization requires explicit beta1 and beta2.")
+            if self.momentum is not None:
+                raise ValueError("AdamW optimization must not set SGD momentum.")
+            if not 0.0 <= self.beta1 < 1.0 or not 0.0 <= self.beta2 < 1.0:
+                raise ValueError("AdamW betas must be in [0, 1).")
+        if self.optimizer_type == "sgd":
+            if self.beta1 is not None or self.beta2 is not None:
+                raise ValueError("SGD optimization must not set Adam beta1/beta2.")
+            if self.momentum is None:
+                raise ValueError("SGD optimization requires explicit momentum; use 0.0 for plain SGD.")
+            if self.momentum < 0.0:
+                raise ValueError("SGD momentum must be non-negative.")
         if self.grad_clip_norm <= 0:
             raise ValueError("grad_clip_norm must be positive.")
         if self.warmup_steps < 0:
@@ -275,16 +291,18 @@ class OptimizationSpec:
     def from_dict(cls, data: dict[str, Any], context: str) -> "OptimizationSpec":
         payload = dict(data)
         instance = cls(
+            optimizer_type=str(_pop_required(payload, "optimizer_type", context)),
             learning_rate=float(_pop_required(payload, "learning_rate", context)),
             weight_decay=float(_pop_required(payload, "weight_decay", context)),
-            beta1=float(_pop_required(payload, "beta1", context)),
-            beta2=float(_pop_required(payload, "beta2", context)),
             grad_clip_norm=float(_pop_required(payload, "grad_clip_norm", context)),
             warmup_steps=int(_pop_required(payload, "warmup_steps", context)),
             schedule=LearningRateScheduleSpec.from_dict(
                 _pop_required(payload, "schedule", context),
                 f"{context}.schedule",
             ),
+            beta1=_pop_optional_float(payload, "beta1"),
+            beta2=_pop_optional_float(payload, "beta2"),
+            momentum=_pop_optional_float(payload, "momentum"),
         )
         _ensure_empty(payload, context)
         return instance

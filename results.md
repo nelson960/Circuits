@@ -8461,6 +8461,147 @@ Raw moving answer margin remains branch-sensitive.
 Full answer-margin closure by a small causal route set remains open.
 ```
 
+## 2026-05-05 Update: Branch/Fixed-Scalar Closure Consolidation
+
+This run consolidated the moving-margin warning on the main `1500 -> 2500`
+formation window. The goal was not to find a new circuit component. The goal was
+to check whether the usual moving answer margin is a reliable scalar for
+formation closure.
+
+Artifacts:
+
+```text
+artifacts/runs/symbolic_kv_reference_formation/analysis/answer_scalar_residual_diagnosis/branch_fixed_scalar_closure_1500_2500/
+artifacts/runs/symbolic_kv_reference_formation/analysis/route_to_scalar_closure/branch_fixed_scalar_closure_1500_2500/
+artifacts/runs/symbolic_kv_reference_formation/analysis/output_route_closure/branch_fixed_scalar_closure_1500_2500/
+artifacts/runs/symbolic_kv_reference_formation/analysis/answer_margin_branch_decomposition/branch_fixed_scalar_closure_1500_2500/
+```
+
+### What Changed Relative To The Older Branch Audit
+
+The older branch-aware result used a larger row set and showed that branch-aware
+correction can strongly improve switch-row closure. This new run uses the main
+`1500 -> 2500` checkpoint intervals and the same `support_value` / `query_key`
+pairs used in the output-route closure story:
+
+```text
+observations: 512
+checkpoint steps: 1500, 1750, 2000, 2250, 2500
+pair types: support_value, query_key
+```
+
+So the numbers are not interchangeable with the older `6400`-row audit. They are
+a matched audit for the paper's main formation window.
+
+### Competitor Branch Switching Is A Real Measurement Problem
+
+In this window, the best wrong-token competitor changes often:
+
+| bucket | observations | competitor switches | switch fraction |
+|---|---:|---:|---:|
+| `all` | `512` | `312` | `0.609` |
+| `competitor_switch` | `312` | `312` | `1.000` |
+| `same_competitor` | `200` | `0` | `0.000` |
+
+This is much stronger than a small nuisance effect. In this formation window,
+most moving-margin rows change their wrong-token branch.
+
+The branch correction also carries substantial energy:
+
+| bucket | target-branch correction energy / moving-margin energy | source-branch correction energy / moving-margin energy |
+|---|---:|---:|
+| `all` | `0.550` | `0.243` |
+| `competitor_switch` | `0.716` | `0.317` |
+| `same_competitor` | `0.000` | `0.000` |
+
+For switch rows, about 72% of moving-margin energy is tied to the target-branch
+correction term. That means a moving-margin line integral can fail because the
+quantity being explained changed branches, not because the internal route is
+absent.
+
+### Output-Space Closure Confirms The Scalar Hierarchy
+
+The output-route closure result gives the cleanest scalar comparison:
+
+| scalar | observations | R squared | mean abs residual |
+|---|---:|---:|---:|
+| `correct_value_logit` | `512` | `0.868` | `0.998` |
+| `fixed_source_competitor_margin` | `512` | `0.639` | `1.420` |
+| `fixed_target_competitor_margin` | `512` | `0.558` | `1.301` |
+| `moving_answer_margin` | `512` | `0.407` | `1.392` |
+| `negative_answer_loss` | `512` | `0.183` | `0.909` |
+
+On competitor-switch rows specifically:
+
+| scalar | observations | R squared | mean abs residual |
+|---|---:|---:|---:|
+| `correct_value_logit` | `312` | `0.894` | `1.026` |
+| `fixed_source_competitor_margin` | `312` | `0.671` | `1.461` |
+| `fixed_target_competitor_margin` | `312` | `0.608` | `1.406` |
+| `moving_answer_margin` | `312` | `0.416` | `1.607` |
+| `negative_answer_loss` | `312` | `0.221` | `1.058` |
+
+The scalar hierarchy is now very clear:
+
+```text
+cleanest:
+  correct_value_logit
+
+good fixed-branch proof targets:
+  fixed_source_competitor_margin
+  fixed_target_competitor_margin
+
+branch-sensitive:
+  moving_answer_margin
+
+harder nonlinear objective:
+  negative_answer_loss
+```
+
+### Branch-Aware Moving-Margin Closure
+
+The branch-aware comparison says:
+
+| bucket | direct moving R^2 | source-fixed + branch R^2 | target-fixed + branch R^2 |
+|---|---:|---:|---:|
+| `all` | `0.407` | `0.418` | `0.489` |
+| `competitor_switch` | `0.416` | `0.506` | `0.517` |
+| `same_competitor` | `0.596` | `0.596` | `0.596` |
+
+When the competitor does not switch, all three measurements collapse to the same
+quantity. When the competitor switches, fixed-branch plus exact branch correction
+is cleaner than direct moving-margin closure.
+
+### Paper-Level Interpretation
+
+This supports a methodological claim, not just a limitation:
+
+```text
+Moving answer margin is often the first scalar people reach for, but it is not
+always a stable scalar during training.
+
+If the best wrong-token branch changes, the scalar being explained changes.
+Fixed-branch and output-space scalars are better proof targets for formation
+audits.
+```
+
+This closes gap-filler experiment A:
+
+```text
+A. consolidate branch-aware closure on the existing reference run
+```
+
+It does not close the optimizer-necessity gap. The remaining necessary gap-filler
+is still the optimizer ablation:
+
+```text
+AdamW baseline
+AdamW beta1 = 0
+AdamW altered beta2
+SGD + momentum
+plain SGD
+```
+
 ### Current Paper-Level Claim After This Update
 
 The paper can now say:
@@ -8485,3 +8626,520 @@ Closure:
   output-space scalars are stronger;
   full answer-margin sufficiency is still open.
 ```
+
+## 2026-05-05 Update: Optimizer Ablation Pilot And SGD LR Sweep
+
+This run addresses the largest optimizer-level gap in the paper draft:
+
+```text
+Does AdamW merely explain the AdamW-trained trajectory,
+or is AdamW-style adaptive optimization actually important for forming the lookup role?
+```
+
+The result is not a theorem that SGD can never learn symbolic KV lookup. It is a
+matched-budget optimizer ablation:
+
+```text
+same model
+same seed
+same dataset
+same 6000-step budget
+same checkpoint/evaluation schedule
+AdamW variants versus SGD variants
+```
+
+### Artifacts
+
+Pilot optimizer-ablation runs:
+
+```text
+artifacts/runs/symbolic_kv_optimizer_ablation/adamw_baseline/seed_0007/
+artifacts/runs/symbolic_kv_optimizer_ablation/adamw_beta1_0/seed_0007/
+artifacts/runs/symbolic_kv_optimizer_ablation/adamw_beta2_0999/seed_0007/
+artifacts/runs/symbolic_kv_optimizer_ablation/sgd_momentum_09/seed_0007/
+artifacts/runs/symbolic_kv_optimizer_ablation/sgd_plain/seed_0007/
+```
+
+SGD learning-rate sweep:
+
+```text
+artifacts/runs/symbolic_kv_optimizer_ablation/sgd_momentum_09_lr_0p00003/seed_0007/
+artifacts/runs/symbolic_kv_optimizer_ablation/sgd_momentum_09_lr_0p00010/seed_0007/
+artifacts/runs/symbolic_kv_optimizer_ablation/sgd_momentum_09_lr_0p00030/seed_0007/
+artifacts/runs/symbolic_kv_optimizer_ablation/sgd_momentum_09_lr_0p00100/seed_0007/
+artifacts/runs/symbolic_kv_optimizer_ablation/sgd_momentum_09_lr_0p00300/seed_0007/
+artifacts/runs/symbolic_kv_optimizer_ablation/sgd_plain_lr_0p00001/seed_0007/
+artifacts/runs/symbolic_kv_optimizer_ablation/sgd_plain_lr_0p00003/seed_0007/
+artifacts/runs/symbolic_kv_optimizer_ablation/sgd_plain_lr_0p00010/seed_0007/
+artifacts/runs/symbolic_kv_optimizer_ablation/sgd_plain_lr_0p00030/seed_0007/
+artifacts/runs/symbolic_kv_optimizer_ablation/sgd_plain_lr_0p00100/seed_0007/
+```
+
+QK/OV progress reports:
+
+```text
+artifacts/runs/symbolic_kv_optimizer_ablation/*/seed_0007/analysis/ov_write_progress/all_heads_0750_6000_optimizer_ablation/
+artifacts/runs/symbolic_kv_optimizer_ablation/*/seed_0007/analysis/ov_write_progress/all_heads_0750_6000_sgd_lr_sweep/
+```
+
+Each completed QK/OV progress report has `3072` checkpoint rows for the LR
+sweep runs.
+
+### Pilot Result: AdamW Variants Learn, Matched SGD Does Not
+
+Final step `6000` behavior:
+
+| optimizer variant | validation answer accuracy | heldout answer accuracy | top QK head | top QK separation | support attention mass |
+|---|---:|---:|---|---:|---:|
+| `adamw_baseline` | `0.976` | `0.702` | `L2H1` | `8.029` | `0.893` |
+| `adamw_beta1_0` | `0.984` | `0.546` | `L1H2` | `9.259` | `0.941` |
+| `adamw_beta2_0999` | `0.985` | `0.608` | `L1H2` | `7.330` | `0.920` |
+| `sgd_momentum_09` | `0.002` | `0.001` | `L1H3` | `0.057` | `0.038` |
+| `sgd_plain` | `0.000` | `0.000` | `L1H3` | `0.109` | `0.038` |
+
+The important surprise is `adamw_beta1_0`.
+
+Removing AdamW's first-moment momentum does not prevent the lookup role from
+forming. The role still forms strongly, but the winning head moves from `L2H1`
+to `L1H2`.
+
+So the result is not:
+
+```text
+beta1 momentum is strictly necessary.
+```
+
+The result is:
+
+```text
+AdamW-style adaptive/preconditioned optimization forms the lookup role here;
+matched SGD and SGD+momentum do not.
+```
+
+### SGD Learning-Rate Sweep Result
+
+The LR sweep tested whether SGD failed only because the baseline learning rate
+was poorly chosen.
+
+Final and best observed behavior:
+
+| SGD variant | learning rate | best validation answer accuracy | best heldout answer accuracy | final validation loss |
+|---|---:|---:|---:|---:|
+| `sgd_momentum_09` | `0.00003` | `0.0000` | `0.0000` | `39.876` |
+| `sgd_momentum_09` | `0.00010` | `0.0000` | `0.0000` | `5.369` |
+| `sgd_momentum_09` | `0.00030` | `0.0016` | `0.0000` | `2.763` |
+| `sgd_momentum_09` | `0.00100` | `0.0060` | `0.0040` | `2.485` |
+| `sgd_momentum_09` | `0.00300` | `0.0085` | `0.0051` | `2.325` |
+| `sgd_plain` | `0.00001` | `0.0000` | `0.0000` | `88.512` |
+| `sgd_plain` | `0.00003` | `0.0000` | `0.0000` | `85.751` |
+| `sgd_plain` | `0.00010` | `0.0000` | `0.0000` | `75.417` |
+| `sgd_plain` | `0.00030` | `0.0000` | `0.0000` | `39.831` |
+| `sgd_plain` | `0.00100` | `0.0000` | `0.0000` | `5.356` |
+
+The best SGD run is `sgd_momentum_09` at learning rate `0.003`, but its answer
+accuracy is still below `1%`.
+
+### SGD Learns Some Surface Structure But Not Lookup
+
+The highest-learning-rate SGD+momentum run is not completely inert:
+
+| metric | `sgd_momentum_09`, lr `0.003` |
+|---|---:|
+| validation token accuracy | `0.340` |
+| validation read-key accuracy | `0.349` |
+| validation write-key accuracy | `0.282` |
+| validation answer accuracy | `0.0085` |
+
+So SGD begins to model some syntax/key-position regularities, but it does not
+learn the value lookup algorithm.
+
+This distinction matters. The failure is not merely:
+
+```text
+SGD produced random outputs.
+```
+
+It is more specific:
+
+```text
+SGD can move into shallow task structure under this budget,
+but it does not crystallize the support-value retrieval role.
+```
+
+### QK Route Does Not Form Under SGD
+
+The QK/OV progress reports show that the support-value route itself fails to
+grow under every SGD sweep run.
+
+The best QK separation observed across the SGD LR sweep is only about:
+
+```text
+max QK separation:          0.118
+support attention mass:     0.039
+probe answer accuracy:      0.000
+```
+
+This maximum occurs at step `750`, not after a clean training birth window. That
+looks like initialization-level noise, not learned route formation.
+
+By contrast, AdamW variants at step `6000` show:
+
+```text
+AdamW baseline:
+  QK separation:          8.029
+  support attention mass: 0.893
+
+AdamW beta1 = 0:
+  QK separation:          9.259
+  support attention mass: 0.941
+
+AdamW beta2 = 0.999:
+  QK separation:          7.330
+  support attention mass: 0.920
+```
+
+### Paper-Level Interpretation
+
+This closes the main optimizer-ablation gap in a bounded way:
+
+```text
+In the matched 6000-step seed-7 ablation, AdamW variants learn the symbolic KV
+lookup role and form a strong support-value QK route.
+
+Across a reasonable SGD learning-rate sweep, SGD and SGD+momentum do not learn
+the answer behavior and do not form the support-value route.
+```
+
+The strongest honest claim is:
+
+```text
+AdamW-style adaptive/preconditioned optimization is important for forming this
+lookup role under the studied training budget and recipe.
+```
+
+The result does not prove:
+
+```text
+SGD can never learn the same task with more steps, other schedules, larger
+learning-rate sweeps, different initialization scales, or tuned regularization.
+```
+
+But it does rule out the simplest reviewer objection:
+
+```text
+Maybe the AdamW story is irrelevant because plain SGD under the same recipe
+would form the same circuit.
+```
+
+Under the tested matched recipe and LR sweep, it does not.
+
+### Updated Gap Status
+
+Closed or substantially reduced:
+
+```text
+A. branch/fixed-scalar closure on the reference run
+D. optimizer ablation: AdamW variants versus SGD variants under matched budget
+```
+
+Still optional / future:
+
+```text
+B. negative-control route attribution
+C. route remove/restore causal sufficiency
+E. harder-task or larger-scale generalization
+```
+
+For the paper, this should replace the older limitation row:
+
+```text
+plain SGD-vs-AdamW ablation: not run
+```
+
+with:
+
+```text
+matched-budget SGD-vs-AdamW ablation: run for seed 7;
+AdamW variants learn and form the role;
+SGD LR sweep does not.
+```
+
+## 2026-05-05 Update: Prediction-Position Value Code Is Causal And Broad
+
+This update addresses the next concrete gap in the OV/write-side story.
+
+The earlier write-side evidence showed that the useful write is not a clean
+standalone `W_OV` singular-vector object. It is a contextual residual-state
+conversion: L0H0 perturbs the prediction state, and downstream components turn
+that perturbation into answer evidence.
+
+The missing question was:
+
+```text
+what is the residual object that the downstream readout actually uses?
+```
+
+The new answer is:
+
+```text
+the prediction-position residual contains a value-token identity code;
+that code becomes behaviorally useful in the same 1500 -> 1750 formation band;
+and removing it causally damages answer behavior.
+```
+
+This still does not make the write side a clean low-rank OV story. The value
+code is broad and high-dimensional.
+
+### Artifacts
+
+Value-code subspace trajectory:
+
+```text
+artifacts/runs/symbolic_kv_reference_formation/analysis/value_code_subspace/prediction_answer_value_0750_3500/
+```
+
+Value-code causal interventions:
+
+```text
+artifacts/runs/symbolic_kv_reference_formation/analysis/value_code_causal_intervention/embedding_value_identity_prediction_layer2_remove_rank16_1500_3500/
+artifacts/runs/symbolic_kv_reference_formation/analysis/value_code_causal_intervention/embedding_key_identity_prediction_layer2_remove_rank7_1500_3500/
+artifacts/runs/symbolic_kv_reference_formation/analysis/value_code_causal_intervention/embedding_value_identity_prediction_layer2_remove_rank7_1500_3500/
+artifacts/runs/symbolic_kv_reference_formation/analysis/value_code_causal_intervention/embedding_value_identity_prediction_layer2_keep_rank16_1500_3500/
+artifacts/runs/symbolic_kv_reference_formation/analysis/value_code_causal_intervention/embedding_value_identity_prediction_layer2_keep_rank32_2000_3500/
+artifacts/runs/symbolic_kv_reference_formation/analysis/value_code_causal_intervention/embedding_value_identity_prediction_layer2_keep_rank64_2000_3500/
+artifacts/runs/symbolic_kv_reference_formation/analysis/value_code_causal_intervention/embedding_value_identity_prediction_layer2_keep_rank96_2000_3500/
+artifacts/runs/symbolic_kv_reference_formation/analysis/value_code_causal_intervention/embedding_value_identity_prediction_layer2_keep_rank127_2000_3500/
+```
+
+### Value Code Turns On At The Prediction Position
+
+The value-code report tracks clean residual vectors at `prediction` and
+`support_value` positions, grouped by `answer_value` and `support_value`.
+
+At the prediction position, the final readout margin is negative before the
+write-side formation window and becomes strongly positive immediately after it:
+
+| step | final-norm prediction value accuracy | final-norm prediction value margin |
+|---:|---:|---:|
+| `750` | `0.0196` | `-0.844` |
+| `1000` | `0.0131` | `-0.797` |
+| `1250` | `0.0131` | `-0.724` |
+| `1500` | `0.0719` | `-0.752` |
+| `1750` | `0.6078` | `0.666` |
+| `2000` | `0.6797` | `2.730` |
+| `2500` | `0.6471` | `3.031` |
+| `3000` | `0.7190` | `3.898` |
+| `3500` | `0.7647` | `5.264` |
+
+This is the important transition:
+
+```text
+before 1500: prediction state does not read out the answer value
+after 1750:  prediction state carries answer-value evidence
+```
+
+That matches the previously observed write-side formation window.
+
+The support-value position already contains value identity early. That by
+itself is not the learned lookup algorithm. The learned part is moving usable
+value evidence into the prediction position.
+
+### Removing Value Identity Hurts The Mature Circuit
+
+At `layer_2_post_mlp / prediction`, removing the rank-16
+`embedding_value_identity` subspace produces a large causal effect on
+`validation_iid` after the value code turns on:
+
+| step | baseline margin | intervened margin | margin drop | baseline acc | intervened acc | acc drop |
+|---:|---:|---:|---:|---:|---:|---:|
+| `1500` | `-0.752` | `-0.921` | `0.169` | `0.0719` | `0.0261` | `0.0458` |
+| `1750` | `0.666` | `-1.157` | `1.822` | `0.6078` | `0.2092` | `0.3987` |
+| `2000` | `2.730` | `-1.130` | `3.859` | `0.6797` | `0.2941` | `0.3856` |
+| `2500` | `3.031` | `-0.634` | `3.666` | `0.6471` | `0.3595` | `0.2876` |
+| `3000` | `3.898` | `-0.263` | `4.161` | `0.7190` | `0.4183` | `0.3007` |
+| `3500` | `5.264` | `0.297` | `4.967` | `0.7647` | `0.4771` | `0.2876` |
+
+So the prediction-position value-code subspace is not merely readable. It is
+causally used by the answer computation.
+
+### Rank-Matched Key Control Is Weaker
+
+The `embedding_key_identity` subspace has centered rank `7`, so the fair
+rank-matched control is value rank `7` versus key rank `7`.
+
+On `validation_iid`:
+
+| step | value rank-7 margin drop | key rank-7 margin drop | value rank-7 acc drop | key rank-7 acc drop |
+|---:|---:|---:|---:|---:|
+| `1750` | `0.861` | `0.788` | `0.183` | `0.157` |
+| `2000` | `1.739` | `0.871` | `0.137` | `0.0719` |
+| `2500` | `1.705` | `0.635` | `0.0980` | `0.0131` |
+| `3000` | `1.808` | `0.718` | `0.111` | `0.0523` |
+| `3500` | `2.294` | `0.593` | `0.0850` | `0.0000` |
+
+The key subspace can perturb margins, especially early, but the mature answer
+behavior depends much more specifically on value identity.
+
+### Low-Rank Value Identity Is Not Sufficient
+
+Keeping only rank-16 value identity at `layer_2_post_mlp / prediction` is not
+enough. On `validation_iid` at step `3500`:
+
+```text
+baseline:      margin  5.264, accuracy 0.765
+keep rank 16: margin -4.248, accuracy 0.451
+```
+
+This rules out a too-clean story:
+
+```text
+answer behavior = one small value-code subspace
+```
+
+The rank sweep shows the value code is broad:
+
+| kept value rank | step-3500 validation margin | step-3500 validation accuracy |
+|---:|---:|---:|
+| `16` | `-4.248` | `0.451` |
+| `32` | `5.894` | `0.654` |
+| `64` | `9.548` | `0.732` |
+| `96` | `8.039` | `0.719` |
+| `127` | `5.707` | `0.758` |
+
+At rank `127`, keeping only the value-identity subspace almost preserves
+`validation_iid` behavior:
+
+```text
+baseline:      margin 5.264, accuracy 0.7647
+keep rank127: margin 5.707, accuracy 0.7582
+```
+
+The same near-sufficiency appears at step `2000`:
+
+```text
+baseline:      margin 2.730, accuracy 0.6797
+keep rank127: margin 2.825, accuracy 0.6667
+```
+
+This means the write/readout side is not low-rank in the same way QK is.
+
+The QK side forms a compact pointer. The write/readout side forms a broad
+value-token identity code at the prediction position.
+
+### Split Boundary
+
+The near-sufficiency result is strongest on `validation_iid` and
+`counterfactual`.
+
+At step `3500`, rank-127 keep gives:
+
+| split | baseline acc | keep-rank127 acc | baseline margin | keep-rank127 margin |
+|---|---:|---:|---:|---:|
+| `validation_iid` | `0.7647` | `0.7582` | `5.264` | `5.707` |
+| `counterfactual` | `0.7857` | `0.7792` | `5.587` | `6.125` |
+| `heldout_pairs` | `0.2288` | `0.2288` | `-6.297` | `-9.511` |
+| `structural_ood` | `0.1659` | `0.1475` | `-3.532` | `-7.598` |
+
+So the current claim should not be generalized to all splits.
+
+The mature IID/counterfactual circuit uses a broad value-code subspace, but the
+same intervention does not close heldout-pair or structural-OOD behavior.
+
+### Updated Full-Circuit Interpretation
+
+The current best circuit-level picture is:
+
+```text
+1. contextual support states exist at earlier value positions
+2. QK routing selects the support-value position
+3. L0H0 and downstream write components perturb the prediction residual
+4. the prediction residual becomes aligned with broad value-token identity geometry
+5. the tied embedding/unembedding readout turns that value identity into the correct value logit
+```
+
+This is now stronger than the earlier statement:
+
+```text
+L0H0 writes useful information into the prediction residual
+```
+
+The more precise version is:
+
+```text
+the write side creates a prediction-position value-code state.
+That state is broad in the embedding-value identity geometry.
+Removing it hurts behavior; keeping nearly all of it almost preserves IID behavior.
+```
+
+### What This Closes
+
+Closed or substantially reduced:
+
+```text
+exact nature of the downstream readout object:
+  not just "useful residual information";
+  it is value-token identity geometry at the prediction position.
+
+causal status of that object:
+  value identity removal damages answer behavior;
+  rank-matched key identity is weaker.
+
+low-rank OV hypothesis:
+  rejected for the write/readout side;
+  the value-code object is broad/high-dimensional.
+```
+
+### What Remains Open
+
+Still not closed:
+
+```text
+closed-form operator from support-value residual state to prediction value-code state
+```
+
+The existing evidence identifies the component chain and the causal residual
+object, but it does not give a simple algebraic theorem of the form:
+
+```text
+component outputs implement exactly this matrix map from V_i at support to V_i at prediction
+```
+
+Also still open:
+
+```text
+neuron-level decomposition of the write/readout side
+```
+
+The current evidence points away from a clean neuron-level story and toward a
+broad residual subspace. That should be stated as a limitation/future-work
+boundary, not hidden.
+
+### Paper-Level Status After This Update
+
+The paper can now make the following stronger, bounded claim:
+
+```text
+In the reference run, the full lookup circuit decomposes into a compact QK
+pointer and a broad value-code write/readout state.
+
+The QK side identifies where to read. The write side converts that read into a
+prediction-position residual state whose value-token identity geometry is
+causally used by the final answer logit.
+```
+
+This is not yet a Neel-Nanda-style closed-form algorithm in a named analytic
+basis like Fourier modes. But it is a substantially deeper circuit explanation
+than component ablation:
+
+```text
+role scalar
+weight-space route birth
+optimizer-state attribution
+cross-seed role/address validation
+component/residual/write-chain evidence
+causal value-code identification
+branch-aware scalar boundary
+optimizer ablation
+```
+
+That is the current proof boundary.

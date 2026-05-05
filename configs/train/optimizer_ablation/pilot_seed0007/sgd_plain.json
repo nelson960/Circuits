@@ -1,11 +1,11 @@
 {
-  "run_name": "symbolic_kv_reference_formation",
+  "run_name": "symbolic_kv_optimizer_ablation_sgd_plain_seed_0007",
   "seed": 7,
   "device": "mps",
   "benchmark_dir": "data/generated/symbolic_kv_stream_learnability",
-  "output_dir": "artifacts/runs/symbolic_kv_reference_formation",
+  "output_dir": "artifacts/runs/symbolic_kv_optimizer_ablation/sgd_plain/seed_0007",
   "batch_size": 128,
-  "num_steps": 16000,
+  "num_steps": 6000,
   "log_every_steps": 50,
   "eval_every_steps": 1000,
   "checkpoint_every_steps": 250,
@@ -15,16 +15,15 @@
     "n_layers": 3,
     "n_heads": 4,
     "d_ff": 512,
-    "dropout": 0.0,
+    "dropout": 0,
     "max_seq_len": 96
   },
   "optimization": {
-    "optimizer_type": "adamw",
+    "optimizer_type": "sgd",
     "learning_rate": 0.0004,
     "weight_decay": 0.01,
-    "beta1": 0.9,
-    "beta2": 0.95,
-    "grad_clip_norm": 1.0,
+    "momentum": 0,
+    "grad_clip_norm": 1,
     "warmup_steps": 200,
     "schedule": {
       "kind": "constant"
@@ -34,13 +33,18 @@
     "batch_size": 128,
     "max_eval_batches": null,
     "max_analysis_batches": 2,
-    "tracked_splits": ["validation_iid", "heldout_pairs"],
-    "analysis_splits": ["validation_iid"],
+    "tracked_splits": [
+      "validation_iid",
+      "heldout_pairs"
+    ],
+    "analysis_splits": [
+      "validation_iid"
+    ],
     "birth_thresholds": {
       "answer_accuracy": 0.9,
       "q": 0.2,
       "r": 0.2,
-      "w": 1.0
+      "w": 1
     }
   },
   "checkpointing": {

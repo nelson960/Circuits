@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="520" viewBox="0 0 1180 520" role="img" aria-labelledby="title desc">
+  <title id="title">Lookup algorithm evidence ladder</title>
+  <desc id="desc">A five-step lookup chain showing which parts of the model computation are strong, supported, partial, or open.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#3f4749"/>
+    </marker>
+    <style>
+      .title { font: 700 28px Georgia, serif; fill: #1f2325; }
+      .subtitle { font: 400 16px Inter, Arial, sans-serif; fill: #4b5357; }
+      .box-title { font: 700 17px Inter, Arial, sans-serif; fill: #1f2325; }
+      .box-text { font: 400 13px Inter, Arial, sans-serif; fill: #374044; }
+      .status { font: 700 12px Inter, Arial, sans-serif; letter-spacing: 0.6px; }
+      .math { font: 600 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fill: #263034; }
+      .arrow { stroke: #3f4749; stroke-width: 2.2; marker-end: url(#arrow); fill: none; }
+      .open-line { stroke: #8f5a46; stroke-width: 2; stroke-dasharray: 6 6; fill: none; }
+    </style>
+  </defs>
+
+  <rect width="1180" height="520" fill="#f7f4ef"/>
+  <text x="50" y="58" class="title">The lookup algorithm has a closed pointer and a broad value code</text>
+  <text x="50" y="88" class="subtitle">QK is a compact route map. The mature write/readout side is a causal prediction-position value-code state.</text>
+
+  <g transform="translate(50 130)">
+    <rect x="0" y="0" width="196" height="190" rx="8" fill="#ffffff" stroke="#d5cfc5" stroke-width="1.5"/>
+    <rect x="0" y="0" width="196" height="30" rx="8" fill="#e9e2d7"/>
+    <text x="14" y="21" class="status" fill="#5c5145">SUPPORTED</text>
+    <text x="14" y="58" class="box-title">1. Context state</text>
+    <text x="14" y="84" class="box-text">Token and position</text>
+    <text x="14" y="103" class="box-text">information become</text>
+    <text x="14" y="122" class="box-text">role-specific residual</text>
+    <text x="14" y="141" class="box-text">states.</text>
+    <text x="14" y="169" class="math">z_role^ell(x)</text>
+  </g>
+
+  <path class="arrow" d="M 254 225 L 306 225"/>
+
+  <g transform="translate(318 130)">
+    <rect x="0" y="0" width="196" height="190" rx="8" fill="#ffffff" stroke="#bacdca" stroke-width="1.5"/>
+    <rect x="0" y="0" width="196" height="30" rx="8" fill="#d9ece8"/>
+    <text x="14" y="21" class="status" fill="#286556">STRONG</text>
+    <text x="14" y="58" class="box-title">2. QK pointer</text>
+    <text x="14" y="84" class="box-text">Prediction query scores</text>
+    <text x="14" y="103" class="box-text">the true support value</text>
+    <text x="14" y="122" class="box-text">above value distractors.</text>
+    <text x="14" y="150" class="math">q^T W_QK k_support</text>
+    <text x="14" y="169" class="math">&gt; q^T W_QK k_dist</text>
+  </g>
+
+  <path class="arrow" d="M 522 225 L 574 225"/>
+
+  <g transform="translate(586 130)">
+    <rect x="0" y="0" width="196" height="190" rx="8" fill="#ffffff" stroke="#c7c8d6" stroke-width="1.5"/>
+    <rect x="0" y="0" width="196" height="30" rx="8" fill="#e4e5f0"/>
+    <text x="14" y="21" class="status" fill="#4c5277">SUPPORTED</text>
+    <text x="14" y="58" class="box-title">3. Residual write</text>
+    <text x="14" y="84" class="box-text">The selected source</text>
+    <text x="14" y="103" class="box-text">changes the prediction</text>
+    <text x="14" y="122" class="box-text">residual state.</text>
+    <text x="14" y="150" class="math">delta_write</text>
+    <text x="14" y="169" class="math">= z_with - z_without</text>
+  </g>
+
+  <path class="arrow" d="M 790 225 L 842 225"/>
+
+  <g transform="translate(854 130)">
+    <rect x="0" y="0" width="196" height="190" rx="8" fill="#ffffff" stroke="#bacdca" stroke-width="1.5"/>
+    <rect x="0" y="0" width="196" height="30" rx="8" fill="#d9ece8"/>
+    <text x="14" y="21" class="status" fill="#286556">CAUSAL</text>
+    <text x="14" y="58" class="box-title">4. Value code</text>
+    <text x="14" y="84" class="box-text">Prediction residual</text>
+    <text x="14" y="103" class="box-text">carries broad value</text>
+    <text x="14" y="122" class="box-text">identity geometry.</text>
+    <text x="14" y="150" class="math">Proj_Bvalue(z_pred)</text>
+    <text x="14" y="169" class="math">rank127 keep ~= IID</text>
+  </g>
+
+  <path class="arrow" d="M 952 328 L 952 370 L 242 370 L 242 338" marker-end="url(#arrow)" fill="none" stroke="#3f4749" stroke-width="2.2"/>
+
+  <g transform="translate(318 350)">
+    <rect x="0" y="0" width="464" height="112" rx="8" fill="#ffffff" stroke="#d5cfc5" stroke-width="1.5"/>
+    <text x="18" y="35" class="box-title">5. Readout and closure</text>
+    <text x="18" y="61" class="box-text">Fixed output-space scalars close better than moving answer margins.</text>
+    <text x="18" y="84" class="math">Delta scalar ~= sum_c beta_c Delta(component_write_c . g_scalar)</text>
+  </g>
+
+  <g transform="translate(810 352)">
+    <path class="open-line" d="M 0 0 L 260 0 L 260 108 L 0 108 Z"/>
+    <text x="18" y="34" class="box-title">Boundary</text>
+    <text x="18" y="60" class="box-text">Pointer and value readout</text>
+    <text x="18" y="80" class="box-text">are supported. The exact</text>
+    <text x="18" y="100" class="box-text">write operator is open.</text>
+  </g>
+</svg>

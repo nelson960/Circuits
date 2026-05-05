@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="390" viewBox="0 0 980 390" role="img">
+<defs>
+<style>
+.title{font:700 22px Georgia,serif;fill:#171615}.subtitle{font:15px Georgia,serif;fill:#4a4741}.label{font:14px Georgia,serif;fill:#2a2927}.small{font:12px Georgia,serif;fill:#5a5247}.tiny{font:10.5px Georgia,serif;fill:#5a5247}.axis{stroke:#4a4741;stroke-width:1}.grid{stroke:#ddd6c8;stroke-width:1}.box{fill:#fffdf8;stroke:#9b8f7e;stroke-width:1.2;rx:8}.adam{fill:#5b9a78}.sgd{fill:#be665e}.note{fill:#fff8ea;stroke:#b78b3b;stroke-width:1.2;rx:8}
+</style>
+</defs>
+<rect x="0" y="0" width="980" height="390" fill="#fbfaf6"/>
+<text x="32" y="38" class="title">Optimizer ablation: AdamW forms the role, SGD does not under the matched budget</text>
+<text x="32" y="64" class="subtitle">Seed 7, same model/data/6000-step budget. SGD includes a learning-rate sweep.</text>
+
+<rect x="38" y="88" width="428" height="230" class="box"/>
+<text x="62" y="118" class="label">Validation answer accuracy</text>
+<line x1="82" y1="282" x2="422" y2="282" class="axis"/>
+<line x1="82" y1="282" x2="82" y2="142" class="axis"/>
+<line x1="82" y1="212" x2="422" y2="212" class="grid"/>
+<line x1="82" y1="142" x2="422" y2="142" class="grid"/>
+<text x="64" y="286" class="tiny" text-anchor="end">0</text>
+<text x="64" y="216" class="tiny" text-anchor="end">0.5</text>
+<text x="64" y="146" class="tiny" text-anchor="end">1.0</text>
+<rect x="112" y="145" width="42" height="137" class="adam"/>
+<rect x="172" y="144" width="42" height="138" class="adam"/>
+<rect x="232" y="144" width="42" height="138" class="adam"/>
+<rect x="320" y="281" width="42" height="1.2" class="sgd"/>
+<rect x="380" y="282" width="42" height="0.4" class="sgd"/>
+<text x="133" y="303" class="tiny" text-anchor="middle">AdamW</text>
+<text x="193" y="303" class="tiny" text-anchor="middle">b1=0</text>
+<text x="253" y="303" class="tiny" text-anchor="middle">b2=.999</text>
+<text x="341" y="303" class="tiny" text-anchor="middle">best SGD+mom</text>
+<text x="401" y="303" class="tiny" text-anchor="middle">plain SGD</text>
+<text x="133" y="136" class="tiny" text-anchor="middle">0.976</text>
+<text x="193" y="135" class="tiny" text-anchor="middle">0.984</text>
+<text x="253" y="135" class="tiny" text-anchor="middle">0.985</text>
+<text x="341" y="272" class="tiny" text-anchor="middle">0.0085</text>
+<text x="401" y="272" class="tiny" text-anchor="middle">0.000</text>
+
+<rect x="514" y="88" width="428" height="230" class="box"/>
+<text x="538" y="118" class="label">Support-value QK separation</text>
+<line x1="558" y1="282" x2="898" y2="282" class="axis"/>
+<line x1="558" y1="282" x2="558" y2="142" class="axis"/>
+<line x1="558" y1="212" x2="898" y2="212" class="grid"/>
+<line x1="558" y1="142" x2="898" y2="142" class="grid"/>
+<text x="540" y="286" class="tiny" text-anchor="end">0</text>
+<text x="540" y="216" class="tiny" text-anchor="end">5</text>
+<text x="540" y="146" class="tiny" text-anchor="end">10</text>
+<rect x="588" y="170" width="42" height="112" class="adam"/>
+<rect x="648" y="152" width="42" height="130" class="adam"/>
+<rect x="708" y="179" width="42" height="103" class="adam"/>
+<rect x="796" y="280" width="42" height="2" class="sgd"/>
+<rect x="856" y="282" width="42" height="0.3" class="sgd"/>
+<text x="609" y="303" class="tiny" text-anchor="middle">AdamW</text>
+<text x="669" y="303" class="tiny" text-anchor="middle">b1=0</text>
+<text x="729" y="303" class="tiny" text-anchor="middle">b2=.999</text>
+<text x="817" y="303" class="tiny" text-anchor="middle">best SGD</text>
+<text x="877" y="303" class="tiny" text-anchor="middle">plain SGD</text>
+<text x="609" y="161" class="tiny" text-anchor="middle">8.03</text>
+<text x="669" y="143" class="tiny" text-anchor="middle">9.26</text>
+<text x="729" y="170" class="tiny" text-anchor="middle">7.33</text>
+<text x="817" y="272" class="tiny" text-anchor="middle">0.118 max</text>
+<text x="877" y="272" class="tiny" text-anchor="middle">0.109</text>
+
+<rect x="62" y="334" width="856" height="34" class="note"/>
+<text x="82" y="356" class="small">Bounded claim: same seed/model/data/budget. This rules out same-recipe SGD, not every possible SGD schedule.</text>
+</svg>

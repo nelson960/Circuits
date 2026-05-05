@@ -199,6 +199,124 @@ Expected output:
 artifacts/runs/symbolic_kv_reference_formation/analysis/bilinear_qk_rank_adam_state_attribution/from_init_l2h1_rank8_support_value_0000_6000_stepwise/
 ```
 
+### Optimizer Ablation
+
+This reproduces the matched seed-7 optimizer ablation. The paper uses it only as
+a bounded control: same architecture, data, seed, and `6000`-step budget.
+
+Pilot configs:
+
+```text
+configs/train/optimizer_ablation/pilot_seed0007/
+```
+
+SGD LR-sweep configs:
+
+```text
+configs/train/optimizer_ablation/sgd_lr_sweep_seed0007/
+```
+
+Train the pilot variants:
+
+```bash
+for CONFIG in configs/train/optimizer_ablation/pilot_seed0007/*.json; do
+  echo "training $CONFIG"
+  PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli train \
+    --config "$CONFIG" \
+    --overwrite
+done
+```
+
+Train the SGD LR sweep:
+
+```bash
+for CONFIG in configs/train/optimizer_ablation/sgd_lr_sweep_seed0007/*.json; do
+  echo "training $CONFIG"
+  PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli train \
+    --config "$CONFIG" \
+    --overwrite
+done
+```
+
+Evaluate final checkpoints:
+
+```bash
+for CONFIG in configs/train/optimizer_ablation/pilot_seed0007/*.json configs/train/optimizer_ablation/sgd_lr_sweep_seed0007/*.json; do
+  RUN="$(jq -r '.output_dir' "$CONFIG")"
+  echo "evaluating $CONFIG"
+  PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli evaluate \
+    --config "$CONFIG" \
+    --checkpoint "$RUN/checkpoints/step_006000.pt"
+done
+```
+
+Run the QK/OV progress audit for each optimizer run:
+
+```bash
+PROBE="artifacts/runs/symbolic_kv_reference_formation/analysis/probe_set.jsonl"
+
+for CONFIG in configs/train/optimizer_ablation/pilot_seed0007/*.json configs/train/optimizer_ablation/sgd_lr_sweep_seed0007/*.json; do
+  RUN="$(jq -r '.output_dir' "$CONFIG")"
+  CKPT_DIR="$RUN/checkpoints"
+
+  if [[ "$CONFIG" == *sgd_lr_sweep_seed0007* ]]; then
+    OUT="$RUN/analysis/ov_write_progress/all_heads_0750_6000_sgd_lr_sweep"
+  else
+    OUT="$RUN/analysis/ov_write_progress/all_heads_0750_6000_optimizer_ablation"
+  fi
+
+  echo "ov/qk progress $CONFIG"
+
+  PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli ov-write-progress-report \
+    --config "$CONFIG" \
+    --probe-set "$PROBE" \
+    --checkpoint-dir "$CKPT_DIR" \
+    --checkpoint "$CKPT_DIR/step_000750.pt" \
+    --checkpoint "$CKPT_DIR/step_001000.pt" \
+    --checkpoint "$CKPT_DIR/step_001250.pt" \
+    --checkpoint "$CKPT_DIR/step_001500.pt" \
+    --checkpoint "$CKPT_DIR/step_001750.pt" \
+    --checkpoint "$CKPT_DIR/step_002000.pt" \
+    --checkpoint "$CKPT_DIR/step_002250.pt" \
+    --checkpoint "$CKPT_DIR/step_002500.pt" \
+    --checkpoint "$CKPT_DIR/step_002750.pt" \
+    --checkpoint "$CKPT_DIR/step_003000.pt" \
+    --checkpoint "$CKPT_DIR/step_003500.pt" \
+    --checkpoint "$CKPT_DIR/step_004000.pt" \
+    --checkpoint "$CKPT_DIR/step_004500.pt" \
+    --checkpoint "$CKPT_DIR/step_005000.pt" \
+    --checkpoint "$CKPT_DIR/step_005500.pt" \
+    --checkpoint "$CKPT_DIR/step_006000.pt" \
+    --output-dir "$OUT" \
+    --device mps \
+    --head L0H0 --head L0H1 --head L0H2 --head L0H3 \
+    --head L1H0 --head L1H1 --head L1H2 --head L1H3 \
+    --head L2H0 --head L2H1 --head L2H2 --head L2H3 \
+    --score-query-role prediction \
+    --support-key-role support_value \
+    --distractor-key-role value_distractors \
+    --record-side clean \
+    --pair-type support_value \
+    --max-pairs-per-type 64 \
+    --min-pairs-per-type 16 \
+    --split validation_iid \
+    --top-k-correlations 32 \
+    --overwrite
+done
+```
+
+Expected check:
+
+```bash
+find artifacts/runs/symbolic_kv_optimizer_ablation -path '*ov_write_progress_report.json' -print | sort | wc -l
+```
+
+Expected count:
+
+```text
+15
+```
+
 ### Weight-Level QK Birth
 
 This produces the weight SVD trace used for the low-rank birth story.

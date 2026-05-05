@@ -19,6 +19,7 @@
     "max_seq_len": 96
   },
   "optimization": {
+    "optimizer_type": "adamw",
     "learning_rate": 0.0004,
     "weight_decay": 0.01,
     "beta1": 0.9,

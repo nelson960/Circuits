@@ -73,6 +73,7 @@ from circuit.analysis.residual_state_rescue import run_residual_position_rescue,
 from circuit.analysis.route_family_closure import run_route_family_closure_report
 from circuit.analysis.route_to_margin_closure import run_route_to_margin_closure
 from circuit.analysis.route_to_scalar_closure import run_route_to_scalar_closure
+from circuit.analysis.value_code_subspace_report import run_value_code_subspace_report
 from circuit.analysis.shared_feature_dynamics import (
     family_update_link,
     feature_birth_analyze,
@@ -1193,6 +1194,23 @@ def main() -> None:
     residual_delta_vector_parser.add_argument("--markdown-top-k-rows", type=int, default=120)
     residual_delta_vector_parser.add_argument("--plot-top-k-rows", type=int, default=48)
     residual_delta_vector_parser.add_argument("--overwrite", action="store_true")
+
+    value_code_parser = subparsers.add_parser("value-code-subspace-report")
+    value_code_parser.add_argument("--config", type=Path, required=True)
+    value_code_parser.add_argument("--probe-set", type=Path, required=True)
+    value_code_parser.add_argument("--checkpoint-dir", type=Path, required=True)
+    value_code_parser.add_argument("--checkpoint", type=Path, action="append", default=None)
+    value_code_parser.add_argument("--output-dir", type=Path, required=True)
+    value_code_parser.add_argument("--device", type=str, default="mps")
+    value_code_parser.add_argument("--stage", type=str, action="append", required=True)
+    value_code_parser.add_argument("--position-role", type=str, action="append", required=True)
+    value_code_parser.add_argument("--group-by", type=str, action="append", required=True)
+    value_code_parser.add_argument("--split", type=str, action="append", default=None)
+    value_code_parser.add_argument("--max-records", type=int, default=None)
+    value_code_parser.add_argument("--batch-size", type=int, default=None)
+    value_code_parser.add_argument("--pca-rank", type=int, default=4)
+    value_code_parser.add_argument("--markdown-top-k-rows", type=int, default=160)
+    value_code_parser.add_argument("--overwrite", action="store_true")
 
     residual_component_delta_parser = subparsers.add_parser("residual-component-delta-report")
     residual_component_delta_parser.add_argument("--config", type=Path, required=True)
@@ -3335,6 +3353,40 @@ def main() -> None:
                 "subspace_rows": str(subspace_rows_path),
                 "pair_rows": str(pair_rows_path),
                 "plots": {key: str(value) for key, value in plot_paths.items()},
+            }
+        )
+        return
+    if args.command == "value-code-subspace-report":
+        (
+            report_path,
+            markdown_path,
+            rows_path,
+            summary_rows_path,
+            subspace_rows_path,
+        ) = run_value_code_subspace_report(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            checkpoint_dir=args.checkpoint_dir,
+            output_dir=args.output_dir,
+            checkpoint_paths=args.checkpoint,
+            device_name=args.device,
+            stages=args.stage,
+            position_roles=args.position_role,
+            group_by_values=args.group_by,
+            split_filter=args.split,
+            max_records=args.max_records,
+            batch_size=args.batch_size,
+            pca_rank=args.pca_rank,
+            markdown_top_k_rows=args.markdown_top_k_rows,
+            overwrite=args.overwrite,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "value_code_rows": str(rows_path),
+                "summary_rows": str(summary_rows_path),
+                "subspace_rows": str(subspace_rows_path),
             }
         )
         return
