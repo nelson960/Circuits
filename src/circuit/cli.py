@@ -74,6 +74,8 @@ from circuit.analysis.route_family_closure import run_route_family_closure_repor
 from circuit.analysis.route_to_margin_closure import run_route_to_margin_closure
 from circuit.analysis.route_to_scalar_closure import run_route_to_scalar_closure
 from circuit.analysis.value_code_subspace_report import run_value_code_subspace_report
+from circuit.analysis.value_code_transfer_map_report import run_value_code_transfer_map_report
+from circuit.analysis.value_code_transfer_rescue import run_value_code_transfer_rescue
 from circuit.analysis.shared_feature_dynamics import (
     family_update_link,
     feature_birth_analyze,
@@ -1211,6 +1213,55 @@ def main() -> None:
     value_code_parser.add_argument("--pca-rank", type=int, default=4)
     value_code_parser.add_argument("--markdown-top-k-rows", type=int, default=160)
     value_code_parser.add_argument("--overwrite", action="store_true")
+
+    value_code_transfer_parser = subparsers.add_parser("value-code-transfer-map-report")
+    value_code_transfer_parser.add_argument("--config", type=Path, required=True)
+    value_code_transfer_parser.add_argument("--probe-set", type=Path, required=True)
+    value_code_transfer_parser.add_argument("--checkpoint-dir", type=Path, required=True)
+    value_code_transfer_parser.add_argument("--checkpoint", type=Path, action="append", default=None)
+    value_code_transfer_parser.add_argument("--output-dir", type=Path, required=True)
+    value_code_transfer_parser.add_argument("--device", type=str, default="mps")
+    value_code_transfer_parser.add_argument("--source-stage", type=str, required=True)
+    value_code_transfer_parser.add_argument("--target-stage", type=str, required=True)
+    value_code_transfer_parser.add_argument("--source-position-role", type=str, required=True)
+    value_code_transfer_parser.add_argument("--target-position-role", type=str, required=True)
+    value_code_transfer_parser.add_argument("--group-by", type=str, required=True)
+    value_code_transfer_parser.add_argument("--split", type=str, action="append", default=None)
+    value_code_transfer_parser.add_argument("--max-records", type=int, default=None)
+    value_code_transfer_parser.add_argument("--batch-size", type=int, default=None)
+    value_code_transfer_parser.add_argument("--basis-rank", type=int, action="append", required=True)
+    value_code_transfer_parser.add_argument("--control", type=str, action="append", default=[])
+    value_code_transfer_parser.add_argument("--fit-fraction", type=float, default=0.75)
+    value_code_transfer_parser.add_argument("--ridge-lambda", type=float, default=1.0e-4)
+    value_code_transfer_parser.add_argument("--random-seed", type=int, default=0)
+    value_code_transfer_parser.add_argument("--markdown-top-k-rows", type=int, default=160)
+    value_code_transfer_parser.add_argument("--overwrite", action="store_true")
+
+    value_code_transfer_rescue_parser = subparsers.add_parser("value-code-transfer-rescue")
+    value_code_transfer_rescue_parser.add_argument("--config", type=Path, required=True)
+    value_code_transfer_rescue_parser.add_argument("--probe-set", type=Path, required=True)
+    value_code_transfer_rescue_parser.add_argument("--checkpoint-dir", type=Path, required=True)
+    value_code_transfer_rescue_parser.add_argument("--checkpoint", type=Path, action="append", default=None)
+    value_code_transfer_rescue_parser.add_argument("--output-dir", type=Path, required=True)
+    value_code_transfer_rescue_parser.add_argument("--device", type=str, default="mps")
+    value_code_transfer_rescue_parser.add_argument("--source-stage", type=str, required=True)
+    value_code_transfer_rescue_parser.add_argument("--target-stage", type=str, required=True)
+    value_code_transfer_rescue_parser.add_argument("--source-position-role", type=str, required=True)
+    value_code_transfer_rescue_parser.add_argument("--target-position-role", type=str, required=True)
+    value_code_transfer_rescue_parser.add_argument("--context-stage", type=str, default=None)
+    value_code_transfer_rescue_parser.add_argument("--context-position-role", type=str, default=None)
+    value_code_transfer_rescue_parser.add_argument("--context-rank", type=int, default=None)
+    value_code_transfer_rescue_parser.add_argument("--group-by", type=str, required=True)
+    value_code_transfer_rescue_parser.add_argument("--split", type=str, action="append", default=None)
+    value_code_transfer_rescue_parser.add_argument("--max-records", type=int, default=None)
+    value_code_transfer_rescue_parser.add_argument("--batch-size", type=int, default=None)
+    value_code_transfer_rescue_parser.add_argument("--basis-rank", type=int, action="append", required=True)
+    value_code_transfer_rescue_parser.add_argument("--control", type=str, action="append", default=[])
+    value_code_transfer_rescue_parser.add_argument("--fit-fraction", type=float, default=0.75)
+    value_code_transfer_rescue_parser.add_argument("--ridge-lambda", type=float, default=1.0e-4)
+    value_code_transfer_rescue_parser.add_argument("--random-seed", type=int, default=0)
+    value_code_transfer_rescue_parser.add_argument("--markdown-top-k-rows", type=int, default=160)
+    value_code_transfer_rescue_parser.add_argument("--overwrite", action="store_true")
 
     residual_component_delta_parser = subparsers.add_parser("residual-component-delta-report")
     residual_component_delta_parser.add_argument("--config", type=Path, required=True)
@@ -3387,6 +3438,93 @@ def main() -> None:
                 "value_code_rows": str(rows_path),
                 "summary_rows": str(summary_rows_path),
                 "subspace_rows": str(subspace_rows_path),
+            }
+        )
+        return
+    if args.command == "value-code-transfer-map-report":
+        (
+            report_path,
+            markdown_path,
+            rows_path,
+            summary_rows_path,
+            subspace_rows_path,
+            pair_rows_path,
+        ) = run_value_code_transfer_map_report(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            checkpoint_dir=args.checkpoint_dir,
+            output_dir=args.output_dir,
+            checkpoint_paths=args.checkpoint,
+            device_name=args.device,
+            source_stage=args.source_stage,
+            target_stage=args.target_stage,
+            source_position_role=args.source_position_role,
+            target_position_role=args.target_position_role,
+            group_by=args.group_by,
+            split_filter=args.split,
+            max_records=args.max_records,
+            batch_size=args.batch_size,
+            basis_ranks=args.basis_rank,
+            controls=args.control,
+            fit_fraction=args.fit_fraction,
+            ridge_lambda=args.ridge_lambda,
+            random_seed=args.random_seed,
+            markdown_top_k_rows=args.markdown_top_k_rows,
+            overwrite=args.overwrite,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "transfer_rows": str(rows_path),
+                "summary_rows": str(summary_rows_path),
+                "subspace_rows": str(subspace_rows_path),
+                "pair_rows": str(pair_rows_path),
+            }
+        )
+        return
+    if args.command == "value-code-transfer-rescue":
+        (
+            report_path,
+            markdown_path,
+            rows_path,
+            summary_rows_path,
+            subspace_rows_path,
+            pair_rows_path,
+        ) = run_value_code_transfer_rescue(
+            config_path=args.config,
+            probe_set_path=args.probe_set,
+            checkpoint_dir=args.checkpoint_dir,
+            output_dir=args.output_dir,
+            checkpoint_paths=args.checkpoint,
+            device_name=args.device,
+            source_stage=args.source_stage,
+            target_stage=args.target_stage,
+            source_position_role=args.source_position_role,
+            target_position_role=args.target_position_role,
+            context_stage=args.context_stage,
+            context_position_role=args.context_position_role,
+            context_rank=args.context_rank,
+            group_by=args.group_by,
+            split_filter=args.split,
+            max_records=args.max_records,
+            batch_size=args.batch_size,
+            basis_ranks=args.basis_rank,
+            controls=args.control,
+            fit_fraction=args.fit_fraction,
+            ridge_lambda=args.ridge_lambda,
+            random_seed=args.random_seed,
+            markdown_top_k_rows=args.markdown_top_k_rows,
+            overwrite=args.overwrite,
+        )
+        print(
+            {
+                "report": str(report_path),
+                "markdown": str(markdown_path),
+                "rescue_rows": str(rows_path),
+                "summary_rows": str(summary_rows_path),
+                "subspace_rows": str(subspace_rows_path),
+                "pair_rows": str(pair_rows_path),
             }
         )
         return

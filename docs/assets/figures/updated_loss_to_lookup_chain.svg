@@ -7,7 +7,7 @@
 .title{font:700 22px Georgia,serif;fill:#171615}.subtitle{font:15px Georgia,serif;fill:#4a4741}.label{font:14px Georgia,serif;fill:#2a2927}.small{font:12px Georgia,serif;fill:#5a5247}.tiny{font:10.5px Georgia,serif;fill:#5a5247}.axis{stroke:#4a4741;stroke-width:1}.grid{stroke:#ddd6c8;stroke-width:1}.box{fill:#fffdf8;stroke:#9b8f7e;stroke-width:1.4;rx:8}.ok{fill:#e7f3ed;stroke:#4f8f6f}.warn{fill:#fff4dc;stroke:#b78b3b}.open{fill:#f8e8e6;stroke:#aa615b}</style>
 </defs>
 <text x="30.0" y="38.0" class="title" text-anchor="start">From loss to lookup: the measured chain</text>
-<text x="30.0" y="63.0" class="subtitle" text-anchor="start">Current paper claim: AdamW builds a support-value pointer and a broad prediction value-code readout.</text>
+<text x="30.0" y="63.0" class="subtitle" text-anchor="start">Current paper claim: AdamW builds a support-value pointer and contextual prediction value-code readout.</text>
 <rect x="26.0" y="108.0" width="150.0" height="92.0" class="box" />
 <text x="101.0" y="137.0" class="label" text-anchor="middle">Data relation</text>
 <text x="101.0" y="165.0" class="small" text-anchor="middle">latest write</text>
@@ -38,6 +38,6 @@
 <text x="971.0" y="165.0" class="small" text-anchor="middle">answer margin</text>
 <text x="971.0" y="183.0" class="small" text-anchor="middle">improves</text>
 <text x="30.0" y="250.0" class="small" text-anchor="start">The old question was "which neuron matters?" The current proof object is a differentiable route scalar C(theta).</text>
-<text x="30.0" y="273.0" class="small" text-anchor="start">Supported: route growth, QK birth, AdamW reconstruction, value-code readout, and 5-seed role replication.</text>
-<text x="30.0" y="296.0" class="small" text-anchor="start">Open: exact write operator, full moving-margin closure, and scaling beyond this symbolic model.</text>
+<text x="30.0" y="273.0" class="small" text-anchor="start">Supported: route growth, QK birth, AdamW reconstruction, contextual value-code rescue, and 5-seed role replication.</text>
+<text x="30.0" y="296.0" class="small" text-anchor="start">Open: prediction-context construction, full moving-margin closure, and scaling beyond this symbolic model.</text>
 </svg>

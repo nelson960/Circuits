@@ -9143,3 +9143,406 @@ optimizer ablation
 ```
 
 That is the current proof boundary.
+
+## Value-Code Transfer Map And Causal Rescue
+
+The value-code intervention above tells me what residual object the readout
+uses. The next question is harder:
+
+```text
+does the support-value state predict the prediction-position value-code state?
+```
+
+I tested this with two tools:
+
+```text
+value-code-transfer-map-report
+value-code-transfer-rescue
+```
+
+The first is descriptive. It fits a ridge-stabilized affine map:
+
+```text
+support_value coordinates at layer_1_post_mlp
+  -> prediction coordinates at layer_2_post_mlp
+```
+
+inside value-identity bases built on a deterministic fit split.
+
+The second is causal. It removes the target value-code projection at
+`layer_2_post_mlp / prediction`, then patches back either:
+
+```text
+1. the actual projected value-code component        (oracle)
+2. the fitted support -> prediction transfer        (true transfer)
+3. shuffled-answer / wrong-value / random controls  (controls)
+```
+
+Artifacts:
+
+```text
+artifacts/runs/symbolic_kv_reference_formation/analysis/value_code_transfer_map/support_to_prediction_1500_3500/
+artifacts/runs/symbolic_kv_reference_formation/analysis/value_code_transfer_map/support_to_prediction_key_control_rank4/
+artifacts/runs/symbolic_kv_reference_formation/analysis/value_code_transfer_rescue/support_to_prediction_rank16_1500_3500/
+artifacts/runs/symbolic_kv_reference_formation/analysis/value_code_transfer_rescue/support_to_prediction_key_control_rank4/
+```
+
+### Transfer Map: Present, But Not A Full Operator
+
+The support-to-prediction map is real but partial.
+
+At `1750`, rank `16`:
+
+| eval kind | coordinate R2 |
+|---|---:|
+| `true_transfer` | `0.3978` |
+| `wrong_support_value` | `0.2522` |
+| `random_subspace` | `0.1624` |
+| `shuffled_answer_value` | `-0.2536` |
+
+At `3500`, rank `16`:
+
+| eval kind | coordinate R2 | centroid acc | stage-lens acc | stage-lens margin |
+|---|---:|---:|---:|---:|
+| `true_transfer` | `0.2236` | `0.1923` | `0.0476` | `-6.855` |
+| `random_subspace` | `0.1348` | `0.1538` | `0.0238` | `-9.095` |
+| `wrong_support_value` | `0.0189` | `0.0000` | `0.0238` | `-9.220` |
+| `shuffled_answer_value` | `-0.6931` | `0.0769` | `0.0000` | `-9.417` |
+
+The true transfer beats controls, especially in coordinate prediction and
+late-stage readout margin. But the stage-lens accuracy remains low. So this is
+not a clean theorem of the form:
+
+```text
+linear map from support value-code alone = final answer state
+```
+
+It is a measurable linear component of the write/readout bridge.
+
+The key-identity control is weaker. At `2500`, rank `4`:
+
+| eval kind | coordinate R2 | stage-lens margin |
+|---|---:|---:|
+| `true_transfer` | `0.1696` | `-3.520` |
+| `key_identity` | `0.0138` | `-3.622` |
+
+This matters because it rules out a simpler explanation:
+
+```text
+the transfer is just carrying the key identity
+```
+
+### Transfer Rescue: The Target Code Is Causal, And The Transfer Partly Replaces It
+
+The oracle patch is the sanity check. If removing the target value-code
+projection hurts behavior and patching the same projection back rescues it,
+then the removed value-code component is causally used.
+
+That check passes.
+
+At rank `16`, `layer_2_post_mlp / prediction`, the oracle rescue fraction is
+`1.0` by construction for the removed value-code projection, and the behavioral
+scalars recover accordingly.
+
+The true transfer is strongest on `negative_answer_loss`, which is the most
+stable differentiable answer scalar in this rescue setting.
+
+| step | oracle rescue | true transfer | shuffled | wrong value | random |
+|---:|---:|---:|---:|---:|---:|
+| `1750` | `1.000` | `0.918` | `0.865` | `0.864` | `0.931` |
+| `2000` | `1.000` | `0.884` | `0.635` | `0.864` | `0.881` |
+| `2500` | `1.000` | `0.835` | `0.453` | `0.671` | `0.754` |
+| `3000` | `1.000` | `0.877` | `0.574` | `0.584` | `0.769` |
+| `3500` | `1.000` | `0.949` | `0.576` | `0.484` | `0.760` |
+
+On value accuracy, the mature checkpoint also shows a useful gap:
+
+| step | oracle rescue | true transfer | shuffled | wrong value | random |
+|---:|---:|---:|---:|---:|---:|
+| `3500` | `1.000` | `0.750` | `0.000` | `0.500` | `0.500` |
+
+So the transfer is not merely readable. It can causally replace a substantial
+part of the target value-code component for the loss/readout behavior.
+
+### Moving Margin Still Does Not Fully Close
+
+The moving value margin remains messy.
+
+At `2500`, rank `16`:
+
+| eval kind | value-margin rescue fraction |
+|---|---:|
+| `oracle_actual_projected` | `1.000` |
+| `true_transfer` | `0.421` |
+| `random_subspace` | `0.186` |
+| `wrong_support_value` | `-0.007` |
+| `shuffled_answer_value` | `-0.314` |
+
+At `3500`, rank `16`:
+
+| eval kind | value-margin rescue fraction |
+|---|---:|
+| `oracle_actual_projected` | `1.000` |
+| `true_transfer` | `-0.080` |
+| `wrong_support_value` | `-0.727` |
+| `random_subspace` | `-2.132` |
+| `shuffled_answer_value` | `-3.543` |
+
+This should not be hidden. It says the transfer map explains a useful
+answer-evidence component, but not the whole moving-margin object.
+
+Given the earlier branch-switching result, this is exactly where fixed-branch
+transfer rescue should be used next. The moving best-wrong token can change
+under patching, so margin can make a useful transfer look worse than it is.
+
+### Key-Control Rescue
+
+The rank-4 key-control rescue confirms the same boundary.
+
+At `2500`, rank `4`:
+
+| scalar | oracle | true transfer | key identity |
+|---|---:|---:|---:|
+| `negative_answer_loss` | `1.000` | `0.846` | `0.746` |
+| `value_margin` | `1.000` | `-0.480` | `-1.705` |
+
+The key control can recover some loss because the residual system is highly
+coupled, but true value transfer is better. On moving margin, neither is a
+clean rescue, and key identity is worse.
+
+### Updated Boundary
+
+This closes more of the OV/write side:
+
+```text
+support value-code has a measurable linear relationship to prediction value-code
+prediction value-code is causally used
+the fitted transfer can partially replace the removed prediction value-code
+the effect is strongest on loss/readout usability
+moving margin remains branch-sensitive and only partially rescued
+```
+
+The current best statement is therefore:
+
+```text
+The write side contains a causal support -> prediction value-code transfer
+component, but it is not a complete low-rank linear OV theorem.
+```
+
+### Fixed-Branch Transfer Rescue
+
+I reran the transfer rescue with fixed-branch scalar scoring added to the same
+tool:
+
+```text
+artifacts/runs/symbolic_kv_reference_formation/analysis/value_code_transfer_rescue/support_to_prediction_rank16_fixed_branch_1750_3500/
+```
+
+This adds two fixed-competitor margins:
+
+```text
+fixed_clean_competitor_margin
+  hold the clean model's best wrong value fixed
+
+fixed_removed_competitor_margin
+  hold the target-subspace-removed model's best wrong value fixed
+```
+
+This asks whether the bad moving-margin result was mostly caused by the
+best-wrong branch moving under the patch.
+
+The answer is mixed, and useful.
+
+For `true_transfer`, rescue fractions are:
+
+| step | moving margin | fixed clean branch | fixed removed branch | negative loss | value accuracy |
+|---:|---:|---:|---:|---:|---:|
+| `1750` | `0.860` | `0.904` | `0.807` | `0.918` | `0.546` |
+| `2000` | `0.632` | `1.049` | `0.582` | `0.884` | `0.286` |
+| `2500` | `0.421` | `0.853` | `0.474` | `0.835` | `-0.750` |
+| `3000` | `0.017` | `0.824` | `0.252` | `0.877` | `0.167` |
+| `3500` | `-0.080` | `0.650` | `0.320` | `0.949` | `0.750` |
+
+This is exactly the split I needed.
+
+The moving value margin makes the late transfer look almost absent:
+
+```text
+3500 moving margin rescue fraction: -0.080
+```
+
+But the clean-branch fixed margin still shows a real transfer:
+
+```text
+3500 fixed-clean competitor rescue fraction: 0.650
+```
+
+and loss rescue remains very strong:
+
+```text
+3500 negative-answer-loss rescue fraction: 0.949
+```
+
+So the remaining margin failure is partly a branch/competitor problem, not an
+absence of value-code transfer.
+
+However, fixed-removed branch rescue is weaker:
+
+```text
+3500 fixed-removed competitor rescue fraction: 0.320
+```
+
+That means branch switching is not the whole story. The fitted linear transfer
+captures a useful answer-evidence direction, but it still does not reproduce
+the exact margin geometry induced by removing and restoring the target
+value-code projection.
+
+The controls sharpen this. At step `3500`:
+
+| scalar | true transfer | shuffled | wrong value | random |
+|---|---:|---:|---:|---:|
+| `fixed_clean_competitor_margin` | `0.650` | `1.437` | `0.626` | `1.001` |
+| `fixed_removed_competitor_margin` | `0.320` | `-0.321` | `0.146` | `0.017` |
+| `negative_answer_loss` | `0.949` | `0.576` | `0.484` | `0.760` |
+| `value_accuracy` | `0.750` | `0.000` | `0.500` | `0.500` |
+
+The fixed-clean scalar is not selective enough by itself: random and shuffled
+can look strong because that branch is anchored to the clean model's wrong
+token and the target-subspace removal changes the residual geometry in a
+non-local way.
+
+The more reliable readout is:
+
+```text
+negative_answer_loss + fixed-removed competitor margin + value accuracy
+```
+
+Together they say:
+
+```text
+the transfer carries real answer evidence
+it beats branch-destroying controls on loss and accuracy
+it partially rescues a fixed removed-branch margin
+it still does not close the full margin geometry
+```
+
+### Updated Transfer Boundary
+
+The fixed-branch rescue changes the boundary from:
+
+```text
+maybe the transfer only helps loss but not margin
+```
+
+to:
+
+```text
+the transfer helps stable answer evidence and some fixed-branch margins,
+but the exact support -> prediction write operator is still more than one
+rank-16 linear map in value-code coordinates.
+```
+
+The next targeted gap is no longer generic fixed-branch rescue. That is done.
+The next gap is the nonlinear/contextual part of the write operator:
+
+```text
+what residual context or component-local nonlinear transformation makes the
+linear transfer incomplete?
+```
+
+That would require a contextual transfer model, not another pure linear
+support-to-prediction map.
+
+### Contextual Transfer Rescue
+
+I then tested exactly that contextual hypothesis:
+
+```text
+does prediction-position context explain the missing write operator?
+```
+
+Artifact:
+
+```text
+artifacts/runs/symbolic_kv_reference_formation/analysis/value_code_transfer_rescue/support_to_prediction_context_rank16_1750_3500/
+```
+
+The contextual rescue extends the transfer model from:
+
+```text
+support_value_code -> prediction_value_code
+```
+
+to:
+
+```text
+[support_value_code, prediction_context_code] -> prediction_value_code
+```
+
+where the context is `layer_1_post_mlp / prediction`, rank `16`.
+
+The result is important, but not in the naive direction. Adding prediction
+context strongly improves the rescue, but `context_only` is already very
+strong. That means the missing operator is not just a better support-to-
+prediction linear map. By this point in training, the prediction-position
+residual context already contains most of the information needed to restore the
+removed value-code component.
+
+For `source_plus_context`, rescue fractions are:
+
+| step | moving margin | fixed removed branch | negative loss | value accuracy |
+|---:|---:|---:|---:|---:|
+| `1750` | `0.980` | `0.968` | `0.993` | `1.091` |
+| `2000` | `0.944` | `0.945` | `1.004` | `1.286` |
+| `2500` | `0.836` | `0.858` | `0.995` | `1.250` |
+| `3000` | `0.410` | `0.872` | `0.974` | `0.833` |
+| `3500` | `-0.205` | `0.754` | `1.005` | `0.875` |
+
+Compared to source-only transfer, the contextual model is a large improvement:
+
+| step | scalar | source-only | source + context |
+|---:|---|---:|---:|
+| `2500` | `fixed_removed_competitor_margin` | `0.473` | `0.858` |
+| `2500` | `negative_answer_loss` | `0.835` | `0.995` |
+| `2500` | `value_margin` | `0.421` | `0.836` |
+| `3000` | `fixed_removed_competitor_margin` | `0.252` | `0.872` |
+| `3000` | `negative_answer_loss` | `0.877` | `0.974` |
+| `3000` | `value_margin` | `0.017` | `0.410` |
+| `3500` | `fixed_removed_competitor_margin` | `0.320` | `0.754` |
+| `3500` | `negative_answer_loss` | `0.949` | `1.005` |
+| `3500` | `value_accuracy` | `0.750` | `0.875` |
+
+But the context-only rows are also near-oracle on the stable scalars:
+
+| step | scalar | context-only rescue |
+|---:|---|---:|
+| `2500` | `fixed_removed_competitor_margin` | `0.780` |
+| `2500` | `negative_answer_loss` | `0.968` |
+| `3000` | `fixed_removed_competitor_margin` | `0.718` |
+| `3000` | `negative_answer_loss` | `0.940` |
+| `3500` | `fixed_removed_competitor_margin` | `0.640` |
+| `3500` | `negative_answer_loss` | `0.959` |
+
+This closes the interpretation boundary more tightly:
+
+```text
+the target prediction value-code is causal
+source value-code transfer is real but partial
+prediction-position context carries most of the missing rescue signal
+source + context nearly closes loss and fixed-removed branch rescue
+moving margin still remains unstable late in training
+```
+
+The strongest OV/write statement is now:
+
+```text
+The write side is a contextual prediction-position value-code restoration
+mechanism. It is not a standalone low-rank W_OV operator and not a pure
+support-value transfer. The prediction state already carries a readout-ready
+context, and the support value-code helps shape or select that state.
+```
+
+This is probably the right stopping point for the OV closure experiments before
+paper polishing. Going deeper would require decomposing the prediction context
+itself into component-local nonlinear contributions, which is a new subproject
+rather than a paper-gap filler.

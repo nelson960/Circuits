@@ -40,7 +40,7 @@ that creates a broad value-token identity code the answer readout uses.
 
 Across additional seeds, both the QK retrieval role and the write/readout role repeat at the functional level while their component addresses move. The ghost moves rooms.
 
-I am deliberately more precise than "full circuit formation is solved." I give a strong QK formation account, a supported contextual write/readout account, causal evidence for a broad prediction-position value-code state, a bounded optimizer-ablation result, and explicit limits around the exact write operator, full answer-margin closure, broader optimizer sweeps, and scaling.
+I am deliberately more precise than "full circuit formation is solved." I give a strong QK formation account, a supported contextual write/readout account, causal evidence for a broad prediction-position value-code state, contextual transfer evidence for the write side, a bounded optimizer-ablation result, and explicit limits around prediction-context construction, full answer-margin closure, broader optimizer sweeps, and scaling.
 
 This is a detailed mechanistic account for one task family. It is not a theorem about all transformers.
 
@@ -167,6 +167,8 @@ These are the commands that matter most for the current research result:
 - `bilinear-qk-rank-actual-batch-attribution`
 - `bilinear-qk-rank-adam-state-attribution`
 - `value-code-subspace-report`
+- `value-code-transfer-map-report`
+- `value-code-transfer-rescue` including contextual source-plus-prediction transfer controls
 - `geometry-subspace-intervention`
 - `scripts/cross_seed_adam_pipeline.py`
 
@@ -194,13 +196,14 @@ The repo has strong support for:
 - cross-seed role-level validation
 - contextual write/readout subspace analysis
 - causal prediction-position value-code analysis
+- contextual source-plus-prediction transfer rescue
 - branch-aware and output-space closure diagnostics
 
 It does not yet establish:
 
 - full answer-margin closure from a small route family
 - a clean static `W_OV` theorem analogous to the QK story
-- a closed-form operator from support-value residual state to prediction-position value-code state
+- a closed-form construction of the prediction-position value scaffold
 - that plain SGD could never form the same route under broader schedules or longer budgets
 - that the same method scales directly to large language models
 

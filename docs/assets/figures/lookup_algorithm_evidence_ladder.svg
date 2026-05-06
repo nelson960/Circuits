@@ -18,8 +18,8 @@
   </defs>
 
   <rect width="1180" height="520" fill="#f7f4ef"/>
-  <text x="50" y="58" class="title">The lookup algorithm has a closed pointer and a broad value code</text>
-  <text x="50" y="88" class="subtitle">QK is a compact route map. The mature write/readout side is a causal prediction-position value-code state.</text>
+  <text x="50" y="58" class="title">The lookup algorithm has a closed pointer and a contextual value code</text>
+  <text x="50" y="88" class="subtitle">QK is a compact route map. The write/readout side uses prediction context as a value-code scaffold.</text>
 
   <g transform="translate(50 130)">
     <rect x="0" y="0" width="196" height="190" rx="8" fill="#ffffff" stroke="#d5cfc5" stroke-width="1.5"/>
@@ -67,12 +67,12 @@
     <rect x="0" y="0" width="196" height="190" rx="8" fill="#ffffff" stroke="#bacdca" stroke-width="1.5"/>
     <rect x="0" y="0" width="196" height="30" rx="8" fill="#d9ece8"/>
     <text x="14" y="21" class="status" fill="#286556">CAUSAL</text>
-    <text x="14" y="58" class="box-title">4. Value code</text>
-    <text x="14" y="84" class="box-text">Prediction residual</text>
-    <text x="14" y="103" class="box-text">carries broad value</text>
-    <text x="14" y="122" class="box-text">identity geometry.</text>
-    <text x="14" y="150" class="math">Proj_Bvalue(z_pred)</text>
-    <text x="14" y="169" class="math">rank127 keep ~= IID</text>
+    <text x="14" y="58" class="box-title">4. Context value code</text>
+    <text x="14" y="84" class="box-text">Support value plus</text>
+    <text x="14" y="103" class="box-text">prediction context</text>
+    <text x="14" y="122" class="box-text">restore value geometry.</text>
+    <text x="14" y="150" class="math">A z_src + B z_ctx</text>
+    <text x="14" y="169" class="math">+ b -> z_value</text>
   </g>
 
   <path class="arrow" d="M 952 328 L 952 370 L 242 370 L 242 338" marker-end="url(#arrow)" fill="none" stroke="#3f4749" stroke-width="2.2"/>
@@ -87,8 +87,8 @@
   <g transform="translate(810 352)">
     <path class="open-line" d="M 0 0 L 260 0 L 260 108 L 0 108 Z"/>
     <text x="18" y="34" class="box-title">Boundary</text>
-    <text x="18" y="60" class="box-text">Pointer and value readout</text>
-    <text x="18" y="80" class="box-text">are supported. The exact</text>
-    <text x="18" y="100" class="box-text">write operator is open.</text>
+    <text x="18" y="60" class="box-text">Pointer and context transfer</text>
+    <text x="18" y="80" class="box-text">are supported. Prediction</text>
+    <text x="18" y="100" class="box-text">context construction is open.</text>
   </g>
 </svg>

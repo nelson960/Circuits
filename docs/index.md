@@ -12,20 +12,34 @@ Living draft: 2026-05-06
 
 ## Abstract
 
-I study circuit formation in a 3-layer decoder-only transformer trained on a symbolic key-value lookup task. Because the task has a known algorithmic structure, I can define role-level progress measures for support-value retrieval and write/readout coupling. I find that the trained mechanism is dense and not localized to a stable head or neuron identity. Instead, a support-value retrieval role repeatedly forms across random seeds, while its implementing head changes. In the reference seed, the QK side appears as a low-rank `W_QK` matcher whose route growth is predicted by exact AdamW update accounting. The instantaneous raw-gradient, SGD-equivalent update explains only a small fraction of this growth, while AdamW-preconditioned current and momentum terms carry the movement. A matched seed-7 optimizer ablation strengthens this point: AdamW variants learn and form the route, while a same-budget SGD/SGD+momentum learning-rate sweep does not. The write side does not reduce to a clean static `W_OV` matrix; it creates a prediction-position residual state whose broad value-token identity geometry is causally used by the answer readout. These results support role-level, optimizer-state-aware circuit formation in a controlled model, while leaving full answer-margin closure, broader optimizer sweeps, and scaling open.
+I study circuit formation in a 3-layer decoder-only transformer trained on a symbolic key-value lookup task. Because the task has a known algorithmic structure, I can define role-level progress measures for support-value retrieval and write/readout coupling. I find that the trained mechanism is dense and not localized to a stable head or neuron identity. Instead, a support-value retrieval role repeatedly forms across random seeds, while its implementing head changes. In the reference seed, the QK side appears as a low-rank `W_QK` matcher whose route growth is predicted by exact AdamW update accounting. The instantaneous raw-gradient, SGD-equivalent update explains only a small fraction of this growth, while AdamW-preconditioned current and momentum terms carry the movement. A matched seed-7 optimizer ablation strengthens this point: AdamW variants learn and form the route, while a same-budget SGD/SGD+momentum learning-rate sweep does not. The write side does not reduce to a clean static `W_OV` matrix or to a pure support-value copy. It creates a prediction-position residual state whose broad value-token identity geometry is causally used by the answer readout, and contextual transfer rescue shows that the prediction slot itself carries much of the recoverable value-code signal. These results support role-level, optimizer-state-aware circuit formation in a controlled model, while leaving full answer-margin closure, broader optimizer sweeps, and scaling open.
 
 ## Contributions
 
-I make eight claims that can be checked against the artifact map.
+I make nine claims that can be checked against the artifact map. They fall into four groups.
 
-1. A controlled symbolic key-value benchmark for studying circuit formation under autoregressive training.
-2. A role-level route scalar for support-value retrieval.
-3. Evidence that QK route formation appears as low-rank `W_QK` crystallization.
-4. Exact AdamW update attribution showing that the instantaneous raw-gradient, SGD-equivalent update is tiny relative to AdamW-preconditioned route growth.
-5. Cross-seed evidence that the retrieval role repeats while the implementing head changes.
-6. A write-side analysis showing contextual residual coupling rather than a clean static `W_OV` theorem.
-7. Causal evidence that the mature prediction residual contains a broad value-token identity code used by the answer readout.
-8. A matched-budget optimizer ablation where AdamW variants form the lookup role and SGD variants do not under the tested recipe.
+| group | claims |
+| --- | --- |
+| setup | a controlled symbolic key-value benchmark; role-level progress measures for support-value retrieval and write/readout coupling |
+| QK route | low-rank `W_QK` crystallization; exact AdamW update attribution; cross-seed role/address dissociation |
+| write/readout | contextual residual coupling rather than a static `W_OV` theorem; causal broad prediction-position value code; source-plus-prediction-context transfer rescue |
+| optimizer ablation | AdamW variants form the lookup role under the tested recipe; same-budget SGD variants do not |
+
+## Bounded Claim
+
+This is a role-theoretic formation account, not a full closed-form reverse engineering result.
+
+The QK side is close to closed: a low-rank support-value pointer forms, the pointer is causal and cross-seed stable at the role level, and exact AdamW accounting explains its growth in the traced runs. The write/readout side is different. It is a contextual, high-rank prediction-position value-code operation. I characterize that operation with causal subspace interventions, source-plus-context transfer rescue, and optimizer attribution rather than deriving it from a simple prior basis such as Fourier modes.
+
+So the claim is bounded:
+
+```text
+In this controlled symbolic transformer, training forms a stable lookup role.
+The role moves addresses across seeds.
+The route side is a low-rank QK support-value matcher.
+The write side is a contextual, high-rank prediction value-code operation.
+AdamW-preconditioned updates carry the measured role growth in the traced runs.
+```
 
 ## The Ghost Moves Rooms
 
@@ -65,7 +79,7 @@ In the traced runs, AdamW-preconditioned updates carry the useful growth,
 while the instantaneous raw-gradient, SGD-equivalent direction is tiny.
 ```
 
-That is the core finding. The write side is real too, but it is not QK again. QK becomes a clean low-rank route matcher. The write side creates a broad value-code state at the prediction position. Removing value identity from that state damages behavior; keeping nearly all of that value-identity geometry almost preserves IID behavior.
+That is the core finding. The write side is real too, but it is not QK again. QK becomes a clean low-rank route matcher. The write side creates a broad value-code state at the prediction position. Removing value identity from that state damages behavior; keeping nearly all of that value-identity geometry almost preserves IID behavior. A later contextual rescue test shows why the write side resisted a simple copy story: the prediction slot already contains a readout-ready value-code scaffold, and support retrieval helps shape that scaffold rather than writing the whole answer code from scratch.
 
 <figure class="paper-figure">
   <img src="assets/figures/updated_loss_to_lookup_chain.svg" alt="Loss to lookup chain">
@@ -92,10 +106,10 @@ The answer is developmental. The model starts as a dense shared substrate with m
 
 <figure class="paper-figure">
   <img src="assets/figures/growth_phase_timeline.svg" alt="Circuit growth phase timeline">
-  <figcaption><strong>Figure 2. Circuit growth timeline.</strong> The paper follows the model's formation phases: dense candidate competition, early scaffold, QK pointer crystallization, optimizer pressure, write/readout coupling, broad value-code readout, later heldout consolidation, and role migration across seeds.</figcaption>
+  <figcaption><strong>Figure 2. Circuit growth timeline.</strong> The paper follows overlapping growth stages: dense candidate competition, early scaffold, QK pointer crystallization, optimizer pressure, write/readout coupling, broad value-code readout, later heldout consolidation, and role migration across seeds.</figcaption>
 </figure>
 
-The next sections unpack those phases. The short technical version has two halves.
+The next sections unpack those stages. They overlap in training time, so I use them as a developmental spine rather than a strict chronological partition. The short technical version has two halves.
 
 The QK half asks where the model reads. In the reference seed, `L2H1 W_QK` becomes a low-rank support-value matcher. Its route score grows during formation, its singular structure crystallizes, and exact AdamW attribution explains the growth. The raw-gradient, SGD-equivalent update accounts for only about `0.76%` of the route growth in the traced from-initialization run.
 
@@ -109,13 +123,13 @@ C_write(theta) = E_x [ g_ref(x) . delta_write_theta(x) ]
 
 In words: remove a source, look at the missing residual change, and ask whether that missing change points in the answer-relevant direction used by the mature model. For the reference seed fixed-readout write scalar over `1500 -> 2500`, the raw-gradient, SGD-equivalent update is about `0.13%` of actual growth. Adam momentum carries about `93%` of the same scalar aggregate in that run.
 
-The residual state that readout uses is now clearer. At `layer_2_post_mlp / prediction`, removing the rank-16 value-identity subspace drops validation margin by `4.97` and validation answer accuracy by `0.288` at step `3500`. Keeping only a very low-rank value subspace fails, but keeping rank `127` value identity almost preserves IID behavior: validation accuracy goes from `0.7647` to `0.7582`. So the write/readout side is a broad value-code state, not a tiny OV vector.
+The residual state that readout uses is now clearer. At `layer_2_post_mlp / prediction`, removing the rank-16 value-identity subspace drops validation margin by `4.97` and validation answer accuracy by `0.288` at step `3500`. Keeping only a very low-rank value subspace fails, but keeping rank `127` value identity almost preserves IID behavior: validation accuracy goes from `0.7647` to `0.7582`. A support-to-prediction transfer partly reconstructs this state, but the stronger rescue uses both support value-code and prediction-position context. So the write/readout side is a contextual broad value-code state, not a tiny OV vector.
 
 Across five additional seeds, both sides repeat at the role level but move at the address level. QK winners include `L2H0`, `L2H2`, `L2H3`, `L2H1`, and `L1H2`. Write winners include paths such as `L1H3 -> L1MLP`, `L1H1 -> L1MLP`, and `L2H1 -> L2MLP`.
 
 This is the same role/address split introduced above. The rest of the paper explains how I measured the role strongly enough to see it move.
 
-## The Dense Substrate
+## Act 1: The Circuit Did Not Start As A Circuit
 
 The first lesson was negative but important: the circuit was real, but the unit of explanation was not a neuron, feature family, or stable head name.
 
@@ -141,7 +155,9 @@ This work sits between mechanistic interpretability and training dynamics.
 
 The transformer architecture comes from [Vaswani et al. 2017](https://arxiv.org/abs/1706.03762). The QK/OV language and the habit of decomposing attention heads into route and write maps follows the transformer-circuits line of work, especially [Elhage et al. 2021](https://transformer-circuits.pub/2021/framework/index.html). The closest circuit-formation precedent is the induction-head work of [Olsson et al. 2022](https://transformer-circuits.pub/2022/in-context-learning-and-induction-heads/index.html), which connects a learned attention circuit to a training-time phase change. I ask a narrower but more optimizer-specific question: which update components actually moved the role scalar during formation?
 
-The superposition framing follows [Elhage et al. 2022](https://transformer-circuits.pub/2022/toy_model/index.html). That is why I do not force a neuron-level theorem when the evidence says the useful object is a subspace. The causal-intervention style is related to causal tracing and model-editing work such as [Meng et al. 2022](https://arxiv.org/abs/2202.05262), but the target here is not just where a finished model stores a fact. The target is how training wrote a role into the model.
+The superposition framing follows [Elhage et al. 2022](https://transformer-circuits.pub/2022/toy_model/index.html). That is why I do not force a neuron-level theorem when the evidence says the useful object is a subspace.
+
+The write-side interventions are related to causal tracing and model-editing work such as [Meng et al. 2022](https://arxiv.org/abs/2202.05262), but the question is different. Causal tracing asks where a finished model mediates a fact. Here I ask how training forms a reusable write/readout role. That is why the residual intervention is paired with optimizer-state attribution, source-plus-context transfer rescue, and cross-seed role tracking.
 
 The optimizer accounting is specific to AdamW. Adam was introduced by [Kingma and Ba 2014](https://arxiv.org/abs/1412.6980), and decoupled weight decay for AdamW by [Loshchilov and Hutter 2017](https://arxiv.org/abs/1711.05101). Small algorithmic tasks have also been used to study delayed generalization and training dynamics, most famously in grokking work by [Power et al. 2022](https://arxiv.org/abs/2201.02177). I use a small symbolic task for a different purpose: to make a role-level circuit formation story auditable end to end.
 
@@ -186,7 +202,7 @@ The shared model recipe is:
 
 The selected heldout-generalization run reaches heldout-pair answer accuracy around `0.8730`. Structural OOD remains much weaker, around `0.5082`. The formation microscope is not a different architecture; it is the dense-checkpoint view of the same recipe. That is enough behavior to study formation, but not enough to pretend every generalization question is solved.
 
-## Phase 0: Candidate Circuits Compete
+## Candidate Circuits Compete Inside The Substrate
 
 I did not start with QK. I started with the obvious maps.
 
@@ -209,11 +225,23 @@ This changed the project from a component hunt into a formation audit.
 
 The transparent feature-family birth model made the same point quantitatively. It predicted `family4` should form first from activation support, amplification, feature-score drive, and aggregate gradient alignment. The model formed `family7` first instead. `family7` became useful at step `2250`, `family4` followed at step `2500`, and `family7` had the larger useful delta (`0.408` versus `0.234`) and heldout-gap delta (`0.196` versus `0.022`). The local gradient-flavored score picked the tempting sibling; the training trajectory selected the more generalizing role.
 
-## The Mature Form: The Lookup Algorithm
+## The Algorithm I Am Trying To Close
 
-The model is not fully transparent yet, but the current artifacts are enough to state the learned lookup algorithm as a chain with a proof boundary at each link.
+The circuit is distributed, but the algorithm can still be followed.
 
-The task-level algorithm is:
+I do not need one isolated neuron or one isolated head to claim progress. For this model, a closed algorithm means something more practical:
+
+```text
+name the variable being carried,
+name the subspace or route carrying it,
+show a causal or predictive test,
+show when training formed that link,
+and mark exactly where the explanation stops.
+```
+
+This section is the map, not the proof. The evidence comes in the growth story below, and the full equation-to-tool ledger appears near the end once each object has been introduced.
+
+The task-level algorithm is simple:
 
 ```text
 given a query key K:
@@ -222,30 +250,33 @@ given a query key K:
   make V the next-token answer
 ```
 
-The model-level story I can currently support is:
+The model-level algorithm I can currently support is:
 
 ```text
-contextual key/value states
-  -> QK pointer to the true support-value position
+tokens and positions
+  -> contextual key/value residual states
+  -> QK pointer from prediction slot to true support-value slot
+  -> attention reads a value-bearing residual state
   -> prediction-position residual write
+  -> support value-code + prediction context
   -> broad prediction-position value-code state
-  -> correct value logit
+  -> output readout for the correct value token
 ```
 
 <figure class="paper-figure">
   <img src="assets/figures/lookup_algorithm_evidence_ladder.svg" alt="Lookup algorithm evidence ladder">
-  <figcaption><strong>Figure 6. Lookup algorithm evidence ladder.</strong> The QK pointer is the cleanest closed link. The write/readout side is now identified as a broad prediction-position value-code state, while the exact support-to-prediction operator and full moving-margin closure remain open.</figcaption>
+  <figcaption><strong>Figure 6. Lookup algorithm evidence ladder.</strong> The QK pointer is the cleanest closed link. The write/readout side is now identified as a contextual prediction-position value-code state, while the construction of the prediction context and full moving-margin closure remain open.</figcaption>
 </figure>
 
-The first link is contextualization. The raw token embedding is not enough. Earlier layers turn key, value, and prediction slots into contextual residual states:
+The first step is contextualization. A raw token embedding is not enough. Earlier layers turn key, value, and prediction slots into contextual residual states:
 
 ```text
 z_role^ell(x)
 ```
 
-where `role` can mean `query_key`, `support_value`, `value_distractor`, or `prediction`. Contextual SVD and key-separability runs show that the useful QK directions align with these contextual states more cleanly than with a naive static embedding story. This is supported, but not closed: I do not yet have a simple formula for how learned token and positional vectors compose into those contextual states.
+where `role` can mean `query_key`, `support_value`, `value_distractor`, or `prediction`. Contextual SVD and key-separability runs show that useful QK directions align with these contextual states more cleanly than with a naive static embedding story. This is supported, but not closed: I do not yet have a simple formula for how learned token and positional vectors compose into those contextual states.
 
-The second link is the pointer. This is the strongest part:
+The second step is the pointer. This is the strongest link:
 
 ```text
 score(prediction, source)
@@ -260,9 +291,9 @@ C_QK
       - mean score(prediction, value_distractors)]
 ```
 
-Here the story is close to closed. The route appears as low-rank `W_QK` growth, the route scalar rises with singular structure, causal and cross-seed controls select the same role, and exact AdamW accounting explains the realized growth.
+Here the story is close to closed. The route appears as low-rank `W_QK` growth, the route scalar rises with singular structure, causal and cross-seed controls select the same role, and exact AdamW accounting explains the realized growth. In the traced diagnostic window, the sharpening is mostly query-side: the prediction-side geometry learns to ask the right question.
 
-The third link is the value/write side. This is where the story stops looking like a clean low-rank matrix theorem. The measured object is:
+The third step is value movement. This is where the story stops looking like a clean low-rank matrix theorem. The measured object is:
 
 ```text
 delta_write(x)
@@ -272,9 +303,28 @@ C_write
   = E[g_ref(x) . delta_write(x)]
 ```
 
-In words: remove the source, measure the missing residual change, and ask whether that change points in a direction the mature answer readout uses. The evidence says this write mostly lives at the prediction position. It is mostly residual-skip signal, with `L0MLP` adding a smaller positive nonlinear correction. This is a real computation, but it is not a closed `W_OV` formula.
+In words: remove the source, measure the missing residual change, and ask whether that change points in a direction the mature answer readout uses. The evidence says this write mostly lives at the prediction position. The aggregate prediction-position functional write effect is about `+4165.317`; the support-value-position effect is about `-17.307`. Most of the useful signal is residual-skip signal, with `L0MLP` adding a smaller positive nonlinear correction. This is a real computation, but it is not a closed `W_OV` formula.
 
-The fourth link is the value code at prediction. The current best object is not a neuron and not a rank-1 direction. It is broad value-token identity geometry:
+The stronger write object is contextual. A source-only transfer asks whether support value-code predicts the target prediction value-code:
+
+```text
+z_src(x) = P_src h_layer1,support(x)
+z_tgt(x) = P_value h_layer2,prediction(x)
+
+z_hat_tgt(x) = A z_src(x) + b
+```
+
+That is useful but incomplete. The better model includes the prediction slot's own context:
+
+```text
+z_ctx(x) = P_ctx h_layer1,prediction(x)
+
+z_hat_tgt(x) = A z_src(x) + B z_ctx(x) + b
+```
+
+This is the concrete write-side mechanism I can currently support: the model does not simply copy a support value into an empty prediction slot. The prediction slot already contains a value-readout scaffold, and the retrieved support value helps shape or select that scaffold.
+
+The fourth step is the value code at prediction. The current best object is not a neuron and not a rank-1 direction. It is broad value-token identity geometry:
 
 ```text
 B_value
@@ -298,7 +348,7 @@ Removing value identity from that prediction state damages the mature circuit. A
 
 Keeping only the value-code subspace shows why this is not a low-rank OV theorem. Rank `16` is not sufficient: at step `3500`, keeping only rank-16 value identity gives validation margin `-4.248` and accuracy `0.451`. But keeping nearly all value identity, rank `127`, almost preserves IID behavior: margin `5.707`, accuracy `0.7582`. The write/readout side is therefore broad value-code geometry, not one compact vector.
 
-The fifth link is readout. For fixed output-space scalars, the final residual movement is substantially explainable by component DLA movement:
+The fifth step is readout. For fixed output-space scalars, the final residual movement is substantially explainable by component DLA movement:
 
 ```text
 Delta scalar
@@ -309,20 +359,31 @@ This works best for fixed, differentiable scalars. In the matched `1500 -> 2500`
 
 So the current algorithm ledger is:
 
-| link | what it computes | status |
-| --- | --- | --- |
-| contextual state | tokens and positions become role-specific residual states | supported, not closed-form |
-| QK pointer | prediction scores true support value above distractors | strong |
-| prediction write | selected source changes the prediction residual state | supported |
-| value code | prediction residual contains broad value-token identity geometry | supported and causal; not low-rank |
-| readout | residual movement becomes correct-value logit movement | partial, stronger for fixed scalars |
-| formation | optimizer updates build the role during training | strong for QK, supported for write |
+| algorithm step | variable being carried | carrier | evidence | formation |
+| --- | --- | --- | --- | --- |
+| contextualize slots | key/value role identity | contextual residual states | contextual SVD and key-separability beat static embeddings | early scaffold |
+| choose support slot | latest matching support value | QK route from prediction to support-value position | low-rank `W_QK`, route scalar, causal/cross-seed controls | `750 -> 2500` |
+| move value evidence | answer-value information | prediction-position residual delta | source ablation, position split, functional write scalar | `1500 -> 2500` |
+| form answer code | value-token identity | broad prediction-position value-code subspace | value-identity removal hurts; high-rank keep nearly preserves IID | `1750 -> 3500` |
+| restore value code | support value plus prediction scaffold | `A z_src + B z_ctx + b` | contextual transfer rescue nearly restores stable write/readout scalars | `1750 -> 3500` |
+| read out answer | correct value logit | final residual and unembedding/readout directions | output closure is strong for fixed scalars; branch-aware margin helps | partial |
+| explain formation | why this role formed | optimizer trajectory and data pressure | AdamW attribution, Q/K-side split, train data-gradient support | strongest for QK |
 
-This is the main difference from a fully closed Fourier-style grokking story. I can explain the pointer in weight, activation, causal, optimizer, and cross-seed terms. I can identify the downstream residual object as a broad value-code state. What I cannot yet write down is a closed-form operator that maps the support-value residual state into the prediction-position value-code state.
+This is the main difference from a fully closed Fourier-style grokking story. I can explain the pointer in weight, activation, causal, optimizer, and cross-seed terms. I can identify the downstream residual object as a broad value-code state. I can show that the useful write is concentrated at the prediction position and that the answer readout causally uses value identity there.
 
-## Phase 1: The Early Scaffold
+What I cannot yet write down is the exact operator that builds the prediction scaffold itself:
 
-The first measured phase is small but informative.
+```text
+tokens, positions, prior residual stream
+  -> prediction-position context
+  -> readout-ready value scaffold
+```
+
+The algorithm is therefore closed at the level of variables, roles, causal subspaces, and formation timing. It is not yet closed as a fully isolated low-rank write operator or a closed-form equation for the prediction context.
+
+## The Early Scaffold
+
+The first measured growth stage is small but informative.
 
 From `0 -> 750`, the support-value QK route has only weak movement:
 
@@ -335,7 +396,7 @@ The final QK direction is not fully present yet, but it is beginning to rotate t
 
 This is the scaffold stage. It does not yet look like the finished lookup mechanism. But it biases the later route: a direction is being carved out before it becomes behaviorally dominant.
 
-## Phase 2: The QK Pointer Crystallizes
+## Act 2: The Pointer Crystallizes
 
 QK is the clean half because QK is routing.
 
@@ -397,9 +458,11 @@ W_QK = U Sigma V^T
 
 The top singular structure of `W_QK` is not just decorative. It grows when the support-value route grows.
 
-## Phase 3: AdamW Preconditioning Carries The Growth
+## Act 3: Adaptive Preconditioning Shapes The Pointer
 
 The raw gradient did not explain the route birth in the traced run. AdamW's actual update did.
+
+The key optimizer lesson is not simply "momentum did it." The traced AdamW trajectory is momentum-heavy during the clean birth window, but the matched ablation shows that `beta1 = 0` still learns the task and forms an even stronger measured route under this recipe. The more precise claim is about adaptive, preconditioned update geometry: AdamW changes which directions are reachable at this budget.
 
 For every adjacent checkpoint, I measured:
 
@@ -431,7 +494,7 @@ weight decay / actual:            -4.9%
 
 The percentages can sum above 100% because components reinforce and oppose each other. The important fact is that the raw SGD-equivalent update is tiny.
 
-The trace is not one uniform story. It has phases:
+The trace is not one uniform story. It has windows:
 
 ```text
 0 -> 750:
@@ -451,7 +514,7 @@ The critical window is `750 -> 2500`. The route grows, but the raw SGD-equivalen
 
 <figure class="paper-figure">
   <img src="assets/figures/qk_optimizer_phase_structure.svg" alt="QK optimizer phase structure">
-  <figcaption><strong>Figure 9. QK formation has phases.</strong> The cleanest birth window is `750 -> 2500`: the route grows while the raw SGD-equivalent term is slightly negative and Adam momentum carries the useful direction.</figcaption>
+  <figcaption><strong>Figure 9. QK formation has windows.</strong> The cleanest birth window is `750 -> 2500`: the route grows while the raw SGD-equivalent term is slightly negative and Adam momentum carries the useful direction.</figcaption>
 </figure>
 
 This does not mean gradients are irrelevant. AdamW is built from gradients. It means the object that wrote the route was not the instantaneous raw gradient alone. The object was the optimizer trajectory: accumulated state, adaptive scaling, and preconditioning.
@@ -501,7 +564,7 @@ This is still bounded. It does not prove that SGD can never learn with more step
 
 The early route-birth story is also not the whole 16k training story. The broader run has three visible behavioral windows: `1500 -> 2000`, where usable lookup first appears; `4250 -> 4750`, where heldout-pair behavior consolidates; and `7500 -> 8000`, where upper-layer representations reorganize. The paper focuses on the early and mid formation microscope because that is where the exact stepwise optimizer traces and QK/write diagnostics are strongest.
 
-## Cross-Seed Proof: The Address Moves
+## Act 4: The Body Plan Repeats, The Address Moves
 
 The opening mystery needs a control. A circuit story that only works for one head in one seed is weak. So I repeated the route search across five additional seeds.
 
@@ -526,11 +589,19 @@ role pattern is stable.
 
 If the question is "does `L2H1` always do it?", the answer is no. If the question is "does a support-value retrieval role form?", the answer is yes.
 
-## Phase 4: The Write Side Is Not QK Again
+## Act 5: The Write Side Differentiates Into A Scaffold
 
 QK asks where to read. OV/write asks what useful state gets created after reading.
 
 Those are not the same kind of object.
+
+The natural copy hypothesis is:
+
+```text
+retrieve support value -> copy answer code into prediction slot
+```
+
+That is too simple. The evidence points to a scaffolded write: the prediction slot is already becoming a value-readout workspace, and retrieved support information helps make that workspace answer-specific. This section follows that differentiation: first the source creates a prediction-position residual change, then that residual becomes a broad value-code state, and finally source-plus-prediction context nearly restores the removed value-code component.
 
 QK produces a score:
 
@@ -579,7 +650,7 @@ the source changes the current prediction residual state;
 downstream readout geometry knows how to use that change.
 ```
 
-## Phase 5: The Write Coupling Turns On
+## The Write Coupling Turns On
 
 The write direction was not born from nothing. Mature-looking directions are partly present early. What changes sharply is their coupling to answer-readout directions.
 
@@ -633,7 +704,7 @@ This is not the same mechanism as QK. QK visibly forms a low-rank route map. The
   <figcaption><strong>Figure 13. Reference write optimizer split.</strong> In the reference seed and this fixed-readout scalar, the write coupling is momentum-heavy. This is not the same measurement as the later cross-seed aggregate.</figcaption>
 </figure>
 
-## Phase 6: The Readout Becomes A Broad Value Code
+## The Readout Becomes A Broad Value Code
 
 The write side creates a value-code state, but not a tiny one.
 
@@ -706,6 +777,36 @@ step 3500, validation_iid:
 
 So the write/readout side is not low-rank the way QK is. The QK route forms a compact pointer. The readout side forms a broad value-code state.
 
+### The Prediction Slot Supplies The Scaffold
+
+The next closure attempt asked whether the support value-code itself can rebuild the prediction value-code. This is the most natural copy-style hypothesis:
+
+```text
+support value-code -> prediction value-code
+```
+
+It works, but only partly. Source-only transfer is strong on stable answer evidence, but does not fully reproduce the margin geometry. At step `3500`, source-only transfer rescues `0.949` of negative-answer-loss damage and `0.750` of value-accuracy damage, but only `0.320` of the fixed removed-branch margin and `-0.080` of the moving margin.
+
+Adding prediction-position context changes the picture. The contextual transfer is:
+
+```text
+prediction value-code ~= A support_value_code + B prediction_context + b
+```
+
+At step `3500`, this source-plus-context rescue reaches `1.005` on negative answer loss, `0.875` on value accuracy, and `0.754` on the fixed removed-branch margin. That is much closer to the oracle patch.
+
+The important twist is that context alone is already strong:
+
+| step | scalar | source-only | context-only | source + context |
+|---:|---|---:|---:|---:|
+| `2500` | fixed removed branch | `0.473` | `0.780` | `0.858` |
+| `2500` | negative answer loss | `0.835` | `0.968` | `0.995` |
+| `3000` | fixed removed branch | `0.252` | `0.718` | `0.872` |
+| `3500` | fixed removed branch | `0.320` | `0.640` | `0.754` |
+| `3500` | negative answer loss | `0.949` | `0.959` | `1.005` |
+
+So the write side is not "copy the retrieved value into an empty slot." The prediction slot has already been prepared as a value-readout scaffold. The retrieved support value contributes to the scaffold, but the scaffold itself carries much of the recoverable value-code signal.
+
 The split boundary matters. Rank-127 keep is strong on `validation_iid` and `counterfactual`, but does not rescue heldout-pair or structural-OOD margins. So the claim is not "this explains every split." The claim is:
 
 ```text
@@ -714,7 +815,7 @@ the prediction residual contains a broad value-token identity code
 that is causally used by the answer readout.
 ```
 
-## Phase 7: The Write Role Also Moves Rooms
+## The Write Role Also Moves Rooms
 
 The write role also repeats across seeds, and the address also moves. This matters because it says the role/address split is not only a QK routing phenomenon.
 
@@ -748,7 +849,7 @@ These numbers are different from the reference-seed fixed scalar in Figure 13 be
   <figcaption><strong>Figure 14. The ghost moves rooms on both sides.</strong> The retrieval role and the write/readout role repeat, while their component addresses vary with seed.</figcaption>
 </figure>
 
-## Methodological Trap: Moving Answer Margins
+## Methodological Note: Moving Answer Margins Hide Circuits
 
 A route can be real even when it does not fully explain the usual answer margin.
 
@@ -771,6 +872,21 @@ This is not only a limitation of this run. It is a methodological caution for fu
 ## The Computation Ledger
 
 This is the current end-to-end computation story.
+
+This is also the reproducible mathematical ledger. Each line names the variable, the equation I measure, and the tool that reproduces it.
+
+| object | measured equation | reproducing tool |
+| --- | --- | --- |
+| QK route | `C_QK = E[s_support - mean(s_distractor)]` | `bilinear-qk-match-separation` |
+| QK route birth | `Delta C_QK ~= grad C_QK . Delta theta_actual` | `bilinear-qk-rank-adam-state-attribution` |
+| write scalar | `C_write = E[g_ref . delta_write]` | `mlp-input-functional-subspace-report` |
+| write growth | `Delta C_write ~= grad C_write . Delta theta_actual` | `mlp-functional-write-adam-state-attribution` |
+| value code | `z_value = B_value^T h_prediction` | `value-code-subspace-report` |
+| value-code causality | remove or keep `Proj_B_value(h_prediction)` | `geometry-subspace-intervention` |
+| source-only transfer | `z_hat = A z_support + b` | `value-code-transfer-map-report` |
+| contextual transfer | `z_hat = A z_support + B z_prediction_context + b` | `value-code-transfer-rescue` |
+| fixed readout | `logit(V_i) = h_final^T E[V_i]` | `output-route-closure` |
+| branch-aware margin | fixed or split wrong-token branch | `answer-margin-branch-decomposition` |
 
 The pointer half:
 
@@ -812,6 +928,15 @@ z_prediction_value
 
 In words: the mature prediction residual carries broad value-token identity geometry. Removing value identity hurts behavior; keeping nearly all of it almost preserves IID behavior.
 
+The contextual transfer boundary:
+
+```text
+z_hat_prediction_value
+  = A z_support_value + B z_prediction_context + b
+```
+
+In words: support value-code helps restore the target prediction value-code, but prediction context already carries much of the recoverable signal. The write operator is contextual, not a pure support-value copy.
+
 The proof ledger is:
 
 | claim | measured object | status |
@@ -822,6 +947,8 @@ The proof ledger is:
 | cross-seed QK role | winner / runner / bottom scans across five seeds | strong |
 | write functional subspace | `C_write = E[g_ref . delta_write]` | supported |
 | prediction value code | value-identity projection at `layer_2_post_mlp / prediction` | supported and causal; broad |
+| source-only value transfer | `z_hat = A z_support + b` | supported but partial |
+| contextual value transfer | `z_hat = A z_support + B z_prediction_context + b` | supported for stable write/readout scalars |
 | write optimizer cause | `Delta C_write ~= grad C_write . Delta theta_actual` | supported for AdamW-trained runs |
 | static `W_OV` theorem | raw `W_OV` low-rank answer-vector story | not supported |
 | full answer-margin closure | small route/write family explains all behavior | partial |
@@ -842,7 +969,7 @@ computational claim:
   this object implements this operation
 ```
 
-I have all three strongly for the QK side. For the write side, I have causal evidence for the prediction-position value code and dynamic evidence for write/readout growth, but not a clean static `W_OV` theorem or a closed-form support-to-prediction operator.
+I have all three strongly for the QK side. For the write side, I have causal evidence for the prediction-position value code, dynamic evidence for write/readout growth, and a contextual transfer model that nearly restores stable write/readout scalars. I do not have a clean static `W_OV` theorem or a closed-form equation for how the prediction context itself is built.
 
 ## What Would Weaken This Claim
 
@@ -850,7 +977,7 @@ The role-level interpretation has concrete failure modes.
 
 It would be weakened if bottom-control heads showed the same route growth as selected winners, if cross-seed winners failed to separate from runners and bottom controls, or if the support-value route scalar did not survive heldout and distractor controls. It would also be weakened if the AdamW reconstruction failed to track actual route movement.
 
-The write-side interpretation would be weakened if shuffled-value controls preserved the write scalar, if support-position rescue matched prediction-position rescue, if value-identity removal failed to hurt behavior, if key-identity controls matched value-identity interventions, or if selected write/readout subspaces failed cross-seed validation. Those are the reasons I treat QK as strong, the value-code readout as supported and causal, and the exact write operator plus full answer-margin closure as still open.
+The write-side interpretation would be weakened if shuffled-value controls preserved the write scalar, if support-position rescue matched prediction-position rescue, if value-identity removal failed to hurt behavior, if key-identity controls matched value-identity interventions, if contextual transfer failed to improve stable rescue scalars, or if selected write/readout subspaces failed cross-seed validation. Those are the reasons I treat QK as strong, the value-code readout as supported and causal, the contextual write operator as supported, and the closed-form construction of prediction context plus full answer-margin closure as still open.
 
 ## Closure: What I Explain And What I Do Not
 
@@ -867,12 +994,15 @@ Output-space closure is stronger in the same window. For correct-value logit, ro
 
 The other closure problem is nonlinear write-side conversion. A first-order endpoint gradient can be badly wrong. The line-integral diagnostic shows that integrating along the path can follow the actual endpoint change much better than a single endpoint linearization, especially for negative answer loss.
 
+The value-code transfer runs make that boundary more concrete. Source-only support-to-prediction transfer is useful but partial. Source-plus-prediction-context transfer nearly restores stable write/readout scalars: at step `3500`, it rescues `1.005` of negative-answer-loss damage and `0.754` of fixed removed-branch margin damage. But context-only rescue is already high (`0.959` and `0.640` on the same two scalars), so the remaining algorithmic question is how the prediction context became a value-readout scaffold in the first place.
+
 So the honest closure statement is:
 
 ```text
 route/write scalars are meaningful;
 output-space closure is stronger;
-full answer-margin sufficiency by a small route set remains open.
+source plus prediction context nearly closes stable write/readout rescue;
+full moving-margin sufficiency by a small route set remains open.
 ```
 
 ## What This Means
@@ -881,7 +1011,7 @@ The important interpretability object is not always a named head or neuron. In t
 
 This matters because seed-level replication fails if I use the wrong address. `L2H1` is not always the circuit. But a support-value retrieval role appears across seeds. A contextual write/readout role appears across seeds too.
 
-The value-code result sharpens what that write/readout role is doing in the reference run. It is not merely "making the residual better." It creates a prediction-position state whose broad value-token identity geometry is enough to almost preserve IID answer behavior when kept at high rank, and whose removal damages the mature circuit.
+The value-code result sharpens what that write/readout role is doing in the reference run. It is not merely "making the residual better." It creates a prediction-position state whose broad value-token identity geometry is enough to almost preserve IID answer behavior when kept at high rank, and whose removal damages the mature circuit. The contextual transfer rescue adds the next piece: the support value-code does not act alone. The prediction slot itself supplies much of the value-code scaffold, and support retrieval helps make that scaffold answer-specific.
 
 Formation tracking adds something that post-hoc interpretability does not usually give. A trained-model circuit analysis can say:
 
@@ -900,7 +1030,7 @@ That is the difference between a static circuit map and a developmental account.
 
 <figure class="paper-figure">
   <img src="assets/figures/proof_status_ladder_updated.svg" alt="Proof status ladder">
-  <figcaption><strong>Figure 16. Proof status.</strong> I have strong QK formation evidence, causal value-code readout evidence, and explicit open gaps around the exact write operator and full margin closure.</figcaption>
+  <figcaption><strong>Figure 16. Proof status.</strong> I have strong QK formation evidence, causal value-code readout evidence, and contextual write-transfer evidence, with explicit open gaps around prediction-context construction and full moving-margin closure.</figcaption>
 </figure>
 
 ## Limitations And Future Tests
@@ -916,24 +1046,27 @@ The main limitations are:
 | scaling across width, depth, and task families | not done here |
 | neuron-level decomposition | blocked by superposition; subspace-level methods are more honest |
 | static `W_OV` low-rank theorem | not supported by current evidence |
-| closed-form support-to-prediction value operator | not yet derived; current proof is role/subspace-level |
+| pure support-to-prediction value copy | incomplete; source-only transfer helps but does not close stable margins |
+| closed-form prediction-context construction | not yet derived; current proof is role/subspace-level |
 
 The write-side current-vs-momentum variation is not a weakness to hide. It is a finding: the reference-seed fixed write scalar is momentum-heavy, while the cross-seed selected-winner aggregate is mostly Adam current-gradient with a smaller momentum contribution. The stable statement is that AdamW-preconditioned updates carry write growth and the raw SGD-equivalent term is tiny.
 
 The optimizer ablation is still not the final word. It is one seed, one architecture, one training budget, and a finite learning-rate sweep. The current claim is therefore bounded: under the matched seed-7 recipe, AdamW variants learn and form the route, while the tested SGD variants do not. Longer SGD runs, broader schedules, different initialization scales, and cross-seed optimizer ablations remain future tests.
+
+The remaining write-side closure target is specific. To close the prediction scaffold, I would need to decompose `h_layer1,prediction` into embedding, learned position, attention, MLP, residual-skip, and layernorm contributions; show which pieces construct the value-code scaffold; and then run the same remove/restore tests on those pieces. That is a new closure project, not a missing row in the current evidence table.
 
 Other next experiments are:
 
 ```text
 1. scale width/depth and test whether role-address dissociation persists;
 2. apply the role-level method to another task family;
-3. derive or falsify a closed-form support-to-prediction value operator;
+3. derive or falsify a closed-form construction of the prediction-position value scaffold;
 4. improve closure with residual-state and line-integral proof objects.
 ```
 
 ## Conclusion
 
-This study does not show that all transformer circuits form this way. It shows that, in a controlled symbolic retrieval setting, the stable unit of formation can be a role rather than a component address. The QK side of that role becomes visible as a low-rank support-value matcher, and exact optimizer accounting shows that AdamW-preconditioned updates, not the instantaneous raw-gradient direction alone, carry its growth. A matched seed-7 ablation supports the optimizer story: AdamW variants form the role, while the tested SGD variants do not. The write side repeats across seeds as a contextual residual coupling rather than a clean `W_OV` matrix, and in the reference run the mature prediction residual contains a broad value-token identity code that the answer readout causally uses. The remaining challenge is to test whether this role-level, optimizer-state-aware account survives broader optimizer sweeps, scaling, and less synthetic tasks, and to derive a closed-form support-to-prediction value operator if one exists.
+This study does not show that all transformer circuits form this way. It shows that, in a controlled symbolic retrieval setting, the stable unit of formation can be a role rather than a component address. The QK side of that role becomes visible as a low-rank support-value matcher, and exact optimizer accounting shows that AdamW-preconditioned updates, not the instantaneous raw-gradient direction alone, carry its growth. A matched seed-7 ablation supports the optimizer story: AdamW variants form the role, while the tested SGD variants do not. The write side repeats across seeds as a contextual residual coupling rather than a clean `W_OV` matrix. In the reference run, the mature prediction residual contains a broad value-token identity code that the answer readout causally uses, and source-plus-prediction-context transfer nearly restores stable write/readout scalars. The result is therefore an empirical algorithm ledger: the measured variables and causal subspaces are reproducible, while the write side is not yet derived from a simple prior basis like Fourier modes. The remaining challenge is to test whether this role-level, optimizer-state-aware account survives broader optimizer sweeps, scaling, and less synthetic tasks, and to derive a closed-form construction of the prediction-position value scaffold if one exists.
 
 ## Audit Trail
 
@@ -961,6 +1094,8 @@ write-side functional subspace:
 value-code readout:
   value_code_subspace
   value_code_causal_intervention
+  value_code_transfer_map
+  value_code_transfer_rescue
 
 closure:
   route_to_scalar_closure
@@ -976,7 +1111,7 @@ In this small symbolic transformer,
 AdamW-trained circuit formation is best explained at the role and subspace level.
 
 QK forms a low-rank support-value route.
-The write side forms a contextual residual coupling and a broad value-code state.
+The write side forms a contextual residual coupling and a broad prediction-position value-code state.
 Both roles replicate across seeds while their component addresses move.
 ```
 

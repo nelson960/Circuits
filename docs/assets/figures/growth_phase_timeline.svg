@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1180" height="540" viewBox="0 0 1180 540" role="img" aria-labelledby="title desc">
-  <title id="title">Circuit growth phase timeline</title>
-  <desc id="desc">A phase timeline from dense candidate competition through QK pointer crystallization, AdamW preconditioning, write coupling, value-code readout, later heldout consolidation, and cross-seed role migration.</desc>
+  <title id="title">Circuit growth timeline</title>
+  <desc id="desc">A growth timeline from dense candidate competition through QK pointer crystallization, AdamW preconditioning, write coupling, value-code readout, later heldout consolidation, and cross-seed role migration.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto">
       <path d="M 0 0 L 10 5 L 0 10 z" fill="#343434"/>
@@ -26,7 +26,7 @@
   </defs>
 
   <rect width="1180" height="540" fill="#f8f5ef"/>
-  <text x="42" y="52" class="title">The circuit grows in phases</text>
+  <text x="42" y="52" class="title">The circuit grows in overlapping stages</text>
   <text x="42" y="82" class="subtitle">The tools enter the story when behavior changes: competition, scaffold, pointer crystallization, write coupling, value-code readout, later consolidation, and role migration.</text>
 
   <line x1="74" y1="128" x2="1104" y2="128" class="axis"/>
@@ -49,7 +49,7 @@
 
   <g transform="translate(42 194)">
     <rect x="0" y="0" width="196" height="122" class="box rose"/>
-    <text x="16" y="28" class="phase-title">Phase 0: competition</text>
+    <text x="16" y="28" class="phase-title">Dense competition</text>
     <text x="16" y="52" class="phase-text">Feature and neuron stories</text>
     <text x="16" y="70" class="phase-text">are shared, opposed, and</text>
     <text x="16" y="88" class="phase-text">sign-conflicted.</text>
@@ -60,7 +60,7 @@
 
   <g transform="translate(266 194)">
     <rect x="0" y="0" width="190" height="122" class="box gold"/>
-    <text x="16" y="28" class="phase-title">Phase 1: scaffold</text>
+    <text x="16" y="28" class="phase-title">Early scaffold</text>
     <text x="16" y="52" class="phase-text">The QK direction is not</text>
     <text x="16" y="70" class="phase-text">mature, but it rotates</text>
     <text x="16" y="88" class="phase-text">toward the final route.</text>
@@ -71,7 +71,7 @@
 
   <g transform="translate(482 194)">
     <rect x="0" y="0" width="230" height="122" class="box green"/>
-    <text x="16" y="28" class="phase-title">Phase 2: pointer crystallizes</text>
+    <text x="16" y="28" class="phase-title">Pointer crystallizes</text>
     <text x="16" y="52" class="phase-text">Support-value QK separation</text>
     <text x="16" y="70" class="phase-text">grows while rank concentrates.</text>
     <text x="16" y="92" class="phase-math">750->2500: actual +1.665</text>
@@ -82,7 +82,7 @@
 
   <g transform="translate(746 194)">
     <rect x="0" y="0" width="228" height="122" class="box blue"/>
-    <text x="16" y="28" class="phase-title">Phase 3: AdamW pressure</text>
+    <text x="16" y="28" class="phase-title">AdamW pressure</text>
     <text x="16" y="52" class="phase-text">Actual optimizer state carries</text>
     <text x="16" y="70" class="phase-text">the route; beta1=0 still</text>
     <text x="16" y="88" class="phase-text">learns under the recipe.</text>
@@ -93,7 +93,7 @@
 
   <g transform="translate(42 366)">
     <rect x="0" y="0" width="266" height="120" class="box ink"/>
-    <text x="16" y="28" class="phase-title">Phase 4-5: write coupling</text>
+    <text x="16" y="28" class="phase-title">Write coupling</text>
     <text x="16" y="52" class="phase-text">The direction is partly present early;</text>
     <text x="16" y="70" class="phase-text">readout coupling turns on sharply.</text>
     <text x="16" y="92" class="phase-math">1500->1750: +5.978</text>
@@ -104,7 +104,7 @@
 
   <g transform="translate(338 366)">
     <rect x="0" y="0" width="266" height="120" class="box green"/>
-    <text x="16" y="28" class="phase-title">Phase 6: broad value code</text>
+    <text x="16" y="28" class="phase-title">Broad value code</text>
     <text x="16" y="52" class="phase-text">Prediction residual becomes</text>
     <text x="16" y="70" class="phase-text">answer-value readable.</text>
     <text x="16" y="92" class="phase-math">1750 acc .608; 3500 .765</text>
@@ -115,7 +115,7 @@
 
   <g transform="translate(634 366)">
     <rect x="0" y="0" width="248" height="120" class="box blue"/>
-    <text x="16" y="28" class="phase-title">Phase 7: role migration</text>
+    <text x="16" y="28" class="phase-title">Role migration</text>
     <text x="16" y="52" class="phase-text">The function repeats across</text>
     <text x="16" y="70" class="phase-text">seeds while the head/path</text>
     <text x="16" y="88" class="phase-text">address changes.</text>

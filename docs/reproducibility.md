@@ -491,6 +491,48 @@ The key control and high-rank sufficiency check use the same command shape. Keep
 | rank-matched value control | `--output-dir $RUN/analysis/value_code_causal_intervention/embedding_value_identity_prediction_layer2_remove_rank7_1500_3500 --subspace embedding_value_identity --rank 7 --operation remove` |
 | high-rank value keep | replace the checkpoint list with `step_002000.pt`, `step_002500.pt`, `step_003000.pt`, `step_003500.pt`; use `--output-dir $RUN/analysis/value_code_causal_intervention/embedding_value_identity_prediction_layer2_keep_rank127_2000_3500 --subspace embedding_value_identity --rank 127 --operation keep` |
 
+The contextual transfer rescue tests whether support value-code plus prediction-position context can replace the removed prediction value-code component.
+
+```bash
+RUN=artifacts/runs/symbolic_kv_reference_formation
+TRACE_CKPTS=$RUN/analysis/optimizer_update_trace/from_init_seed7_0000_6000_stepwise/checkpoints
+
+PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli value-code-transfer-rescue \
+  --config $RUN/run_config.json \
+  --probe-set $RUN/analysis/probe_set.jsonl \
+  --checkpoint-dir $TRACE_CKPTS \
+  --checkpoint $TRACE_CKPTS/step_001750.pt \
+  --checkpoint $TRACE_CKPTS/step_002000.pt \
+  --checkpoint $TRACE_CKPTS/step_002500.pt \
+  --checkpoint $TRACE_CKPTS/step_003000.pt \
+  --checkpoint $TRACE_CKPTS/step_003500.pt \
+  --output-dir $RUN/analysis/value_code_transfer_rescue/support_to_prediction_context_rank16_1750_3500 \
+  --device mps \
+  --source-stage layer_1_post_mlp \
+  --target-stage layer_2_post_mlp \
+  --source-position-role support_value \
+  --target-position-role prediction \
+  --context-stage layer_1_post_mlp \
+  --context-position-role prediction \
+  --context-rank 16 \
+  --group-by answer_value \
+  --split validation_iid \
+  --max-records 256 \
+  --batch-size 32 \
+  --basis-rank 16 \
+  --control shuffled_answer_value \
+  --control wrong_support_value \
+  --control random_subspace \
+  --fit-fraction 0.75 \
+  --overwrite
+```
+
+Expected output:
+
+```text
+artifacts/runs/symbolic_kv_reference_formation/analysis/value_code_transfer_rescue/support_to_prediction_context_rank16_1750_3500/value_code_transfer_rescue_report.json
+```
+
 ### Write AdamW Attribution
 
 The cross-seed write AdamW result uses one selected winner path per seed. After the relevant cross-seed traces are produced, the expected reports are:

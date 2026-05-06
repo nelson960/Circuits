@@ -51,6 +51,8 @@ Use the tools in this order.
 | Why did the QK route grow? | `bilinear-qk-rank-adam-state-attribution` | Decomposes actual update into raw SGD-equivalent, clipped SGD-equivalent, Adam current, momentum, weight decay for a rank-limited QK matcher |
 | Why did the OV/write scalar grow? | `attention-downstream-adam-state-attribution` | Decomposes actual update into AdamW pieces and splits pressure over the traced head's `W_Q`, `W_K`, `W_V`, and `W_O` slices |
 | What value code does the readout use? | `value-code-subspace-report`, `geometry-subspace-intervention` | Tracks prediction-position value identity and tests whether removing/keeping that subspace changes behavior |
+| Does support value-code predict prediction value-code? | `value-code-transfer-map-report` | Fits and controls a support-to-prediction value-code transfer map |
+| Can that transfer causally replace the prediction value-code? | `value-code-transfer-rescue` | Removes the target value-code component and patches back the fitted transfer or controls |
 | Does the same role repeat across seeds? | `scripts/cross_seed_adam_pipeline.py` | Winner / runner-up / bottom-control comparison across seeds |
 
 ## Minimal Decision Tree
@@ -95,6 +97,8 @@ Run:
 Run:
 
 - `value-code-subspace-report`
+- `value-code-transfer-map-report`
+- `value-code-transfer-rescue`
 - `geometry-subspace-intervention` with `--subspace embedding_value_identity`
 - a rank-matched `embedding_key_identity` control
 
@@ -911,6 +915,186 @@ This command answers:
 When does the prediction residual start reading out the answer value?
 Is the readable code grouped by answer value or just by support position?
 Is the value-code object low-rank or broad?
+```
+
+#### `value-code-transfer-map-report`
+
+Use this when the remaining question is the support-to-prediction bridge:
+
+```text
+support-value residual state -> prediction-position value-code state
+```
+
+The tool builds value-identity bases on a deterministic fit split, fits a ridge-stabilized affine map from source coordinates to target coordinates, and evaluates the map on heldout probe rows. Controls use the same heldout rows.
+
+```bash
+TRACE_CKPTS=$ANALYSIS/optimizer_update_trace/from_init_seed7_0000_6000_stepwise/checkpoints
+
+PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli value-code-transfer-map-report \
+  --config $CONFIG \
+  --probe-set $PROBE \
+  --checkpoint-dir $TRACE_CKPTS \
+  --checkpoint $TRACE_CKPTS/step_001500.pt \
+  --checkpoint $TRACE_CKPTS/step_001750.pt \
+  --checkpoint $TRACE_CKPTS/step_002000.pt \
+  --checkpoint $TRACE_CKPTS/step_002500.pt \
+  --checkpoint $TRACE_CKPTS/step_003000.pt \
+  --checkpoint $TRACE_CKPTS/step_003500.pt \
+  --output-dir $ANALYSIS/value_code_transfer_map/support_to_prediction_1500_3500_cli \
+  --device mps \
+  --source-stage layer_1_post_mlp \
+  --target-stage layer_2_post_mlp \
+  --source-position-role support_value \
+  --target-position-role prediction \
+  --group-by answer_value \
+  --split validation_iid \
+  --max-records 256 \
+  --basis-rank 4 \
+  --basis-rank 8 \
+  --basis-rank 16 \
+  --control shuffled_answer_value \
+  --control wrong_support_value \
+  --control random_subspace \
+  --fit-fraction 0.75 \
+  --overwrite
+```
+
+Important outputs:
+
+- `transfer_rows`
+- `summary_rows`
+- `subspace_rows`
+- `pair_rows`
+
+This command answers:
+
+```text
+Can source value-code coordinates predict prediction value-code coordinates?
+Does the true transfer beat shuffled-source, wrong-support, and random-subspace controls?
+Does the transferred code itself point toward the correct value under a stage lens?
+```
+
+The optional `key_identity` control fits a support-key-code map. It is rank-limited by the key-token identity rank, so do not combine it with high value-code ranks unless you expect the command to fail loudly. For the current 8-key task, run it separately with a small rank:
+
+```bash
+PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli value-code-transfer-map-report \
+  --config $CONFIG \
+  --probe-set $PROBE \
+  --checkpoint-dir $TRACE_CKPTS \
+  --checkpoint $TRACE_CKPTS/step_002500.pt \
+  --output-dir $ANALYSIS/value_code_transfer_map/support_to_prediction_key_control_rank4_cli \
+  --device mps \
+  --source-stage layer_1_post_mlp \
+  --target-stage layer_2_post_mlp \
+  --source-position-role support_value \
+  --target-position-role prediction \
+  --group-by answer_value \
+  --split validation_iid \
+  --max-records 256 \
+  --basis-rank 4 \
+  --control key_identity \
+  --overwrite
+```
+
+#### `value-code-transfer-rescue`
+
+Use this after `value-code-transfer-map-report` when you need causal sufficiency rather than coordinate prediction.
+
+The tool removes the target value-code projection at the prediction position, then patches back either the actual projected value-code component, the fitted support-to-prediction transfer, or a control transfer.
+
+```text
+target_removed = clean_target - project_target_value_code(clean_target)
+patched = target_removed + predicted_target_value_code(source)
+rescue = scalar(patched) - scalar(target_removed)
+```
+
+The oracle row checks whether the removed target value-code component itself is causal. The true-transfer row checks whether the fitted transfer can replace it.
+The output also includes `fixed_clean_competitor_margin` and `fixed_removed_competitor_margin`, which hold the wrong-token branch fixed so moving best-wrong switches cannot hide a successful transfer.
+
+The optional context arguments test the next write-side hypothesis: the support value-code alone may not be enough, because the prediction-position residual state can choose how the support code is interpreted. Passing `--context-stage`, `--context-position-role`, and `--context-rank` adds `context_only`, `source_plus_context`, and rank-matched contextual control rows. Use this when you need to distinguish a static support-to-prediction transfer from a contextual write operator.
+
+```bash
+TRACE_CKPTS=$ANALYSIS/optimizer_update_trace/from_init_seed7_0000_6000_stepwise/checkpoints
+
+PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli value-code-transfer-rescue \
+  --config $CONFIG \
+  --probe-set $PROBE \
+  --checkpoint-dir $TRACE_CKPTS \
+  --checkpoint $TRACE_CKPTS/step_001750.pt \
+  --checkpoint $TRACE_CKPTS/step_002000.pt \
+  --checkpoint $TRACE_CKPTS/step_002500.pt \
+  --checkpoint $TRACE_CKPTS/step_003000.pt \
+  --checkpoint $TRACE_CKPTS/step_003500.pt \
+  --output-dir $ANALYSIS/value_code_transfer_rescue/support_to_prediction_rank16_1750_3500_cli \
+  --device mps \
+  --source-stage layer_1_post_mlp \
+  --target-stage layer_2_post_mlp \
+  --source-position-role support_value \
+  --target-position-role prediction \
+  --group-by answer_value \
+  --split validation_iid \
+  --max-records 256 \
+  --basis-rank 16 \
+  --control shuffled_answer_value \
+  --control wrong_support_value \
+  --control random_subspace \
+  --fit-fraction 0.75 \
+  --overwrite
+```
+
+Run the rank-limited key control separately:
+
+```bash
+PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli value-code-transfer-rescue \
+  --config $CONFIG \
+  --probe-set $PROBE \
+  --checkpoint-dir $TRACE_CKPTS \
+  --checkpoint $TRACE_CKPTS/step_002500.pt \
+  --output-dir $ANALYSIS/value_code_transfer_rescue/support_to_prediction_key_control_rank4_cli \
+  --device mps \
+  --source-stage layer_1_post_mlp \
+  --target-stage layer_2_post_mlp \
+  --source-position-role support_value \
+  --target-position-role prediction \
+  --group-by answer_value \
+  --split validation_iid \
+  --max-records 256 \
+  --basis-rank 4 \
+  --control key_identity \
+  --fit-fraction 0.75 \
+  --overwrite
+```
+
+Run the contextual transfer version when the source-only transfer rescues answer evidence but not the moving/fixed margin cleanly:
+
+```bash
+PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli value-code-transfer-rescue \
+  --config $CONFIG \
+  --probe-set $PROBE \
+  --checkpoint-dir $TRACE_CKPTS \
+  --checkpoint $TRACE_CKPTS/step_001750.pt \
+  --checkpoint $TRACE_CKPTS/step_002000.pt \
+  --checkpoint $TRACE_CKPTS/step_002500.pt \
+  --checkpoint $TRACE_CKPTS/step_003000.pt \
+  --checkpoint $TRACE_CKPTS/step_003500.pt \
+  --output-dir $ANALYSIS/value_code_transfer_rescue/support_to_prediction_context_rank16_1750_3500_cli \
+  --device mps \
+  --source-stage layer_1_post_mlp \
+  --target-stage layer_2_post_mlp \
+  --source-position-role support_value \
+  --target-position-role prediction \
+  --context-stage layer_1_post_mlp \
+  --context-position-role prediction \
+  --context-rank 16 \
+  --group-by answer_value \
+  --split validation_iid \
+  --max-records 256 \
+  --basis-rank 16 \
+  --control shuffled_answer_value \
+  --control wrong_support_value \
+  --control random_subspace \
+  --fit-fraction 0.75 \
+  --overwrite
 ```
 
 #### `geometry-subspace-intervention`

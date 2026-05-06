@@ -48,6 +48,8 @@ If an artifact is missing, do not silently substitute another result. Regenerate
 | The prediction-position value-code subspace is causally used by the answer readout. | `artifacts/runs/symbolic_kv_reference_formation/analysis/value_code_causal_intervention/embedding_value_identity_prediction_layer2_remove_rank16_1500_3500/` | causal subspace intervention |
 | Value identity is more behavior-relevant than a rank-matched key-identity control. | `artifacts/runs/symbolic_kv_reference_formation/analysis/value_code_causal_intervention/embedding_key_identity_prediction_layer2_remove_rank7_1500_3500/` and `artifacts/runs/symbolic_kv_reference_formation/analysis/value_code_causal_intervention/embedding_value_identity_prediction_layer2_remove_rank7_1500_3500/` | causal subspace control |
 | The value-code state is broad rather than low-rank. | `artifacts/runs/symbolic_kv_reference_formation/analysis/value_code_causal_intervention/embedding_value_identity_prediction_layer2_keep_rank*_2000_3500/` | rank-sweep sufficiency |
+| Source-only support-to-prediction value transfer is real but partial. | `artifacts/runs/symbolic_kv_reference_formation/analysis/value_code_transfer_map/support_to_prediction_1500_3500/` and `artifacts/runs/symbolic_kv_reference_formation/analysis/value_code_transfer_rescue/support_to_prediction_rank16_fixed_branch_1750_3500/` | value-code transfer |
+| Source-plus-prediction-context transfer nearly restores stable write/readout scalars. | `artifacts/runs/symbolic_kv_reference_formation/analysis/value_code_transfer_rescue/support_to_prediction_context_rank16_1750_3500/` | contextual transfer rescue |
 | Reference-seed write coupling is AdamW-explained. | `artifacts/runs/symbolic_kv_reference_formation/analysis/mlp_functional_write_adam_state_attribution/` | optimizer attribution |
 | Cross-seed write roles repeat under different addresses. | `artifacts/runs/symbolic_kv_cross_seed_adam/seed_*/analysis/mlp_input_functional_subspace/` | cross-seed functional subspace |
 | Cross-seed write growth is AdamW-preconditioned-update driven. | `artifacts/runs/symbolic_kv_cross_seed_adam/seed_*/analysis/mlp_functional_write_adam_state_attribution/` | cross-seed optimizer attribution |
@@ -84,12 +86,14 @@ If an artifact is missing, do not silently substitute another result. Regenerate
 | The QK role repeats across five additional seeds with changing head addresses. | supported |
 | The write side has a cross-seed functional-subspace signal. | supported |
 | The mature IID/counterfactual circuit uses a broad prediction-position value-code state. | supported |
+| Source-plus-prediction-context transfer restores stable write/readout scalars better than source-only transfer. | supported |
 | AdamW-preconditioned updates carry cross-seed write growth. | supported |
 | Under the matched seed-7 optimizer ablation, AdamW variants learn and SGD variants do not. | supported |
 | The raw-gradient, SGD-equivalent update is large enough to explain the measured QK/write growth. | not supported |
 | OV/write is a clean low-rank `W_OV` story like QK. | not supported |
 | The prediction-position value code is a tiny low-rank OV vector. | not supported |
-| The closed-form operator from support-value residual state to prediction value-code state is derived. | open |
+| A pure support-value copy fully explains the prediction value-code state. | not supported |
+| The closed-form construction of the prediction-position value scaffold is derived. | open |
 | A small route family fully closes all answer-margin improvement. | open |
 | Plain SGD could never learn the circuit under any schedule or budget. | not supported |
 | Broader optimizer-ablation sweeps across seeds, schedules, and longer budgets. | open |
@@ -107,6 +111,7 @@ test -f artifacts/runs/symbolic_kv_reference_formation/analysis/output_route_clo
 test -f artifacts/runs/symbolic_kv_reference_formation/analysis/value_code_subspace/prediction_answer_value_0750_3500/value_code_subspace_report.json
 test -f artifacts/runs/symbolic_kv_reference_formation/analysis/value_code_causal_intervention/embedding_value_identity_prediction_layer2_remove_rank16_1500_3500/geometry_subspace_intervention_report.json
 test -f artifacts/runs/symbolic_kv_reference_formation/analysis/value_code_causal_intervention/embedding_value_identity_prediction_layer2_keep_rank127_2000_3500/geometry_subspace_intervention_report.json
+test -f artifacts/runs/symbolic_kv_reference_formation/analysis/value_code_transfer_rescue/support_to_prediction_context_rank16_1750_3500/value_code_transfer_rescue_report.json
 find artifacts/runs/symbolic_kv_cross_seed_adam -path '*mlp_functional_write_adam_state_attribution*report.json' -print | sort
 find artifacts/runs/symbolic_kv_optimizer_ablation -path '*ov_write_progress_report.json' -print | sort
 ```
