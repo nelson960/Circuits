@@ -25,7 +25,7 @@ The strongest supported claim in the repo right now is:
 training repeatedly builds a support-value retrieval role;
 the role repeats across seeds, while the named head address changes;
 in the reference seed, the QK side is visible as low-rank L2H1 W_QK formation;
-exact AdamW update accounting explains the route growth;
+first-order route attribution using the exact AdamW update tracks the route growth;
 the instantaneous raw-gradient, SGD-equivalent update is tiny;
 a matched seed-7 optimizer ablation learns with AdamW variants but not with
 the tested SGD/SGD+momentum learning-rate sweep.

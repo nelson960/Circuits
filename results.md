@@ -8289,7 +8289,7 @@ the write side is not a clean static W_OV matrix story;
 it is a prediction-position functional residual-subspace story.
 
 That write subspace is validated across seeds,
-and exact AdamW attribution shows raw SGD is tiny while
+and first-order attribution using the exact AdamW update shows raw SGD is tiny while
 AdamW-preconditioned updates carry the useful write growth.
 ```
 
@@ -8618,7 +8618,7 @@ Write side:
   the role is not a clean W_OV singular-vector story;
   it is a contextual prediction-position residual-write subspace;
   the write role validates across seeds under different component addresses;
-  exact AdamW attribution shows AdamW-preconditioned updates carry the write growth;
+  first-order attribution using the exact AdamW update shows AdamW-preconditioned updates carry the write growth;
   raw SGD is again tiny.
 
 Closure:

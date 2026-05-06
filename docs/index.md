@@ -12,7 +12,7 @@ Living draft: 2026-05-06
 
 ## Abstract
 
-I study circuit formation in a 3-layer decoder-only transformer trained on a symbolic key-value lookup task. Because the task has a known algorithmic structure, I can define role-level progress measures for support-value retrieval and write/readout coupling. I find that the trained mechanism is dense and not localized to a stable head or neuron identity. Instead, a support-value retrieval role repeatedly forms across random seeds, while its implementing head changes. In the reference seed, the QK side appears as a low-rank `W_QK` matcher whose route growth is predicted by exact AdamW update accounting. The instantaneous raw-gradient, SGD-equivalent update explains only a small fraction of this growth, while AdamW-preconditioned current and momentum terms carry the movement. A matched seed-7 optimizer ablation strengthens this point: AdamW variants learn and form the route, while a same-budget SGD/SGD+momentum learning-rate sweep does not. The write side does not reduce to a clean static `W_OV` matrix or to a pure support-value copy. It creates a prediction-position residual state whose broad value-token identity geometry is causally used by the answer readout, and contextual transfer rescue shows that the prediction slot itself carries much of the recoverable value-code signal. These results support role-level, optimizer-state-aware circuit formation in a controlled model, while leaving full answer-margin closure, broader optimizer sweeps, and scaling open.
+I study circuit formation in a 3-layer decoder-only transformer trained on a symbolic key-value lookup task. Because the task has a known algorithmic structure, I can define role-level progress measures for support-value retrieval and write/readout coupling. I find that the trained mechanism is dense and not localized to a stable head or neuron identity. Instead, a support-value retrieval role repeatedly forms across random seeds, while its implementing head changes. In the reference seed, the QK side appears as a low-rank `W_QK` matcher whose route growth is tracked by first-order route attribution using the exact AdamW update. The instantaneous raw-gradient, SGD-equivalent update explains only a small fraction of this growth, while AdamW-preconditioned current and momentum terms carry the movement. A matched seed-7 optimizer ablation strengthens this point: AdamW variants learn and form the route, while a same-budget SGD/SGD+momentum learning-rate sweep does not. The write side does not reduce to a clean static `W_OV` matrix or to a pure support-value copy. It creates a prediction-position residual state whose broad value-token identity geometry is causally used by the answer readout, and contextual transfer rescue shows that the prediction slot itself carries much of the recoverable value-code signal. These results support role-level, optimizer-state-aware circuit formation in a controlled model, while leaving full answer-margin closure, broader optimizer sweeps, and scaling open.
 
 ## Contributions
 
@@ -21,7 +21,7 @@ I make nine claims that can be checked against the artifact map. They fall into 
 | group | claims |
 | --- | --- |
 | setup | a controlled symbolic key-value benchmark; role-level progress measures for support-value retrieval and write/readout coupling |
-| QK route | low-rank `W_QK` crystallization; exact AdamW update attribution; cross-seed role/address dissociation |
+| QK route | low-rank `W_QK` crystallization; first-order route attribution using exact AdamW updates; cross-seed role/address dissociation |
 | write/readout | contextual residual coupling rather than a static `W_OV` theorem; causal broad prediction-position value code; source-plus-prediction-context transfer rescue |
 | optimizer ablation | AdamW variants form the lookup role under the tested recipe; same-budget SGD variants do not |
 
@@ -29,7 +29,7 @@ I make nine claims that can be checked against the artifact map. They fall into 
 
 This is a role-theoretic formation account, not a full closed-form reverse engineering result.
 
-The QK side is close to closed: a low-rank support-value pointer forms, the pointer is causal and cross-seed stable at the role level, and exact AdamW accounting explains its growth in the traced runs. The write/readout side is different. It is a contextual, high-rank prediction-position value-code operation. I characterize that operation with causal subspace interventions, source-plus-context transfer rescue, and optimizer attribution rather than deriving it from a simple prior basis such as Fourier modes.
+QK is the most complete part of the account: a low-rank support-value pointer forms, the pointer is causal and cross-seed stable at the role level, and first-order attribution using the exact AdamW update tracks its growth in the traced runs. The write/readout side is different. It is a contextual, high-rank prediction-position value-code operation. I characterize that operation with causal subspace interventions, source-plus-context transfer rescue, and optimizer attribution rather than deriving it from a simple prior basis such as Fourier modes.
 
 So the claim is bounded:
 
@@ -72,7 +72,7 @@ I follow one small transformer's lookup circuit from the outside inward: behavio
 The strongest claim is this:
 
 ```text
-The task repeatedly induces a support-value retrieval role.
+Under this training setup, the support-value retrieval role repeatedly appears.
 The role is stable.
 The named head address is not.
 In the traced runs, AdamW-preconditioned updates carry the useful growth,
@@ -111,7 +111,7 @@ The answer is developmental. The model starts as a dense shared substrate with m
 
 The next sections unpack those stages. They overlap in training time, so I use them as a developmental spine rather than a strict chronological partition. The short technical version has two halves.
 
-The QK half asks where the model reads. In the reference seed, `L2H1 W_QK` becomes a low-rank support-value matcher. Its route score grows during formation, its singular structure crystallizes, and exact AdamW attribution explains the growth. The raw-gradient, SGD-equivalent update accounts for only about `0.76%` of the route growth in the traced from-initialization run.
+The QK half asks where the model reads. In the reference seed, `L2H1 W_QK` becomes a low-rank support-value matcher. Its route score grows during formation, its singular structure crystallizes, and first-order route attribution using exact AdamW updates tracks the growth. The raw-gradient, SGD-equivalent update accounts for only about `0.76%` of the route growth in the traced from-initialization run.
 
 A matched optimizer ablation tests whether this is only a post-hoc AdamW story. It is not a universal SGD impossibility proof, but the same-budget result is sharp: AdamW baseline reaches validation answer accuracy `0.976` with QK separation `8.03`; AdamW with `beta1 = 0` reaches `0.984` with QK separation `9.26`; the best SGD+momentum learning-rate sweep run reaches only `0.0085` validation answer accuracy, and the best observed SGD QK separation is about `0.118`.
 
@@ -291,7 +291,7 @@ C_QK
       - mean score(prediction, value_distractors)]
 ```
 
-Here the story is close to closed. The route appears as low-rank `W_QK` growth, the route scalar rises with singular structure, causal and cross-seed controls select the same role, and exact AdamW accounting explains the realized growth. In the traced diagnostic window, the sharpening is mostly query-side: the prediction-side geometry learns to ask the right question.
+QK is the most complete link in the account. The route appears as low-rank `W_QK` growth, the route scalar rises with singular structure, causal and cross-seed controls select the same role, and first-order attribution using the exact AdamW update tracks the realized growth. In the traced diagnostic window, the sharpening is mostly query-side: the prediction-side geometry learns to ask the right question.
 
 The third step is value movement. This is where the story stops looking like a clean low-rank matrix theorem. The measured object is:
 
@@ -833,7 +833,7 @@ Winner write paths have much larger final functional write effects than bottom c
 
 Most of the winner effect is the residual write itself. The winning paths are about `90%` residual-skip effect and about `10%` local MLP-output correction on the two cross-seed write scalars.
 
-Exact AdamW attribution across the five selected winner write paths shows the same broad optimizer lesson:
+First-order attribution using the exact AdamW update across the five selected winner write paths shows the same broad optimizer lesson:
 
 ```text
 raw SGD-equivalent / predicted: about 1.2%
@@ -1066,7 +1066,7 @@ Other next experiments are:
 
 ## Conclusion
 
-This study does not show that all transformer circuits form this way. It shows that, in a controlled symbolic retrieval setting, the stable unit of formation can be a role rather than a component address. The QK side of that role becomes visible as a low-rank support-value matcher, and exact optimizer accounting shows that AdamW-preconditioned updates, not the instantaneous raw-gradient direction alone, carry its growth. A matched seed-7 ablation supports the optimizer story: AdamW variants form the role, while the tested SGD variants do not. The write side repeats across seeds as a contextual residual coupling rather than a clean `W_OV` matrix. In the reference run, the mature prediction residual contains a broad value-token identity code that the answer readout causally uses, and source-plus-prediction-context transfer nearly restores stable write/readout scalars. The result is therefore an empirical algorithm ledger: the measured variables and causal subspaces are reproducible, while the write side is not yet derived from a simple prior basis like Fourier modes. The remaining challenge is to test whether this role-level, optimizer-state-aware account survives broader optimizer sweeps, scaling, and less synthetic tasks, and to derive a closed-form construction of the prediction-position value scaffold if one exists.
+This study does not show that all transformer circuits form this way. It shows that, in a controlled symbolic retrieval setting, the stable unit of formation can be a role rather than a component address. The QK side of that role becomes visible as a low-rank support-value matcher, and first-order attribution using the exact AdamW update shows that AdamW-preconditioned updates, not the instantaneous raw-gradient direction alone, carry its growth. A matched seed-7 ablation supports the optimizer story: AdamW variants form the role, while the tested SGD variants do not. The write side repeats across seeds as a contextual residual coupling rather than a clean `W_OV` matrix. In the reference run, the mature prediction residual contains a broad value-token identity code that the answer readout causally uses, and source-plus-prediction-context transfer nearly restores stable write/readout scalars. The result is therefore an empirical algorithm ledger: the measured variables and causal subspaces are reproducible, while the write side is not yet derived from a simple prior basis like Fourier modes. The remaining challenge is to test whether this role-level, optimizer-state-aware account survives broader optimizer sweeps, scaling, and less synthetic tasks, and to derive a closed-form construction of the prediction-position value scaffold if one exists.
 
 ## Audit Trail
 
