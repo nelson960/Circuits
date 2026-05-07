@@ -1,6 +1,8 @@
 # Circuits
 
-Research repo for mechanistic interpretability experiments on how a small decoder-only transformer learns a symbolic latest-write key-value lookup task.
+Reproducible toolkit and worked case study for studying how transformer circuits form during training. The repo includes QK/OV analysis, residual-stream tracing, optimizer-update attribution, cross-seed comparison, and local artifact reproduction workflows.
+
+The current worked example is a small decoder-only transformer trained on symbolic latest-write key-value lookup. The analysis ideas are meant to generalize, but arbitrary open-weight model support needs explicit adapters for checkpoint loading, module naming, activation hooks, tokenizer/task construction, and optimizer-state traces. The code should fail loudly when those pieces are missing.
 
 The project is not only about whether the model solves the task. The motivating question is:
 
@@ -49,7 +51,6 @@ This is a detailed mechanistic account for one task family. It is not a theorem 
 - [From Loss To Lookup: Tracing Circuit Formation In A Small Transformer](https://nelson960.github.io/Circuits/)
 - [Reproducibility page](https://nelson960.github.io/Circuits/reproducibility.html)
 - [Analysis CLI guide](https://nelson960.github.io/Circuits/analysis_cli_guide.html)
-- [Artifact map](https://nelson960.github.io/Circuits/artifact_map.html)
 - [Repository](https://github.com/nelson960/Circuits)
 - [Internal research log](results.md)
 - [Checkpoint analysis plan](docs/checkpoint_analysis_plan.md)
@@ -66,7 +67,7 @@ Related earlier project:
 - [`scripts`](scripts): helper pipelines, including cross-seed execution
 - [`configs`](configs): benchmark and training configs
 - [`docs`](docs): public paper page and supporting docs
-- [`artifacts`](artifacts): generated runs, checkpoints, reports, and plots
+- `artifacts/`: local generated runs, checkpoints, reports, and plots; these are reproduced from commands, not expected to be uploaded with the repo
 - [`tests`](tests): test suite
 
 ## Environment
@@ -92,12 +93,22 @@ Dev extras:
 pip install -e ".[dev]"
 ```
 
+Set the command and device once before running examples:
+
+```bash
+export CIRCUIT_PYTHON="${CIRCUIT_PYTHON:-python}"
+export CIRCUIT_DEVICE="${CIRCUIT_DEVICE:-cpu}"
+export CIRCUIT="PYTHONPATH=src $CIRCUIT_PYTHON -m circuit.cli"
+```
+
+Use `CIRCUIT_DEVICE=cuda` or `CIRCUIT_DEVICE=mps` if your PyTorch install supports it.
+
 ## Minimal workflow
 
 ### 1. Generate a benchmark
 
 ```bash
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli generate-benchmark \
+$CIRCUIT generate-benchmark \
   --config configs/benchmark/symbolic_kv_base.json
 ```
 
@@ -106,14 +117,14 @@ Use the printed output directory as `BENCHMARK_DIR` in the next step.
 ### 2. Train a model
 
 ```bash
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli train \
+$CIRCUIT train \
   --config configs/train/symbolic_kv_formation.json
 ```
 
 ### 3. Evaluate a checkpoint
 
 ```bash
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli evaluate \
+$CIRCUIT evaluate \
   --config artifacts/runs/symbolic_kv_reference_formation/run_config.json \
   --checkpoint artifacts/runs/symbolic_kv_reference_formation/checkpoints/best.pt \
   --split heldout_pairs
@@ -122,7 +133,7 @@ PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli evaluate \
 ### 4. Build a probe set
 
 ```bash
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli generate-probe-set \
+$CIRCUIT generate-probe-set \
   --benchmark-dir "$BENCHMARK_DIR" \
   --output probe_set.jsonl \
   --examples-per-split 96 \

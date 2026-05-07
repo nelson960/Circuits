@@ -1,5 +1,5 @@
 title: "From Loss To Lookup: Tracing Circuit Formation In A Small Transformer"
-description: Mechanistic interpretability research on how AdamW training forms dense retrieval circuits in small symbolic key-value transformers.
+description: Reproducible circuit-formation toolkit and case study with QK/OV analysis, residual tracing, optimizer attribution, and cross-seed comparison.
 url: https://nelson960.github.io
 baseurl: /Circuits
 repository_url: https://github.com/nelson960/Circuits
@@ -13,7 +13,6 @@ header_pages:
   - index.md
   - reproducibility.md
   - analysis_cli_guide.md
-  - artifact_map.md
 
 kramdown:
   input: GFM

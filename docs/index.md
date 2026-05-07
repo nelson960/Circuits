@@ -16,7 +16,7 @@ I study circuit formation in a 3-layer decoder-only transformer trained on a sym
 
 ## Contributions
 
-I make nine claims that can be checked against the artifact map. They fall into four groups.
+I make nine claims that can be checked against the reproducibility commands and CLI guide. They fall into four groups.
 
 | group | claims |
 | --- | --- |
@@ -954,7 +954,7 @@ The proof ledger is:
 | full answer-margin closure | small route/write family explains all behavior | partial |
 | matched-budget SGD ablation | AdamW variants versus SGD variants under seed-7 LR sweep | AdamW succeeds; SGD sweep fails; broader SGD remains open |
 
-The [artifact map](artifact_map.html) links each row of this ledger to the run family that supports it.
+Each row of this ledger points to a reproducible run family. The repository does not upload my local artifacts; the reproducibility page gives the commands and expected local output directories.
 
 The ledger is important because it keeps three claims separate:
 
@@ -1072,7 +1072,7 @@ This study does not show that all transformer circuits form this way. It shows t
 
 The paper page is the narrative. The other pages are the audit surface.
 
-Use the reproducibility page for exact commands, environment notes, and expected outputs. Use the CLI guide for the tools added during this project. Use the artifact map to connect each claim to its run directory.
+Use the reproducibility page for exact commands, environment notes, and expected local outputs. Use the CLI guide for the tools added during this project. The generated run directories are local artifacts, not files committed to the repository.
 
 The most important artifact families are:
 

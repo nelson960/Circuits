@@ -1,30 +1,24 @@
 ---
 layout: default
 title: "Reproducibility"
-description: Environment, data, model, training, and command entry points for reproducing the symbolic KV circuit formation results.
+description: Environment, data, model, training, and command entry points for reproducing circuit-formation analyses locally.
 ---
 
 # Reproducibility
 
-This page is the reproducibility contract for the paper. It gives the environment, task, model, training run, and command entry points. The detailed tool manual is [Analysis CLI Guide](analysis_cli_guide.md).
+This page is the reproducibility contract for the paper and toolkit. It gives the environment, task, model, training run, and command entry points. The detailed tool manual is [Analysis CLI Guide](analysis_cli_guide.md).
 
 The repository does not assume that analysis runs are uploaded. Reproduction means regenerating the benchmark, training or replaying the relevant runs, and producing the expected artifact directories locally.
 
 ## Environment
 
-The reference artifacts in the current draft were produced on:
+The repo targets Python `3.12`. It should not require my local machine path. Use any PyTorch device supported by your install: `cpu`, `cuda`, or `mps`.
 
 | item | value |
 | --- | --- |
-| OS | macOS 26.4.1 |
-| hardware | MacBook Pro, Apple M2 Pro, 12 CPU cores, 16 GB memory |
-| Python | 3.12.2 |
-| main device | `mps` |
-| torch observed | 2.9.1 |
-| numpy observed | 2.4.2 |
-| matplotlib observed | 3.10.1 |
-| tqdm observed | 4.67.1 |
-| pytest observed | 8.3.3 |
+| Python | `3.12` |
+| package specs | `environment.yml`, `pyproject.toml` |
+| runtime device | set with `CIRCUIT_DEVICE=cpu`, `cuda`, or `mps` |
 
 Create the environment:
 
@@ -36,6 +30,14 @@ pip install -e ".[dev]"
 
 The package floors are in `environment.yml` and `pyproject.toml`.
 
+Set the command and device once before running examples:
+
+```bash
+export CIRCUIT_PYTHON="${CIRCUIT_PYTHON:-python}"
+export CIRCUIT_DEVICE="${CIRCUIT_DEVICE:-cpu}"
+export CIRCUIT="PYTHONPATH=src $CIRCUIT_PYTHON -m circuit.cli"
+```
+
 ## Data
 
 The benchmark is symbolic latest-write key-value lookup.
@@ -43,7 +45,7 @@ The benchmark is symbolic latest-write key-value lookup.
 Generate it with:
 
 ```bash
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli generate-benchmark \
+$CIRCUIT generate-benchmark \
   --config configs/benchmark/symbolic_kv_base.json \
   --overwrite
 ```
@@ -66,7 +68,7 @@ Important config values:
 Build the paper probe set:
 
 ```bash
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli generate-probe-set \
+$CIRCUIT generate-probe-set \
   --benchmark-dir data/generated/symbolic_kv_stream_learnability \
   --output artifacts/runs/symbolic_kv_reference_formation/analysis/probe_set.jsonl \
   --examples-per-split 96 \
@@ -124,7 +126,7 @@ Important values:
 Train the dense formation run:
 
 ```bash
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli train \
+$CIRCUIT train \
   --config configs/train/symbolic_kv_formation.json \
   --overwrite
 ```
@@ -138,7 +140,7 @@ artifacts/runs/symbolic_kv_reference_formation/
 To regenerate the sparse heldout-generalization selection run instead, use:
 
 ```bash
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli train \
+$CIRCUIT train \
   --config configs/train/symbolic_kv_generalization.json \
   --overwrite
 ```
@@ -146,7 +148,7 @@ PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli train \
 Evaluate the best checkpoint:
 
 ```bash
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli evaluate \
+$CIRCUIT evaluate \
   --config artifacts/runs/symbolic_kv_reference_formation/run_config.json \
   --checkpoint artifacts/runs/symbolic_kv_reference_formation/checkpoints/best.pt \
   --split heldout_pairs
@@ -162,11 +164,11 @@ This trace is the source of truth for exact batch and optimizer-state attributio
 
 ```bash
 RUN=artifacts/runs/symbolic_kv_reference_formation
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli optimizer-update-trace \
+$CIRCUIT optimizer-update-trace \
   --config $RUN/run_config.json \
   --from-initialization \
   --output-dir $RUN/analysis/optimizer_update_trace/from_init_seed7_0000_6000_stepwise \
-  --device mps \
+  --device "$CIRCUIT_DEVICE" \
   --end-step 6000 \
   --train-split train \
   --checkpoint-every 1 \
@@ -189,12 +191,12 @@ This command reproduces the optimizer decomposition for the reference QK route.
 
 ```bash
 RUN=artifacts/runs/symbolic_kv_reference_formation
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli bilinear-qk-rank-adam-state-attribution \
+$CIRCUIT bilinear-qk-rank-adam-state-attribution \
   --config $RUN/run_config.json \
   --probe-set $RUN/analysis/probe_set.jsonl \
   --optimizer-trace-dir $RUN/analysis/optimizer_update_trace/from_init_seed7_0000_6000_stepwise \
   --output-dir $RUN/analysis/bilinear_qk_rank_adam_state_attribution/from_init_l2h1_rank8_support_value_0000_6000_stepwise \
-  --device mps \
+  --device "$CIRCUIT_DEVICE" \
   --head-layer 2 \
   --head 1 \
   --rank 8 \
@@ -240,7 +242,7 @@ Train the pilot variants:
 ```bash
 for CONFIG in configs/train/optimizer_ablation/pilot_seed0007/*.json; do
   echo "training $CONFIG"
-  PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli train \
+  $CIRCUIT train \
     --config "$CONFIG" \
     --overwrite
 done
@@ -251,7 +253,7 @@ Train the SGD LR sweep:
 ```bash
 for CONFIG in configs/train/optimizer_ablation/sgd_lr_sweep_seed0007/*.json; do
   echo "training $CONFIG"
-  PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli train \
+  $CIRCUIT train \
     --config "$CONFIG" \
     --overwrite
 done
@@ -263,7 +265,7 @@ Evaluate final checkpoints:
 for CONFIG in configs/train/optimizer_ablation/pilot_seed0007/*.json configs/train/optimizer_ablation/sgd_lr_sweep_seed0007/*.json; do
   RUN="$(jq -r '.output_dir' "$CONFIG")"
   echo "evaluating $CONFIG"
-  PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli evaluate \
+  $CIRCUIT evaluate \
     --config "$CONFIG" \
     --checkpoint "$RUN/checkpoints/step_006000.pt"
 done
@@ -286,7 +288,7 @@ for CONFIG in configs/train/optimizer_ablation/pilot_seed0007/*.json configs/tra
 
   echo "ov/qk progress $CONFIG"
 
-  PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli ov-write-progress-report \
+  $CIRCUIT ov-write-progress-report \
     --config "$CONFIG" \
     --probe-set "$PROBE" \
     --checkpoint-dir "$CKPT_DIR" \
@@ -307,7 +309,7 @@ for CONFIG in configs/train/optimizer_ablation/pilot_seed0007/*.json configs/tra
     --checkpoint "$CKPT_DIR/step_005500.pt" \
     --checkpoint "$CKPT_DIR/step_006000.pt" \
     --output-dir "$OUT" \
-    --device mps \
+    --device "$CIRCUIT_DEVICE" \
     --head L0H0 --head L0H1 --head L0H2 --head L0H3 \
     --head L1H0 --head L1H1 --head L1H2 --head L1H3 \
     --head L2H0 --head L2H1 --head L2H2 --head L2H3 \
@@ -342,7 +344,7 @@ This produces the weight SVD trace used for the low-rank birth story.
 
 ```bash
 RUN=artifacts/runs/symbolic_kv_reference_formation
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli weight-svd-trace \
+$CIRCUIT weight-svd-trace \
   --config $RUN/run_config.json \
   --checkpoint-dir $RUN/checkpoints \
   --checkpoint $RUN/checkpoints/step_000250.pt \
@@ -378,12 +380,12 @@ This audits whether a source component creates a residual perturbation that down
 
 ```bash
 RUN=artifacts/runs/symbolic_kv_reference_formation
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli mlp-input-functional-subspace-report \
+$CIRCUIT mlp-input-functional-subspace-report \
   --config $RUN/run_config.json \
   --probe-set $RUN/analysis/probe_set.jsonl \
   --scalar-pair-rows $RUN/analysis/answer_scalar_residual_diagnosis/functional_subspace_trajectory_0750_3500_stride250/answer_scalar_residual_diagnosis_pair_rows.jsonl \
   --output-dir $RUN/analysis/mlp_input_functional_subspace/l0h0_to_l0mlp_support_prediction_1500_2500 \
-  --device mps \
+  --device "$CIRCUIT_DEVICE" \
   --pair-type support_value \
   --source-component L0H0 \
   --component L0MLP \
@@ -413,7 +415,7 @@ This reproduces the result that the mature prediction-position residual carries 
 RUN=artifacts/runs/symbolic_kv_reference_formation
 TRACE_CKPTS=$RUN/analysis/optimizer_update_trace/from_init_seed7_0000_6000_stepwise/checkpoints
 
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli value-code-subspace-report \
+$CIRCUIT value-code-subspace-report \
   --config $RUN/run_config.json \
   --probe-set $RUN/analysis/probe_set.jsonl \
   --checkpoint-dir $TRACE_CKPTS \
@@ -430,7 +432,7 @@ PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli value-code-subs
   --checkpoint $TRACE_CKPTS/step_003250.pt \
   --checkpoint $TRACE_CKPTS/step_003500.pt \
   --output-dir $RUN/analysis/value_code_subspace/prediction_answer_value_0750_3500 \
-  --device mps \
+  --device "$CIRCUIT_DEVICE" \
   --stage layer_0_post_mlp \
   --stage layer_1_post_mlp \
   --stage layer_2_post_mlp \
@@ -457,7 +459,7 @@ The causal intervention removes value identity from `layer_2_post_mlp / predicti
 RUN=artifacts/runs/symbolic_kv_reference_formation
 TRACE_CKPTS=$RUN/analysis/optimizer_update_trace/from_init_seed7_0000_6000_stepwise/checkpoints
 
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli geometry-subspace-intervention \
+$CIRCUIT geometry-subspace-intervention \
   --config $RUN/run_config.json \
   --probe-set $RUN/analysis/probe_set.jsonl \
   --checkpoint-dir $TRACE_CKPTS \
@@ -468,7 +470,7 @@ PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli geometry-subspa
   --checkpoint $TRACE_CKPTS/step_003000.pt \
   --checkpoint $TRACE_CKPTS/step_003500.pt \
   --output-dir $RUN/analysis/value_code_causal_intervention/embedding_value_identity_prediction_layer2_remove_rank16_1500_3500 \
-  --device mps \
+  --device "$CIRCUIT_DEVICE" \
   --stage layer_2_post_mlp \
   --subspace embedding_value_identity \
   --rank 16 \
@@ -497,7 +499,7 @@ The contextual transfer rescue tests whether support value-code plus prediction-
 RUN=artifacts/runs/symbolic_kv_reference_formation
 TRACE_CKPTS=$RUN/analysis/optimizer_update_trace/from_init_seed7_0000_6000_stepwise/checkpoints
 
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli value-code-transfer-rescue \
+$CIRCUIT value-code-transfer-rescue \
   --config $RUN/run_config.json \
   --probe-set $RUN/analysis/probe_set.jsonl \
   --checkpoint-dir $TRACE_CKPTS \
@@ -507,7 +509,7 @@ PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli value-code-tran
   --checkpoint $TRACE_CKPTS/step_003000.pt \
   --checkpoint $TRACE_CKPTS/step_003500.pt \
   --output-dir $RUN/analysis/value_code_transfer_rescue/support_to_prediction_context_rank16_1750_3500 \
-  --device mps \
+  --device "$CIRCUIT_DEVICE" \
   --source-stage layer_1_post_mlp \
   --target-stage layer_2_post_mlp \
   --source-position-role support_value \
@@ -557,7 +559,7 @@ This refits scalar closure using route deltas and answer-scalar rows.
 
 ```bash
 RUN=artifacts/runs/symbolic_kv_reference_formation
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli route-to-scalar-closure \
+$CIRCUIT route-to-scalar-closure \
   --route-closure-rows $RUN/analysis/route_to_margin_closure/qk_ov_output_routes_1500_2500_formation/route_to_margin_closure_rows.jsonl \
   --scalar-pair-rows $RUN/analysis/answer_scalar_residual_diagnosis/qk_ov_output_routes_1500_2500_formation/answer_scalar_residual_diagnosis_pair_rows.jsonl \
   --output-dir $RUN/analysis/route_to_scalar_closure/qk_ov_output_routes_1500_2500_formation \

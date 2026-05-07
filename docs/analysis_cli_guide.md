@@ -1,12 +1,12 @@
 ---
 layout: default
 title: "Analysis CLI Guide"
-description: Practical guide for the formation-analysis CLI in the symbolic KV circuit repo.
+description: Practical guide for the circuit-formation analysis CLI: QK/OV analysis, residual tracing, optimizer attribution, and cross-seed comparison.
 ---
 
 # Analysis CLI Guide
 
-This file is a practical operator guide for the analysis tools used in the symbolic KV circuit work.
+This file is a practical operator guide for the analysis tools used in the symbolic KV circuit work and for extending the toolkit carefully.
 
 It is not a paper and it is not a replacement for `src/circuit/cli.py`. The goal is simpler:
 
@@ -17,18 +17,23 @@ It is not a paper and it is not a replacement for `src/circuit/cli.py`. The goal
 
 The tools are intentionally strict. They do not hide mismatches. If inputs disagree, they should fail.
 
+The current command examples target the repo's symbolic KV model. To use the toolkit on other open-weight models, add explicit adapters for model loading, tokenizer/task construction, module names, activation hook points, checkpoint format, and optimizer-state traces. QK/OV analysis and residual tracing can generalize through those adapters; optimizer-update attribution requires actual optimizer states or a replayable training trace.
+
 ## Base Paths
 
 Most commands in this guide use the reference run:
 
 ```bash
+export CIRCUIT_PYTHON="${CIRCUIT_PYTHON:-python}"
+export CIRCUIT_DEVICE="${CIRCUIT_DEVICE:-cpu}"
+export CIRCUIT="PYTHONPATH=src $CIRCUIT_PYTHON -m circuit.cli"
+
 RUN=artifacts/runs/symbolic_kv_reference_formation
 CONFIG=$RUN/run_config.json
 PROBE=$RUN/analysis/probe_set.jsonl
 TRAIN_PROBE=$RUN/analysis/probe_set_train.jsonl
 CKPT_DIR=$RUN/checkpoints
 ANALYSIS=$RUN/analysis
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli ...
 ```
 
 For cross-seed work:
@@ -119,7 +124,7 @@ The examples below are the canonical shapes used in this repo. Replace only the 
 Use this first when you want a checkpoint timeline for attention/readout geometry.
 
 ```bash
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli attention-geometry-trace \
+$CIRCUIT attention-geometry-trace \
   --config $CONFIG \
   --probe-set $PROBE \
   --checkpoint-dir $CKPT_DIR \
@@ -130,7 +135,7 @@ PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli attention-geome
   --checkpoint $CKPT_DIR/step_008000.pt \
   --checkpoint $CKPT_DIR/step_008250.pt \
   --output-dir $ANALYSIS/attention_geometry/l2h1_value_write_timeline \
-  --device mps \
+  --device "$CIRCUIT_DEVICE" \
   --top-k-tokens 8 \
   --top-k-plot-heads 12
 ```
@@ -154,7 +159,7 @@ Use it for:
 Use this when you want direct-logit attribution and ablation-vs-DLA comparisons.
 
 ```bash
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli path-logit-decomposition \
+$CIRCUIT path-logit-decomposition \
   --config $CONFIG \
   --probe-set $PROBE \
   --checkpoint-dir $CKPT_DIR \
@@ -165,7 +170,7 @@ PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli path-logit-deco
   --checkpoint $CKPT_DIR/step_008000.pt \
   --checkpoint $CKPT_DIR/step_008250.pt \
   --output-dir $ANALYSIS/path_logit_decomposition/l2h1_value_write_timeline \
-  --device mps \
+  --device "$CIRCUIT_DEVICE" \
   --ablation-top-k 8 \
   --ablation-step 5250 \
   --ablation-step 8000 \
@@ -187,7 +192,7 @@ Important outputs:
 Use this to compare candidate routes in a common evaluation frame.
 
 ```bash
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli route-competition-report \
+$CIRCUIT route-competition-report \
   --config $CONFIG \
   --probe-set $PROBE \
   --train-probe-set $TRAIN_PROBE \
@@ -195,7 +200,7 @@ PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli route-competiti
   --checkpoint $CKPT_DIR/step_005000.pt \
   --checkpoint $CKPT_DIR/step_005250.pt \
   --output-dir $ANALYSIS/route_competition/query_key_routes_5000_5250 \
-  --device mps \
+  --device "$CIRCUIT_DEVICE" \
   --route 'label=L2H1_qk_query,stage=layer_1_post_mlp,subspace=head_qk_query,rank=4,head_layer=2,head=1,position_role=query_key' \
   --route 'label=L1H2_qk_query,stage=layer_0_post_mlp,subspace=head_qk_query,rank=4,head_layer=1,head=2,position_role=query_key' \
   --route 'label=L0H0_qk_query,stage=embedding,subspace=head_qk_query,rank=4,head_layer=0,head=0,position_role=query_key' \
@@ -233,7 +238,7 @@ Use it for:
 Use this when you want raw SVD trajectories for `W_Q`, `W_K`, `W_V`, `W_O`, `W_QK`, `W_OV`, `W_in`, `W_out`.
 
 ```bash
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli weight-svd-trace \
+$CIRCUIT weight-svd-trace \
   --config $CONFIG \
   --checkpoint-dir $CKPT_DIR \
   --checkpoint $CKPT_DIR/step_000250.pt \
@@ -275,7 +280,7 @@ What to inspect:
 Use this after `weight-svd-trace` to summarize births, stabilization windows, and coordination windows.
 
 ```bash
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli weight-svd-patterns \
+$CIRCUIT weight-svd-patterns \
   --singular-values $ANALYSIS/weight_svd_trace/phase1_000250_5500_top16/weight_svd_singular_values.jsonl \
   --top-singular-vectors $ANALYSIS/weight_svd_trace/phase1_000250_5500_top16/weight_svd_top_singular_vectors.jsonl \
   --output-dir $ANALYSIS/weight_svd_patterns/phase1_000250_5500_top16 \
@@ -298,7 +303,7 @@ Important outputs:
 Use this to test whether contextual residual states are separating the relevant key groups.
 
 ```bash
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli contextual-key-separability \
+$CIRCUIT contextual-key-separability \
   --config $CONFIG \
   --probe-set $PROBE \
   --checkpoint-dir $CKPT_DIR \
@@ -316,7 +321,7 @@ PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli contextual-key-
   --checkpoint $CKPT_DIR/step_005000.pt \
   --checkpoint $CKPT_DIR/step_005500.pt \
   --output-dir $ANALYSIS/contextual_key_separability/l2h1_prediction_query_key_stage_sweep_000250_005500 \
-  --device mps \
+  --device "$CIRCUIT_DEVICE" \
   --head-layer 2 \
   --head 1 \
   --context-stage layer_1_post_mlp \
@@ -348,7 +353,7 @@ Use it for:
 Use this when you want to compare singular directions against contextual residual subspaces.
 
 ```bash
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli contextual-svd-alignment \
+$CIRCUIT contextual-svd-alignment \
   --config $CONFIG \
   --probe-set $PROBE \
   --checkpoint-dir $CKPT_DIR \
@@ -366,7 +371,7 @@ PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli contextual-svd-
   --checkpoint $CKPT_DIR/step_005000.pt \
   --checkpoint $CKPT_DIR/step_005500.pt \
   --output-dir $ANALYSIS/contextual_svd_alignment/l2h1_prediction_grouped_by_query_key_layer1_post_mlp_000250_005500 \
-  --device mps \
+  --device "$CIRCUIT_DEVICE" \
   --head-layer 2 \
   --head 1 \
   --context-stage layer_1_post_mlp \
@@ -395,7 +400,7 @@ Important outputs:
 Use this to define and track support-vs-distractor QK route quality directly.
 
 ```bash
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli bilinear-qk-match-separation \
+$CIRCUIT bilinear-qk-match-separation \
   --config $CONFIG \
   --probe-set $PROBE \
   --checkpoint-dir $CKPT_DIR \
@@ -413,7 +418,7 @@ PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli bilinear-qk-mat
   --checkpoint $CKPT_DIR/step_005000.pt \
   --checkpoint $CKPT_DIR/step_005500.pt \
   --output-dir $ANALYSIS/bilinear_qk_match_separation/l2h1_support_value_vs_distractors_000250_005500_stage_sweep \
-  --device mps \
+  --device "$CIRCUIT_DEVICE" \
   --head-layer 2 \
   --head 1 \
   --context-stage layer_1_post_mlp \
@@ -450,14 +455,14 @@ Key fields:
 Use this for generic route/subspace update attribution between checkpoints.
 
 ```bash
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli checkpoint-update-attribution \
+$CIRCUIT checkpoint-update-attribution \
   --config $CONFIG \
   --probe-set $PROBE \
   --checkpoint-dir $CKPT_DIR \
   --checkpoint $CKPT_DIR/step_005000.pt \
   --checkpoint $CKPT_DIR/step_005250.pt \
   --output-dir $ANALYSIS/checkpoint_update_attribution/l2h1_qk_query_rank4_5000_5250_top40 \
-  --device mps \
+  --device "$CIRCUIT_DEVICE" \
   --stage layer_1_post_mlp \
   --subspace head_qk_query \
   --rank 4 \
@@ -487,7 +492,7 @@ Important outputs:
 Use this when the object of interest is a bilinear QK rank, not a generic residual subspace.
 
 ```bash
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli bilinear-qk-rank-update-attribution \
+$CIRCUIT bilinear-qk-rank-update-attribution \
   --config $CONFIG \
   --probe-set $PROBE \
   --checkpoint-dir $CKPT_DIR \
@@ -500,7 +505,7 @@ PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli bilinear-qk-ran
   --checkpoint $CKPT_DIR/step_003000.pt \
   --checkpoint $CKPT_DIR/step_003500.pt \
   --output-dir $ANALYSIS/bilinear_qk_rank_update_attribution/l2h1_rank4_rank8_support_value_minus_distractors_000750_003500_formation \
-  --device mps \
+  --device "$CIRCUIT_DEVICE" \
   --head-layer 2 \
   --head 1 \
   --rank 4 \
@@ -536,7 +541,7 @@ Important outputs:
 Use this for stepwise support-vs-distractor attention separation.
 
 ```bash
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli attention-retrieval-separation-update-attribution \
+$CIRCUIT attention-retrieval-separation-update-attribution \
   --config $CONFIG \
   --probe-set $PROBE \
   --checkpoint-dir $CKPT_DIR \
@@ -549,7 +554,7 @@ PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli attention-retri
   --checkpoint $CKPT_DIR/step_003000.pt \
   --checkpoint $CKPT_DIR/step_003500.pt \
   --output-dir $ANALYSIS/attention_retrieval_separation_update_attribution/l2h1_support_value_minus_distractors_000750_003500_formation \
-  --device mps \
+  --device "$CIRCUIT_DEVICE" \
   --head-layer 2 \
   --head 1 \
   --score-query-role prediction \
@@ -580,7 +585,7 @@ Important outputs:
 Use this to get the checkpoint-level chain summary for one head.
 
 ```bash
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli attention-retrieval-chain-report \
+$CIRCUIT attention-retrieval-chain-report \
   --config $CONFIG \
   --probe-set $PROBE \
   --checkpoint-dir $CKPT_DIR \
@@ -594,7 +599,7 @@ PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli attention-retri
   --checkpoint $CKPT_DIR/step_007250.pt \
   --checkpoint $CKPT_DIR/step_007500.pt \
   --output-dir $ANALYSIS/attention_retrieval_chain/l2h1_support_value_minus_distractors_5500_7500_neighbor_intervals \
-  --device mps \
+  --device "$CIRCUIT_DEVICE" \
   --head-layer 2 \
   --head 1 \
   --score-query-role prediction \
@@ -621,11 +626,11 @@ Use this before any actual-batch or Adam-state attribution. This tool is the sou
 From initialization:
 
 ```bash
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli optimizer-update-trace \
+$CIRCUIT optimizer-update-trace \
   --config $CONFIG \
   --from-initialization \
   --output-dir $ANALYSIS/optimizer_update_trace/from_init_seed7_0000_6000_stepwise \
-  --device mps \
+  --device "$CIRCUIT_DEVICE" \
   --end-step 6000 \
   --train-split train \
   --checkpoint-every 1 \
@@ -638,11 +643,11 @@ PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli optimizer-updat
 Resume from a checkpoint:
 
 ```bash
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli optimizer-update-trace \
+$CIRCUIT optimizer-update-trace \
   --config $CONFIG \
   --resume-checkpoint $CKPT_DIR/step_005500.pt \
   --output-dir $ANALYSIS/optimizer_update_trace/l2h1_qk_rank_0550_0750_stepwise \
-  --device mps \
+  --device "$CIRCUIT_DEVICE" \
   --num-steps 2000 \
   --train-split train \
   --checkpoint-every 1 \
@@ -666,12 +671,12 @@ Do not treat this as optional if you need exact update attribution.
 Use this to project actual traced batch updates onto a QK-rank route.
 
 ```bash
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli bilinear-qk-rank-actual-batch-attribution \
+$CIRCUIT bilinear-qk-rank-actual-batch-attribution \
   --config $CONFIG \
   --probe-set $PROBE \
   --optimizer-trace-dir $ANALYSIS/optimizer_update_trace/l2h1_qk_rank_0750_1000_stepwise \
   --output-dir $ANALYSIS/bilinear_qk_rank_actual_batch_attribution/l2h1_rank8_support_value_0750_1000_stepwise \
-  --device mps \
+  --device "$CIRCUIT_DEVICE" \
   --head-layer 2 \
   --head 1 \
   --rank 8 \
@@ -700,12 +705,12 @@ Important outputs:
 Use this for the optimizer-level “why” question.
 
 ```bash
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli bilinear-qk-rank-adam-state-attribution \
+$CIRCUIT bilinear-qk-rank-adam-state-attribution \
   --config $CONFIG \
   --probe-set $PROBE \
   --optimizer-trace-dir $ANALYSIS/optimizer_update_trace/from_init_seed7_0000_6000_stepwise \
   --output-dir $ANALYSIS/bilinear_qk_rank_adam_state_attribution/from_init_l2h1_rank8_support_value_0000_6000_stepwise \
-  --device mps \
+  --device "$CIRCUIT_DEVICE" \
   --head-layer 2 \
   --head 1 \
   --rank 8 \
@@ -749,12 +754,12 @@ The output has two levels:
 - optional extra groups such as `module:L0.mlp`, `module:L1.attention`, or another head's projection via repeated `--parameter-group`
 
 ```bash
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli attention-downstream-adam-state-attribution \
+$CIRCUIT attention-downstream-adam-state-attribution \
   --config $CONFIG \
   --probe-set $PROBE \
   --optimizer-trace-dir $ANALYSIS/optimizer_update_trace/from_init_seed7_0000_6000_stepwise \
   --output-dir $ANALYSIS/attention_downstream_adam_state_attribution/l1h2_support_value_write_5500_5501_smoke \
-  --device mps \
+  --device "$CIRCUIT_DEVICE" \
   --checkpoint $ANALYSIS/optimizer_update_trace/from_init_seed7_0000_6000_stepwise/checkpoints/step_005500.pt \
   --checkpoint $ANALYSIS/optimizer_update_trace/from_init_seed7_0000_6000_stepwise/checkpoints/step_005501.pt \
   --head-layer 1 \
@@ -806,7 +811,7 @@ Use this before OV/write optimizer attribution. It audits candidate heads and wr
 This is the scalar-selection step. Do not skip it and jump straight to AdamW decomposition unless you already know which write scalar is meaningful.
 
 ```bash
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli ov-write-progress-report \
+$CIRCUIT ov-write-progress-report \
   --config $CONFIG \
   --probe-set $PROBE \
   --checkpoint-dir $CKPT_DIR \
@@ -823,7 +828,7 @@ PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli ov-write-progre
   --checkpoint $CKPT_DIR/step_003250.pt \
   --checkpoint $CKPT_DIR/step_003500.pt \
   --output-dir $ANALYSIS/ov_write_progress/l0_l1_l2_attention_0750_3500_formation \
-  --device mps \
+  --device "$CIRCUIT_DEVICE" \
   --head L0H0 \
   --head L0H1 \
   --head L0H2 \
@@ -877,7 +882,7 @@ This command tracks whether prediction-position residual states become separable
 ```bash
 TRACE_CKPTS=$ANALYSIS/optimizer_update_trace/from_init_seed7_0000_6000_stepwise/checkpoints
 
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli value-code-subspace-report \
+$CIRCUIT value-code-subspace-report \
   --config $CONFIG \
   --probe-set $PROBE \
   --checkpoint-dir $TRACE_CKPTS \
@@ -888,7 +893,7 @@ PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli value-code-subs
   --checkpoint $TRACE_CKPTS/step_003000.pt \
   --checkpoint $TRACE_CKPTS/step_003500.pt \
   --output-dir $ANALYSIS/value_code_subspace/prediction_answer_value_1500_3500_cli \
-  --device mps \
+  --device "$CIRCUIT_DEVICE" \
   --stage layer_0_post_mlp \
   --stage layer_1_post_mlp \
   --stage layer_2_post_mlp \
@@ -930,7 +935,7 @@ The tool builds value-identity bases on a deterministic fit split, fits a ridge-
 ```bash
 TRACE_CKPTS=$ANALYSIS/optimizer_update_trace/from_init_seed7_0000_6000_stepwise/checkpoints
 
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli value-code-transfer-map-report \
+$CIRCUIT value-code-transfer-map-report \
   --config $CONFIG \
   --probe-set $PROBE \
   --checkpoint-dir $TRACE_CKPTS \
@@ -941,7 +946,7 @@ PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli value-code-tran
   --checkpoint $TRACE_CKPTS/step_003000.pt \
   --checkpoint $TRACE_CKPTS/step_003500.pt \
   --output-dir $ANALYSIS/value_code_transfer_map/support_to_prediction_1500_3500_cli \
-  --device mps \
+  --device "$CIRCUIT_DEVICE" \
   --source-stage layer_1_post_mlp \
   --target-stage layer_2_post_mlp \
   --source-position-role support_value \
@@ -977,13 +982,13 @@ Does the transferred code itself point toward the correct value under a stage le
 The optional `key_identity` control fits a support-key-code map. It is rank-limited by the key-token identity rank, so do not combine it with high value-code ranks unless you expect the command to fail loudly. For the current 8-key task, run it separately with a small rank:
 
 ```bash
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli value-code-transfer-map-report \
+$CIRCUIT value-code-transfer-map-report \
   --config $CONFIG \
   --probe-set $PROBE \
   --checkpoint-dir $TRACE_CKPTS \
   --checkpoint $TRACE_CKPTS/step_002500.pt \
   --output-dir $ANALYSIS/value_code_transfer_map/support_to_prediction_key_control_rank4_cli \
-  --device mps \
+  --device "$CIRCUIT_DEVICE" \
   --source-stage layer_1_post_mlp \
   --target-stage layer_2_post_mlp \
   --source-position-role support_value \
@@ -1016,7 +1021,7 @@ The optional context arguments test the next write-side hypothesis: the support 
 ```bash
 TRACE_CKPTS=$ANALYSIS/optimizer_update_trace/from_init_seed7_0000_6000_stepwise/checkpoints
 
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli value-code-transfer-rescue \
+$CIRCUIT value-code-transfer-rescue \
   --config $CONFIG \
   --probe-set $PROBE \
   --checkpoint-dir $TRACE_CKPTS \
@@ -1026,7 +1031,7 @@ PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli value-code-tran
   --checkpoint $TRACE_CKPTS/step_003000.pt \
   --checkpoint $TRACE_CKPTS/step_003500.pt \
   --output-dir $ANALYSIS/value_code_transfer_rescue/support_to_prediction_rank16_1750_3500_cli \
-  --device mps \
+  --device "$CIRCUIT_DEVICE" \
   --source-stage layer_1_post_mlp \
   --target-stage layer_2_post_mlp \
   --source-position-role support_value \
@@ -1045,13 +1050,13 @@ PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli value-code-tran
 Run the rank-limited key control separately:
 
 ```bash
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli value-code-transfer-rescue \
+$CIRCUIT value-code-transfer-rescue \
   --config $CONFIG \
   --probe-set $PROBE \
   --checkpoint-dir $TRACE_CKPTS \
   --checkpoint $TRACE_CKPTS/step_002500.pt \
   --output-dir $ANALYSIS/value_code_transfer_rescue/support_to_prediction_key_control_rank4_cli \
-  --device mps \
+  --device "$CIRCUIT_DEVICE" \
   --source-stage layer_1_post_mlp \
   --target-stage layer_2_post_mlp \
   --source-position-role support_value \
@@ -1068,7 +1073,7 @@ PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli value-code-tran
 Run the contextual transfer version when the source-only transfer rescues answer evidence but not the moving/fixed margin cleanly:
 
 ```bash
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli value-code-transfer-rescue \
+$CIRCUIT value-code-transfer-rescue \
   --config $CONFIG \
   --probe-set $PROBE \
   --checkpoint-dir $TRACE_CKPTS \
@@ -1078,7 +1083,7 @@ PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli value-code-tran
   --checkpoint $TRACE_CKPTS/step_003000.pt \
   --checkpoint $TRACE_CKPTS/step_003500.pt \
   --output-dir $ANALYSIS/value_code_transfer_rescue/support_to_prediction_context_rank16_1750_3500_cli \
-  --device mps \
+  --device "$CIRCUIT_DEVICE" \
   --source-stage layer_1_post_mlp \
   --target-stage layer_2_post_mlp \
   --source-position-role support_value \
@@ -1106,7 +1111,7 @@ For the value-code claim, remove value identity from `layer_2_post_mlp / predict
 ```bash
 TRACE_CKPTS=$ANALYSIS/optimizer_update_trace/from_init_seed7_0000_6000_stepwise/checkpoints
 
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli geometry-subspace-intervention \
+$CIRCUIT geometry-subspace-intervention \
   --config $CONFIG \
   --probe-set $PROBE \
   --checkpoint-dir $TRACE_CKPTS \
@@ -1117,7 +1122,7 @@ PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli geometry-subspa
   --checkpoint $TRACE_CKPTS/step_003000.pt \
   --checkpoint $TRACE_CKPTS/step_003500.pt \
   --output-dir $ANALYSIS/value_code_causal_intervention/embedding_value_identity_prediction_layer2_remove_rank16_1500_3500 \
-  --device mps \
+  --device "$CIRCUIT_DEVICE" \
   --stage layer_2_post_mlp \
   --subspace embedding_value_identity \
   --rank 16 \
@@ -1148,7 +1153,7 @@ Use this after `route-to-margin-closure` when the expensive run already measured
 This command does not recompute activations. It refits the existing closure rows with different route subsets.
 
 ```bash
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python -m circuit.cli route-family-closure-report \
+$CIRCUIT route-family-closure-report \
   --route-closure-rows $ANALYSIS/route_to_margin_closure/qk_ov_output_routes_5500_5550_stepwise/route_to_margin_closure_rows.jsonl \
   --output-dir $ANALYSIS/route_family_closure/qk_vs_ov_vs_joint_5500_5550_stepwise \
   --family label=qk,route=L2H1_qk_query,route=L1H2_qk_query,route=L0H0_qk_query,route=embedding_key_identity,route=full_layer1_query_key,route=full_layer0_query_key \
@@ -1248,7 +1253,7 @@ This is the supported driver for:
 Example:
 
 ```bash
-PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python scripts/cross_seed_adam_pipeline.py \
+PYTHONPATH=src $CIRCUIT_PYTHON scripts/cross_seed_adam_pipeline.py \
   --base-config $CONFIG \
   --probe-set $PROBE \
   --run-root $CROSS_ROOT \
@@ -1257,8 +1262,8 @@ PYTHONPATH=src /opt/miniconda3/envs/ml/bin/python scripts/cross_seed_adam_pipeli
   --seed 17 \
   --seed 23 \
   --seed 29 \
-  --python /opt/miniconda3/envs/ml/bin/python \
-  --device mps \
+  --python "$CIRCUIT_PYTHON" \
+  --device "$CIRCUIT_DEVICE" \
   --end-step 6000 \
   --layers 3 \
   --heads 4 \
