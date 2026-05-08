@@ -27,7 +27,7 @@
 
   <rect width="1180" height="540" fill="#f8f5ef"/>
   <text x="42" y="52" class="title">The circuit grows in overlapping stages</text>
-  <text x="42" y="82" class="subtitle">The tools enter the story when behavior changes: competition, scaffold, pointer crystallization, write coupling, value-code readout, later consolidation, and role migration.</text>
+  <text x="42" y="82" class="subtitle">Competition -> scaffold -> pointer crystallization -> write coupling -> value-code readout -> later consolidation.</text>
 
   <line x1="74" y1="128" x2="1104" y2="128" class="axis"/>
   <g>

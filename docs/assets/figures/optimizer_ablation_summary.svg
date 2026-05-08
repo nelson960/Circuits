@@ -5,7 +5,7 @@
 </style>
 </defs>
 <rect x="0" y="0" width="980" height="390" fill="#fbfaf6"/>
-<text x="32" y="38" class="title">Optimizer ablation: AdamW forms the role, SGD does not under the matched budget</text>
+<text x="32" y="38" class="title">Optimizer ablation: AdamW forms the role under the matched budget</text>
 <text x="32" y="64" class="subtitle">Seed 7, same model/data/6000-step budget. SGD includes a learning-rate sweep.</text>
 
 <rect x="38" y="88" width="428" height="230" class="box"/>

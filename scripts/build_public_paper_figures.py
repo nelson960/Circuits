@@ -156,11 +156,11 @@ def plot_series(
     x_values: list[float],
     series: list[tuple[str, list[float], str]],
     width: int = 980,
-    height: int = 430,
+    height: int = 500,
     title: str = "",
     subtitle: str = "",
 ) -> str:
-    left, right, top, bottom = 74, width - 32, 82, height - 62
+    left, right, top, bottom = 74, width - 32, 82, height - 132
     x_min, x_max = min(x_values), max(x_values)
     parts = [text(32, 34, title, "title"), text(32, 58, subtitle, "subtitle")]
     for frac in [0.0, 0.25, 0.5, 0.75, 1.0]:
@@ -175,8 +175,8 @@ def plot_series(
         x = left + (step - x_min) / (x_max - x_min) * (right - left)
         parts.append(line(x, bottom, x, bottom + 6, color="#4a4741", width=1))
         parts.append(text(x, bottom + 22, str(int(step)), "tiny", "middle"))
-    parts.append(text((left + right) / 2, height - 18, "training step", "small", "middle"))
-    parts.append(text(20, (top + bottom) / 2, "min-max normalized", "small", "middle"))
+    parts.append(text((left + right) / 2, bottom + 58, "training step", "small", "middle"))
+    parts.append(text(left, top - 10, "normalized scale", "tiny"))
     parts.append(line(
         left + (750 - x_min) / (x_max - x_min) * (right - left),
         top,
@@ -193,8 +193,8 @@ def plot_series(
         color="#a67c00",
         width=1.2,
     ))
-    parts.append(text(left + 150, top - 10, "main formation window: 750 -> 3500", "small"))
-    legend_x, legend_y = right - 260, top + 8
+    parts.append(text(left + 170, top - 10, "main formation window: 750 -> 3500", "small"))
+    plotted_series = []
     for i, (label, values, color) in enumerate(series):
         ys = normalize(values)
         pts = []
@@ -203,9 +203,15 @@ def plot_series(
             y = bottom - y_norm * (bottom - top)
             pts.append((x, y))
         parts.append(polyline(pts, color))
-        ly = legend_y + i * 22
-        parts.append(line(legend_x, ly - 4, legend_x + 32, ly - 4, color=color, width=3))
-        parts.append(text(legend_x + 40, ly, label, "small"))
+        plotted_series.append((label, color))
+    legend_x, legend_y = left + 155, bottom + 88
+    for i, (label, color) in enumerate(plotted_series):
+        col = i % 2
+        row = i // 2
+        lx = legend_x + col * 300
+        ly = legend_y + row * 22
+        parts.append(line(lx, ly - 4, lx + 32, ly - 4, color=color, width=3))
+        parts.append(text(lx + 40, ly, label, "small"))
     return "\n".join(parts)
 
 
@@ -231,7 +237,7 @@ def build_updated_chain() -> None:
     ]
     x0, y, w, h, gap = 26, 108, 150, 92, 24
     parts = [text(30, 38, "From loss to lookup: the measured chain", "title"),
-             text(30, 63, "Current paper claim: a support-value retrieval role is built by actual AdamW updates.", "subtitle")]
+             text(30, 63, "Current paper claim: AdamW builds a support-value pointer and contextual prediction value-code readout.", "subtitle")]
     for i, (a, b_lines) in enumerate(labels):
         x = x0 + i * (w + gap)
         parts.append(rect(x, y, w, h))
@@ -241,8 +247,8 @@ def build_updated_chain() -> None:
         if i < len(labels) - 1:
             parts.append(line(x + w + 5, y + h / 2, x + w + gap - 8, y + h / 2, arrow=True))
     parts.append(text(30, 250, "The old question was \"which neuron matters?\" The current proof object is a differentiable route scalar C(theta).", "small"))
-    parts.append(text(30, 273, "Supported: route growth, low-rank QK birth, exact AdamW update reconstruction, and 5-seed role replication.", "small"))
-    parts.append(text(30, 296, "Open: full answer-margin closure and whether the same method scales beyond this symbolic model.", "small"))
+    parts.append(text(30, 273, "Supported: route growth, QK birth, AdamW reconstruction, contextual value-code rescue, and 5-seed role replication.", "small"))
+    parts.append(text(30, 296, "Open: prediction-context construction, full moving-margin closure, and scaling beyond this symbolic model.", "small"))
     write_svg("updated_loss_to_lookup_chain.svg", 1080, 335, "\n".join(parts))
 
 
@@ -283,7 +289,7 @@ def build_weight_birth() -> None:
         title="L2H1 W_QK forms a concentrated support-value matcher",
         subtitle="All curves are artifact-backed and min-max normalized for shape comparison.",
     )
-    write_svg("weight_qk_birth_timeline.svg", 980, 430, body)
+    write_svg("weight_qk_birth_timeline.svg", 980, 500, body)
 
 
 def build_contextual_alignment() -> None:
@@ -300,12 +306,13 @@ def build_contextual_alignment() -> None:
     if len(full_rows) != 1:
         raise RuntimeError("Expected one layer_1_post_mlp qk_both separability summary row.")
     full = full_rows[0]
-    width, height = 960, 390
+    width, height = 900, 475
     left, top, bar_w, gap = 82, 120, 145, 42
     parts = [text(32, 36, "Semantic target: contextual residual geometry", "title"),
-             text(32, 61, "The useful QK direction should be read against the representations produced by earlier layers, not only raw token embeddings.", "subtitle")]
+             text(32, 61, "The useful QK direction is read against earlier-layer representations, not only raw token embeddings.", "subtitle")]
     axis_y = 285
-    parts.append(line(left - 20, axis_y, 850, axis_y, color="#4a4741", width=1.2))
+    chart_right = 812
+    parts.append(line(left - 20, axis_y, chart_right, axis_y, color="#4a4741", width=1.2))
     for i, (label, val) in enumerate(metrics):
         x = left + i * (bar_w + gap)
         y0 = axis_y
@@ -317,15 +324,16 @@ def build_contextual_alignment() -> None:
         words = label.split()
         parts.append(text(x + bar_w / 2, axis_y + 28, " ".join(words[:2]), "tiny", "middle"))
         parts.append(text(x + bar_w / 2, axis_y + 43, " ".join(words[2:]), "tiny", "middle"))
-    parts.append(line(left - 20, axis_y - 130, 850, axis_y - 130, "grid", "#ddd6c8", 1))
-    parts.append(line(left - 20, axis_y + 130, 850, axis_y + 130, "grid", "#ddd6c8", 1))
-    parts.append(text(842, axis_y - 128, "+1", "tiny"))
-    parts.append(text(842, axis_y + 134, "-1", "tiny"))
-    parts.append(rect(660, 86, 250, 78, "box"))
-    parts.append(text(785, 113, "Layer-1 contextual separability", "small", "middle"))
-    parts.append(text(785, 137, f"qk_both window delta: {full['window_delta_separation_ratio']:.3f}", "tiny", "middle"))
-    parts.append(text(785, 153, f"end separation ratio: {full['end_separation_ratio']:.3f}", "tiny", "middle"))
-    parts.append(text(32, 358, "Interpretation: static embeddings give some signal, but the route is best treated as reading contextual residual states built by earlier layers.", "small"))
+    parts.append(line(left - 20, axis_y - 130, chart_right, axis_y - 130, "grid", "#ddd6c8", 1))
+    parts.append(line(left - 20, axis_y + 70, chart_right, axis_y + 70, "grid", "#ddd6c8", 1))
+    parts.append(text(chart_right + 8, axis_y - 128, "+1", "tiny"))
+    parts.append(text(chart_right + 8, axis_y + 74, "-1", "tiny"))
+    parts.append(rect(564, 366, 290, 72, "box"))
+    parts.append(text(709, 392, "Layer-1 contextual separability", "small", "middle"))
+    parts.append(text(709, 414, f"qk_both window delta: {full['window_delta_separation_ratio']:.3f}", "tiny", "middle"))
+    parts.append(text(709, 430, f"end separation ratio: {full['end_separation_ratio']:.3f}", "tiny", "middle"))
+    parts.append(text(32, 382, "Interpretation: static embeddings give some signal;", "small"))
+    parts.append(text(32, 404, "the route is best treated as contextual residual geometry.", "small"))
     write_svg("contextual_semantic_alignment.svg", width, height, "\n".join(parts))
 
 
@@ -485,8 +493,8 @@ def build_write_functional_birth() -> None:
     if len(steps) < 5:
         raise RuntimeError(f"Expected a trajectory, found only {len(steps)} steps in {WRITE_TRAJECTORY_ROWS}")
 
-    width, height = 980, 460
-    left, right, top, bottom = 78, width - 34, 88, height - 70
+    width, height = 980, 525
+    left, right, top, bottom = 78, width - 34, 88, height - 135
     y_values = [by_step[s][k] for s in steps for k in ("total", "skip", "mlp")]
     y_min = min(-5.0, min(y_values))
     y_max = max(110.0, max(y_values))
@@ -526,12 +534,12 @@ def build_write_functional_birth() -> None:
     for label, key, color in series:
         pts = [(x_for(s), y_for(by_step[s][key])) for s in steps]
         parts.append(polyline(pts, color, 3))
-    legend_x, legend_y = 670, 102
+    legend_x, legend_y = left + 230, bottom + 84
     for i, (label, _, color) in enumerate(series):
-        y = legend_y + i * 22
-        parts.append(line(legend_x, y - 5, legend_x + 36, y - 5, color=color, width=3))
-        parts.append(text(legend_x + 45, y, label, "small"))
-    parts.append(text(32, 432, "The direction is not born from zero. What changes sharply is its coupling to the mature answer-readout direction.", "small"))
+        x = legend_x + i * 220
+        parts.append(line(x, legend_y - 5, x + 36, legend_y - 5, color=color, width=3))
+        parts.append(text(x + 45, legend_y, label, "small"))
+    parts.append(text(32, 502, "The direction is not born from zero. What changes sharply is its coupling to the mature answer-readout direction.", "small"))
     write_svg("write_functional_birth.svg", width, height, "\n".join(parts))
 
 
@@ -577,12 +585,13 @@ def build_cross_seed_qk_write_role_map() -> None:
     if len(seed_rows) != 5:
         raise RuntimeError(f"Expected five cross-seed rows, found {len(seed_rows)}")
 
+    width, height = 900, 490
     parts = [
-        text(32, 36, "Role repeats, address changes on both sides of the circuit", "title"),
+        text(32, 36, "Role repeats; address changes", "title"),
         text(32, 61, "QK winners and write/readout paths are selected from independent cross-seed artifacts.", "subtitle"),
     ]
-    x_seed, x_qk, x_write, x_effect = 60, 150, 360, 670
-    y0, row_h = 110, 56
+    x_seed, x_qk, x_write, x_effect = 58, 132, 300, 595
+    y0, row_h = 112, 62
     parts.extend([
         text(x_seed, 90, "seed", "small"),
         text(x_qk, 90, "QK retrieval winner", "small"),
@@ -592,16 +601,17 @@ def build_cross_seed_qk_write_role_map() -> None:
     max_effect = max(abs(r["write_actual_mean"]) for r in seed_rows)
     for i, row in enumerate(seed_rows):
         y = y0 + i * row_h
-        parts.append(rect(42, y - 28, 880, 42, "box"))
-        parts.append(text(x_seed, y, str(row["seed"]), "label"))
-        parts.append(text(x_qk, y, row["qk_winner"], "label"))
-        parts.append(text(x_write, y, f"{row['write_source']} -> {row['write_mlp']}", "label"))
-        bar_w = 160 * abs(row["write_actual_mean"]) / max_effect
-        parts.append(f'<rect x="{x_effect:.1f}" y="{y - 16:.1f}" width="{bar_w:.1f}" height="14" fill="#4f7f54" opacity="0.9"/>')
-        parts.append(text(x_effect + bar_w + 8, y - 4, f"{row['write_actual_mean']:.2f}", "tiny"))
-        parts.append(text(x_effect, y + 14, f"raw SGD-eq / predicted {row['write_raw_pct']:.2f}%", "tiny"))
-    parts.append(text(42, 415, "Reading this figure: a named head is not the invariant. The invariant is the role: retrieve support value, then create a readout-useful residual write.", "small"))
-    write_svg("cross_seed_qk_write_role_map.svg", 980, 455, "\n".join(parts))
+        parts.append(rect(42, y - 30, 815, 50, "box"))
+        parts.append(text(x_seed, y - 2, f"{row['seed']:04d}", "label"))
+        parts.append(text(x_qk, y - 2, row["qk_winner"], "label"))
+        parts.append(text(x_write, y - 2, f"{row['write_source']} -> {row['write_mlp']}", "label"))
+        bar_w = 145 * abs(row["write_actual_mean"]) / max_effect
+        parts.append(f'<rect x="{x_effect:.1f}" y="{y - 20:.1f}" width="{bar_w:.1f}" height="14" fill="#4f7f54" opacity="0.9"/>')
+        parts.append(text(x_effect + bar_w + 8, y - 8, f"{row['write_actual_mean']:.2f}", "tiny"))
+        parts.append(text(x_effect, y + 13, f"raw SGD-eq / predicted {row['write_raw_pct']:.2f}%", "tiny"))
+    parts.append(text(42, 434, "Reading this figure: a named head is not the invariant. The invariant is the role:", "small"))
+    parts.append(text(42, 456, "retrieve support value, then create a readout-useful residual write.", "small"))
+    write_svg("cross_seed_qk_write_role_map.svg", width, height, "\n".join(parts))
 
 
 def build_closure_boundary() -> None:
@@ -644,17 +654,19 @@ def build_closure_boundary() -> None:
         if r["pair_type"] == "__all__" and r["switch_bucket"] == "competitor_switch"
     ], "branch-energy switch rows")
 
+    width, height = 900, 535
     parts = [
-        text(32, 36, "Closure boundary: routes help, output space helps more, nonlinear paths still matter", "title"),
-        text(32, 61, "Formation-window 1500 -> 2500 closure on 512 observations.", "subtitle"),
+        text(32, 36, "Closure boundary: output space helps most", "title"),
+        text(32, 61, "Routes help, nonlinear paths still matter; formation-window 1500 -> 2500 closure on 512 observations.", "subtitle"),
     ]
-    left, top, bottom = 86, 105, 310
-    group_w = 160
+    left, top, bottom = 76, 105, 310
+    chart_right = 850
+    group_w = 150
     for tick in [0.0, 0.25, 0.5, 0.75, 1.0]:
         y = bottom - tick * (bottom - top)
-        parts.append(line(left - 20, y, 910, y, "grid", "#ddd6c8", 1))
+        parts.append(line(left - 20, y, chart_right, y, "grid", "#ddd6c8", 1))
         parts.append(text(left - 28, y + 4, f"{tick:.2f}", "tiny", "end"))
-    parts.append(line(left - 20, bottom, 910, bottom, color="#4a4741", width=1.2))
+    parts.append(line(left - 20, bottom, chart_right, bottom, color="#4a4741", width=1.2))
     for i, (label, scalar) in enumerate(scalars):
         x = left + i * group_w
         route_r2 = route_by_scalar[scalar]
@@ -667,17 +679,17 @@ def build_closure_boundary() -> None:
             parts.append(f'<rect x="{bx:.1f}" y="{by:.1f}" width="{bw}" height="{bar_h:.1f}" fill="{color}" opacity="0.9"/>')
             parts.append(text(bx + bw / 2, by - 7, f"{value:.2f}", "tiny", "middle"))
         parts.append(text(x + 45, bottom + 24, label, "tiny", "middle"))
-    parts.append(line(650, 350, 686, 350, color="#d69b3a", width=4))
-    parts.append(text(695, 355, "route/write scalar closure", "small"))
-    parts.append(line(650, 374, 686, 374, color="#245f73", width=4))
-    parts.append(text(695, 379, "output-space closure", "small"))
-    parts.append(rect(42, 386, 875, 58, "warn"))
+    parts.append(line(610, 350, 646, 350, color="#d69b3a", width=4))
+    parts.append(text(655, 355, "route/write scalar closure", "small"))
+    parts.append(line(610, 374, 646, 374, color="#245f73", width=4))
+    parts.append(text(655, 379, "output-space closure", "small"))
+    parts.append(rect(42, 386, 805, 58, "warn"))
     parts.append(text(58, 412, f"Branch accounting: moving-margin direct R2 {branch_all['direct_moving_r_squared']:.3f}; fixed-source+branch {branch_all['source_fixed_branch_r_squared']:.3f}; fixed-target+branch {branch_all['target_fixed_branch_r_squared']:.3f}.", "small"))
     parts.append(text(58, 434, f"On switch rows: direct {branch_switch['direct_moving_r_squared']:.3f} -> {branch_switch['source_fixed_branch_r_squared']:.3f}/{branch_switch['target_fixed_branch_r_squared']:.3f}; target branch energy fraction {branch_energy['target_branch_energy_fraction_of_moving']:.3f}.", "small"))
-    parts.append(rect(42, 454, 875, 58, "warn"))
+    parts.append(rect(42, 454, 805, 58, "warn"))
     parts.append(text(58, 480, f"Line integral: fixed-source actual {fixed_source_line['sum_actual_endpoint_delta']:.3f}, endpoint first-order {fixed_source_line['sum_source_endpoint_first_order_delta']:.3f}, line integral {fixed_source_line['sum_source_endpoint_line_integral_delta']:.3f}.", "small"))
     parts.append(text(58, 502, f"Negative loss: endpoint first-order {neg_loss_line['sum_source_endpoint_first_order_delta']:.3f}, line integral {neg_loss_line['sum_source_endpoint_line_integral_delta']:.3f}, actual {neg_loss_line['sum_actual_endpoint_delta']:.3f}.", "small"))
-    write_svg("closure_boundary.svg", 980, 535, "\n".join(parts))
+    write_svg("closure_boundary.svg", width, height, "\n".join(parts))
 
 
 def build_proof_status() -> None:
@@ -689,9 +701,10 @@ def build_proof_status() -> None:
         ("QK optimizer cause", "supported for AdamW", "raw SGD-eq tiny, Adam state large"),
         ("Cross-seed QK role", "supported", "same role, moving head address"),
         ("Write functional subspace", "supported", "contextual prediction-position residual coupling"),
+        ("Prediction value code", "supported and causal", "broad value identity; removal hurts"),
         ("Write optimizer cause", "supported for AdamW", "raw SGD-eq tiny, AdamW-preconditioned growth"),
         ("Full answer-margin closure", "partial", "output closure stronger than route closure"),
-        ("Plain-SGD sufficiency", "open", "SGD-only training not tested"),
+        ("Matched SGD ablation", "supported in seed 7", "SGD LR sweep fails; broader SGD open"),
         ("Scaling to LLMs", "open", "requires candidate filtering"),
     ]
     parts = [text(32, 36, "Proof status after the current experiments", "title"),
@@ -702,13 +715,15 @@ def build_proof_status() -> None:
         cls = "ok" if status.startswith("supported") else "open"
         if status == "supported as diagnostic":
             cls = "warn"
+        if claim == "Matched SGD ablation":
+            cls = "warn"
         if status == "partial":
             cls = "warn"
         parts.append(rect(x0, y - 22, w, h, cls))
         parts.append(text(x0 + 18, y, claim, "label"))
         parts.append(text(x0 + 390, y, status, "small"))
         parts.append(text(x0 + 585, y, note, "small"))
-    write_svg("proof_status_ladder_updated.svg", 980, 475, "\n".join(parts))
+    write_svg("proof_status_ladder_updated.svg", 980, 515, "\n".join(parts))
 
 
 def main() -> None:

@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="980" height="460" viewBox="0 0 980 460" role="img">
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="525" viewBox="0 0 980 525" role="img">
 <defs>
 <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
 <path d="M0,0 L0,6 L9,3 z" fill="#343434" />
@@ -37,11 +37,11 @@
 <polyline fill="none" stroke="#245f73" stroke-width="3" points="78.0,369.3 156.9,370.0 235.8,371.0 314.7,369.9 393.6,245.1 472.5,206.7 551.5,201.7 630.4,136.3 709.3,101.9 788.2,115.8 867.1,167.4 946.0,133.6" />
 <polyline fill="none" stroke="#4f7f54" stroke-width="3" points="78.0,380.2 156.9,379.3 235.8,377.3 314.7,370.4 393.6,291.3 472.5,250.8 551.5,242.8 630.4,192.6 709.3,169.0 788.2,179.4 867.1,207.0 946.0,169.3" />
 <polyline fill="none" stroke="#8f5a24" stroke-width="3" points="78.0,366.0 156.9,367.6 235.8,370.6 314.7,376.4 393.6,330.6 472.5,332.8 551.5,335.8 630.4,320.5 709.3,309.8 788.2,313.3 867.1,337.3 946.0,341.2" />
-<line x1="670.0" y1="97.0" x2="706.0" y2="97.0" stroke="#245f73" stroke-width="3"/>
-<text x="715.0" y="102.0" class="small" text-anchor="start">total functional write</text>
-<line x1="670.0" y1="119.0" x2="706.0" y2="119.0" stroke="#4f7f54" stroke-width="3"/>
-<text x="715.0" y="124.0" class="small" text-anchor="start">residual skip part</text>
-<line x1="670.0" y1="141.0" x2="706.0" y2="141.0" stroke="#8f5a24" stroke-width="3"/>
-<text x="715.0" y="146.0" class="small" text-anchor="start">L0MLP nonlinear part</text>
-<text x="32.0" y="432.0" class="small" text-anchor="start">The direction is not born from zero. What changes sharply is its coupling to the mature answer-readout direction.</text>
+<line x1="308.0" y1="469.0" x2="344.0" y2="469.0" stroke="#245f73" stroke-width="3"/>
+<text x="353.0" y="474.0" class="small" text-anchor="start">total functional write</text>
+<line x1="528.0" y1="469.0" x2="564.0" y2="469.0" stroke="#4f7f54" stroke-width="3"/>
+<text x="573.0" y="474.0" class="small" text-anchor="start">residual skip part</text>
+<line x1="748.0" y1="469.0" x2="784.0" y2="469.0" stroke="#8f5a24" stroke-width="3"/>
+<text x="793.0" y="474.0" class="small" text-anchor="start">L0MLP nonlinear part</text>
+<text x="32.0" y="502.0" class="small" text-anchor="start">The direction is not born from zero. What changes sharply is its coupling to the mature answer-readout direction.</text>
 </svg>
