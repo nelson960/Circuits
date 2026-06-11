@@ -433,8 +433,8 @@ def build_qk_adamw_fidelity() -> None:
     if math.isclose(lo, hi):
         raise RuntimeError("Per-step AdamW scatter has constant values.")
 
-    width, height = 900, 520
-    left, right, top, bottom = 90, 552, 92, 392
+    width, height = 900, 560
+    left, right, top, bottom = 90, 552, 92, 378
 
     def x_for(value: float) -> float:
         return left + (value - lo) / (hi - lo) * (right - left)
@@ -466,11 +466,13 @@ def build_qk_adamw_fidelity() -> None:
     parts.append(text(626, 214, f"sign match: {sign_match * 100:.1f}%", "small"))
     parts.append(text(626, 250, f"AdamW reconstruction r: {pearson_reconstructed:.3f}", "tiny"))
     parts.append(text(626, 268, f"AdamW reconstruction R^2: {r2_reconstructed:.3f}", "tiny"))
-    parts.append(rect(600, 310, 250, 66, "warn"))
-    parts.append(text(725, 337, "Interpretation", "label", "middle"))
-    parts.append(text(725, 360, "the cumulative result is not hiding", "tiny", "middle"))
-    parts.append(text(725, 376, "a failed per-step fit", "tiny", "middle"))
-    parts.append(text(32, 485, "The scatter tests the reviewer concern directly: the first-order update attribution is evaluated locally, not only as a cumulative endpoint number.", "small"))
+    parts.append(rect(600, 304, 250, 82, "warn"))
+    parts.append(text(725, 331, "Interpretation", "label", "middle"))
+    parts.append(text(725, 354, "the cumulative result is not hiding", "tiny", "middle"))
+    parts.append(text(725, 370, "a failed per-step fit", "tiny", "middle"))
+    parts.append(rect(32, 426, 820, 58, "box"))
+    parts.append(text(442, 453, "This tests the reviewer concern directly: first-order update attribution is evaluated locally,", "small", "middle"))
+    parts.append(text(442, 474, "not only as a cumulative endpoint number.", "small", "middle"))
     write_svg("qk_adamw_fidelity.svg", width, height, "\n".join(parts))
 
 
@@ -489,7 +491,7 @@ def build_cross_seed_role_mass_heatmap() -> None:
         raise RuntimeError(f"Expected five cross-seed heatmap rows, found {len(rows)}")
     max_abs = max(abs(scores[h]) for _, scores, _ in rows for h in head_labels)
 
-    width, height = 980, 430
+    width, height = 980, 505
     left, top, cell_w, cell_h = 96, 112, 64, 42
     parts = [
         text(32, 36, "Cross-seed QK role mass is not a single fixed address", "title"),
@@ -511,14 +513,15 @@ def build_cross_seed_role_mass_heatmap() -> None:
                 f'fill="{diverging_color(value, max_abs)}" stroke="{stroke}" stroke-width="{width_attr}" rx="6"/>'
             )
             parts.append(text(x + (cell_w - 4) / 2, y + 24, f"{value:.1f}", "tiny", "middle"))
-    parts.append(text(left - 24, top + len(rows) * cell_h + 30, "signed Delta C_QK", "small"))
-    legend_x, legend_y = 288, top + len(rows) * cell_h + 16
+    parts.append(text(left - 24, top + len(rows) * cell_h + 34, "signed Delta C_QK", "small"))
+    legend_x, legend_y = 288, top + len(rows) * cell_h + 22
     for k, val in enumerate([-max_abs, 0.0, max_abs]):
         x = legend_x + k * 94
         parts.append(f'<rect x="{x:.1f}" y="{legend_y:.1f}" width="74" height="18" fill="{diverging_color(val, max_abs)}" stroke="#ddd6c8" rx="4"/>')
-        parts.append(text(x + 37, legend_y + 38, f"{val:.1f}", "tiny", "middle"))
-    parts.append(rect(32, 354, 868, 46, "warn"))
-    parts.append(text(466, 380, "Signed ranking matters: negative Delta C_QK means a head moves away from the retrieval role, not merely that its magnitude is small.", "small", "middle"))
+        parts.append(text(x + 37, legend_y + 42, f"{val:.1f}", "tiny", "middle"))
+    parts.append(rect(32, 410, 868, 58, "warn"))
+    parts.append(text(466, 437, "Signed ranking matters: negative Delta C_QK means a head moves away from the retrieval role,", "small", "middle"))
+    parts.append(text(466, 458, "not merely that its magnitude is small.", "small", "middle"))
     write_svg("cross_seed_qk_role_mass_heatmap.svg", width, height, "\n".join(parts))
 
 
@@ -543,8 +546,8 @@ def build_value_code_rank_curve() -> None:
     ranks = [r["rank"] for r in rows]
     baseline_accuracy = rows[0]["baseline_accuracy"]
     baseline_margin = rows[0]["baseline_margin"]
-    width, height = 900, 440
-    left, right, top, bottom = 86, 820, 104, 292
+    width, height = 900, 505
+    left, right, top, bottom = 86, 820, 104, 286
     x_min, x_max = min(ranks), max(ranks)
 
     def x_for(rank: int) -> float:
@@ -582,12 +585,15 @@ def build_value_code_rank_curve() -> None:
     for r in rows:
         parts.append(f'<circle cx="{x_for(r["rank"]):.1f}" cy="{y_acc(r["intervened_accuracy"]):.1f}" r="4" fill="#245f73"/>')
         parts.append(f'<circle cx="{x_for(r["rank"]):.1f}" cy="{y_margin(r["intervened_margin"]):.1f}" r="4" fill="#8f5a24"/>')
-    parts.append(text((left + right) / 2, bottom + 52, "kept rank", "small", "middle"))
-    parts.append(line(560, 335, 596, 335, color="#245f73", width=3))
-    parts.append(text(606, 340, "intervened accuracy", "small"))
-    parts.append(line(560, 360, 596, 360, color="#8f5a24", width=3))
-    parts.append(text(606, 365, "intervened margin, rescaled", "small"))
-    parts.append(text(32, 404, "Interpretation: rank-16 is not enough; near-full preservation is much closer to baseline. This supports a broad value-readable state, not a compact vector.", "small"))
+    parts.append(text((left + right) / 2, bottom + 44, "kept rank", "small", "middle"))
+    parts.append(rect(522, 338, 330, 64, "box"))
+    parts.append(line(548, 363, 584, 363, color="#245f73", width=3))
+    parts.append(text(594, 368, "intervened accuracy", "small"))
+    parts.append(line(548, 386, 584, 386, color="#8f5a24", width=3))
+    parts.append(text(594, 391, "intervened margin, rescaled", "small"))
+    parts.append(rect(32, 426, 820, 52, "warn"))
+    parts.append(text(442, 450, "Rank-16 is not enough; near-full preservation is much closer to baseline.", "small", "middle"))
+    parts.append(text(442, 470, "This supports a broad value-readable state, not a compact vector.", "small", "middle"))
     write_svg("value_code_rank_curve.svg", width, height, "\n".join(parts))
 
 
