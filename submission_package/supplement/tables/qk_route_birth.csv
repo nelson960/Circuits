@@ -1,6 +1,0 @@
-claim,metric,value,window_or_checkpoint,source_artifact
-QK route birth,actual route growth,+4.11462,from initialization 0-6000,analysis/optimizer_update_trace/from_init_seed7_0000_6000_stepwise/optimizer_update_trace_report.json
-QK route birth,AdamW first-order reconstruction,+5.21734,from initialization 0-6000,analysis/optimizer_update_trace/from_init_seed7_0000_6000_stepwise/optimizer_update_trace_report.json
-QK route birth,raw-gradient SGD-equivalent fraction,0.76%,from initialization 0-6000,analysis/optimizer_update_trace/from_init_seed7_0000_6000_stepwise/optimizer_update_trace_report.json
-QK route birth,final plotted C_QK,4.69,step 3500,submission figure/table derived from QK route rows
-QK route birth,final plotted W_QK top singular value,2.95,step 3500,submission figure/table derived from W_QK SVD rows

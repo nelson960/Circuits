@@ -1,6 +1,0 @@
-seed,QK_winner,winner_delta_C_QK,bottom_control,bottom_delta_C_QK,write_readout_winner,selection_rule
-0011,L2H0,+1.448,L0H0,-0.190,L1H3->L1MLP,predefined C_QK scalar on fixed probe set
-0013,L2H2,+1.451,L1H1,-0.230,L1H3->L1MLP,predefined C_QK scalar on fixed probe set
-0017,L2H3,+3.178,L0H2,-0.254,L1H1->L1MLP,predefined C_QK scalar on fixed probe set
-0023,L2H1,+1.500,L1H2,-0.114,L2H1->L2MLP,predefined C_QK scalar on fixed probe set
-0029,L1H2,+1.439,L1H0,-2.577,L1H1->L1MLP,predefined C_QK scalar on fixed probe set

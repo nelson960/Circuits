@@ -1,5 +1,0 @@
-claim,intervention,value,interpretation,source_artifact
-QK causal route,full layer_1_post_mlp residual transfer,40.58,full clean-corrupt residual transfer reference,analysis causal route-transfer artifact family
-QK causal route,rank-4 L2H1 QK query transfer,10.54,small route transfers part of the query-key/support variable,analysis causal route-transfer artifact family
-QK causal route,rank-4 L2H1 recovery fraction,25.98%,route is important but not the whole circuit,analysis causal route-transfer artifact family
-QK causal route,distractor transfer,-0.317,control is near zero/negative,analysis causal route-transfer artifact family
