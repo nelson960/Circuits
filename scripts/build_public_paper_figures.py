@@ -81,6 +81,28 @@ L2H1_QK_QUERY_ROUTE_REPORT = ROOT / (
     "artifacts/runs/symbolic_kv_reference_formation/analysis/route_gradient_selection/"
     "heldout_route_comparison/l2h1_qk_query_query_key/candidate_route_gradient_selection_report.json"
 )
+VALUE_CODE_KEEP_REPORTS = {
+    16: ROOT / (
+        "artifacts/runs/symbolic_kv_reference_formation/analysis/value_code_causal_intervention/"
+        "embedding_value_identity_prediction_layer2_keep_rank16_1500_3500/geometry_subspace_intervention_report.json"
+    ),
+    32: ROOT / (
+        "artifacts/runs/symbolic_kv_reference_formation/analysis/value_code_causal_intervention/"
+        "embedding_value_identity_prediction_layer2_keep_rank32_2000_3500/geometry_subspace_intervention_report.json"
+    ),
+    64: ROOT / (
+        "artifacts/runs/symbolic_kv_reference_formation/analysis/value_code_causal_intervention/"
+        "embedding_value_identity_prediction_layer2_keep_rank64_2000_3500/geometry_subspace_intervention_report.json"
+    ),
+    96: ROOT / (
+        "artifacts/runs/symbolic_kv_reference_formation/analysis/value_code_causal_intervention/"
+        "embedding_value_identity_prediction_layer2_keep_rank96_2000_3500/geometry_subspace_intervention_report.json"
+    ),
+    127: ROOT / (
+        "artifacts/runs/symbolic_kv_reference_formation/analysis/value_code_causal_intervention/"
+        "embedding_value_identity_prediction_layer2_keep_rank127_2000_3500/geometry_subspace_intervention_report.json"
+    ),
+}
 CROSS_SEED_ROOT = ROOT / "artifacts/runs/symbolic_kv_cross_seed_adam"
 
 
@@ -158,6 +180,44 @@ def normalize(values: list[float]) -> list[float]:
     if math.isclose(lo, hi):
         raise ValueError(f"Cannot normalize constant series: {values[:5]}")
     return [(v - lo) / (hi - lo) for v in values]
+
+
+def pearson(xs: list[float], ys: list[float]) -> float:
+    if len(xs) != len(ys) or not xs:
+        raise ValueError("Pearson inputs must be non-empty and equal length.")
+    mx = sum(xs) / len(xs)
+    my = sum(ys) / len(ys)
+    num = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    den_x = math.sqrt(sum((x - mx) ** 2 for x in xs))
+    den_y = math.sqrt(sum((y - my) ** 2 for y in ys))
+    if math.isclose(den_x, 0.0) or math.isclose(den_y, 0.0):
+        raise ValueError("Cannot compute Pearson for constant input.")
+    return num / (den_x * den_y)
+
+
+def r_squared(actual: list[float], predicted: list[float]) -> float:
+    if len(actual) != len(predicted) or not actual:
+        raise ValueError("R^2 inputs must be non-empty and equal length.")
+    mean_actual = sum(actual) / len(actual)
+    sse = sum((a - p) ** 2 for a, p in zip(actual, predicted))
+    sst = sum((a - mean_actual) ** 2 for a in actual)
+    if math.isclose(sst, 0.0):
+        raise ValueError("Cannot compute R^2 for constant actual values.")
+    return 1.0 - sse / sst
+
+
+def interpolate_channel(a: int, b: int, t: float) -> int:
+    return round(a + (b - a) * t)
+
+
+def diverging_color(value: float, max_abs: float) -> str:
+    if math.isclose(max_abs, 0.0):
+        raise ValueError("Cannot color with zero max_abs.")
+    t = min(1.0, abs(value) / max_abs)
+    base = (255, 253, 248)
+    target = (79, 127, 84) if value >= 0 else (185, 95, 86)
+    mixed = tuple(interpolate_channel(base[i], target[i], 0.2 + 0.75 * t) for i in range(3))
+    return f"#{mixed[0]:02x}{mixed[1]:02x}{mixed[2]:02x}"
 
 
 def plot_series(
@@ -349,6 +409,186 @@ def build_qk_causal_transfer() -> None:
     parts.append(rect(140, 365, 620, 36, "warn"))
     parts.append(text(450, 388, f"Rank-4 QK recovers {recovery * 100:.1f}% of full residual query-key transfer; the rest remains distributed.", "small", "middle"))
     write_svg("qk_causal_transfer.svg", width, height, "\n".join(parts))
+
+
+def build_qk_adamw_fidelity() -> None:
+    report = load_json(ADAM_REPORT)
+    rows = load_jsonl(ROOT / report["metric_rows_path"])
+    actual = [float(r["actual_rank_match_delta"]) for r in rows]
+    predicted = [float(r["actual_update_predicted_rank_match_delta"]) for r in rows]
+    reconstructed = [float(r["reconstructed_adamw_rank_delta"]) for r in rows]
+    if len(actual) < 1000:
+        raise RuntimeError(f"Expected one-step trace rows, found only {len(actual)}")
+    pearson_actual_update = pearson(actual, predicted)
+    r2_actual_update = r_squared(actual, predicted)
+    pearson_reconstructed = pearson(actual, reconstructed)
+    r2_reconstructed = r_squared(actual, reconstructed)
+    sign_match = sum(1 for a, p in zip(actual, predicted) if (a >= 0) == (p >= 0)) / len(actual)
+
+    lo = min(min(actual), min(predicted))
+    hi = max(max(actual), max(predicted))
+    pad = (hi - lo) * 0.08
+    lo -= pad
+    hi += pad
+    if math.isclose(lo, hi):
+        raise RuntimeError("Per-step AdamW scatter has constant values.")
+
+    width, height = 900, 520
+    left, right, top, bottom = 90, 552, 92, 392
+
+    def x_for(value: float) -> float:
+        return left + (value - lo) / (hi - lo) * (right - left)
+
+    def y_for(value: float) -> float:
+        return bottom - (value - lo) / (hi - lo) * (bottom - top)
+
+    parts = [
+        text(32, 36, "Per-step AdamW attribution fidelity", "title"),
+        text(32, 61, "Every one-step interval in the 0 -> 6000 reference trace; plotted points are sampled for readability.", "subtitle"),
+    ]
+    for frac in [0.0, 0.25, 0.5, 0.75, 1.0]:
+        x = left + frac * (right - left)
+        y = bottom - frac * (bottom - top)
+        parts.append(line(x, top, x, bottom, "grid", "#ddd6c8", 1))
+        parts.append(line(left, y, right, y, "grid", "#ddd6c8", 1))
+    parts.append(line(left, bottom, right, bottom, "axis", "#4a4741", 1.2))
+    parts.append(line(left, top, left, bottom, "axis", "#4a4741", 1.2))
+    parts.append(line(x_for(lo), y_for(lo), x_for(hi), y_for(hi), color="#8f5a24", width=1.6))
+    sample_stride = max(1, len(actual) // 650)
+    for a, p in list(zip(actual, predicted))[::sample_stride]:
+        parts.append(f'<circle cx="{x_for(a):.1f}" cy="{y_for(p):.1f}" r="2.0" fill="#245f73" opacity="0.42"/>')
+    parts.append(text((left + right) / 2, bottom + 38, "measured one-step Delta C_QK", "small", "middle"))
+    parts.append(text(left - 56, (top + bottom) / 2, "predicted", "small", "middle"))
+    parts.append(rect(600, 104, 250, 170, "box"))
+    parts.append(text(725, 133, "actual-update first-order fit", "label", "middle"))
+    parts.append(text(626, 166, f"Pearson r: {pearson_actual_update:.3f}", "small"))
+    parts.append(text(626, 190, f"R^2: {r2_actual_update:.3f}", "small"))
+    parts.append(text(626, 214, f"sign match: {sign_match * 100:.1f}%", "small"))
+    parts.append(text(626, 250, f"AdamW reconstruction r: {pearson_reconstructed:.3f}", "tiny"))
+    parts.append(text(626, 268, f"AdamW reconstruction R^2: {r2_reconstructed:.3f}", "tiny"))
+    parts.append(rect(600, 310, 250, 66, "warn"))
+    parts.append(text(725, 337, "Interpretation", "label", "middle"))
+    parts.append(text(725, 360, "the cumulative result is not hiding", "tiny", "middle"))
+    parts.append(text(725, 376, "a failed per-step fit", "tiny", "middle"))
+    parts.append(text(32, 485, "The scatter tests the reviewer concern directly: the first-order update attribution is evaluated locally, not only as a cumulative endpoint number.", "small"))
+    write_svg("qk_adamw_fidelity.svg", width, height, "\n".join(parts))
+
+
+def build_cross_seed_role_mass_heatmap() -> None:
+    head_labels = [f"L{layer}H{head}" for layer in range(3) for head in range(4)]
+    rows = []
+    for selection_path in sorted(CROSS_SEED_ROOT.glob("seed_*/analysis/cross_seed_head_selection.json")):
+        selection = load_json(selection_path)
+        seed = int(selection["seed"])
+        scores = {c["head_label"]: float(c["window_delta_qk_match_separation"]) for c in selection["candidates"]}
+        missing = [h for h in head_labels if h not in scores]
+        if missing:
+            raise RuntimeError(f"Missing heads for seed {seed}: {missing}")
+        rows.append((seed, scores, selection["winner"]["head_label"]))
+    if len(rows) != 5:
+        raise RuntimeError(f"Expected five cross-seed heatmap rows, found {len(rows)}")
+    max_abs = max(abs(scores[h]) for _, scores, _ in rows for h in head_labels)
+
+    width, height = 980, 430
+    left, top, cell_w, cell_h = 96, 112, 64, 42
+    parts = [
+        text(32, 36, "Cross-seed QK role mass is not a single fixed address", "title"),
+        text(32, 61, "Cells show signed window Delta C_QK for every head; winners are outlined.", "subtitle"),
+    ]
+    for j, head in enumerate(head_labels):
+        x = left + j * cell_w + cell_w / 2
+        parts.append(text(x, 92, head, "tiny", "middle"))
+    for i, (seed, scores, winner) in enumerate(rows):
+        y = top + i * cell_h
+        parts.append(text(left - 24, y + 26, f"{seed:04d}", "small", "end"))
+        for j, head in enumerate(head_labels):
+            x = left + j * cell_w
+            value = scores[head]
+            stroke = "#171615" if head == winner else "#fffdf8"
+            width_attr = "2.4" if head == winner else "1.0"
+            parts.append(
+                f'<rect x="{x:.1f}" y="{y:.1f}" width="{cell_w - 4:.1f}" height="{cell_h - 5:.1f}" '
+                f'fill="{diverging_color(value, max_abs)}" stroke="{stroke}" stroke-width="{width_attr}" rx="6"/>'
+            )
+            parts.append(text(x + (cell_w - 4) / 2, y + 24, f"{value:.1f}", "tiny", "middle"))
+    parts.append(text(left - 24, top + len(rows) * cell_h + 30, "signed Delta C_QK", "small"))
+    legend_x, legend_y = 288, top + len(rows) * cell_h + 16
+    for k, val in enumerate([-max_abs, 0.0, max_abs]):
+        x = legend_x + k * 94
+        parts.append(f'<rect x="{x:.1f}" y="{legend_y:.1f}" width="74" height="18" fill="{diverging_color(val, max_abs)}" stroke="#ddd6c8" rx="4"/>')
+        parts.append(text(x + 37, legend_y + 38, f"{val:.1f}", "tiny", "middle"))
+    parts.append(rect(32, 354, 868, 46, "warn"))
+    parts.append(text(466, 380, "Signed ranking matters: negative Delta C_QK means a head moves away from the retrieval role, not merely that its magnitude is small.", "small", "middle"))
+    write_svg("cross_seed_qk_role_mass_heatmap.svg", width, height, "\n".join(parts))
+
+
+def build_value_code_rank_curve() -> None:
+    rows = []
+    for rank, path in sorted(VALUE_CODE_KEEP_REPORTS.items()):
+        report = load_json(path)
+        split_rows = report["summary"]["final_by_split"]
+        match = [r for r in split_rows if r["split"] == "validation_iid"]
+        if len(match) != 1:
+            raise RuntimeError(f"Expected one validation_iid row for rank {rank}, found {len(match)}")
+        row = match[0]
+        rows.append({
+            "rank": rank,
+            "baseline_accuracy": float(row["baseline_accuracy"]),
+            "intervened_accuracy": float(row["intervened_accuracy"]),
+            "baseline_margin": float(row["baseline_margin_mean"]),
+            "intervened_margin": float(row["intervened_margin_mean"]),
+        })
+    if len(rows) != len(VALUE_CODE_KEEP_REPORTS):
+        raise RuntimeError("Value-code rank curve rows do not match expected reports.")
+    ranks = [r["rank"] for r in rows]
+    baseline_accuracy = rows[0]["baseline_accuracy"]
+    baseline_margin = rows[0]["baseline_margin"]
+    width, height = 900, 440
+    left, right, top, bottom = 86, 820, 104, 292
+    x_min, x_max = min(ranks), max(ranks)
+
+    def x_for(rank: int) -> float:
+        return left + (rank - x_min) / (x_max - x_min) * (right - left)
+
+    def y_acc(value: float) -> float:
+        return bottom - value * (bottom - top)
+
+    margin_values = [r["intervened_margin"] for r in rows] + [baseline_margin]
+    margin_min = min(margin_values)
+    margin_max = max(margin_values)
+
+    def y_margin(value: float) -> float:
+        return bottom - (value - margin_min) / (margin_max - margin_min) * (bottom - top)
+
+    parts = [
+        text(32, 36, "Value-code preservation is broad, not compact", "title"),
+        text(32, 61, "Validation-IID keep-rank interventions at layer_2_post_mlp / prediction, step 3500.", "subtitle"),
+    ]
+    for tick in [0.0, 0.25, 0.5, 0.75, 1.0]:
+        y = bottom - tick * (bottom - top)
+        parts.append(line(left, y, right, y, "grid", "#ddd6c8", 1))
+        parts.append(text(left - 28, y + 4, f"{tick:.2f}", "tiny", "end"))
+    parts.append(line(left, bottom, right, bottom, "axis", "#4a4741", 1.2))
+    parts.append(line(left, top, left, bottom, "axis", "#4a4741", 1.2))
+    for rank in ranks:
+        x = x_for(rank)
+        parts.append(line(x, bottom, x, bottom + 6, color="#4a4741", width=1))
+        parts.append(text(x, bottom + 24, str(rank), "tiny", "middle"))
+    acc_pts = [(x_for(r["rank"]), y_acc(r["intervened_accuracy"])) for r in rows]
+    margin_pts = [(x_for(r["rank"]), y_margin(r["intervened_margin"])) for r in rows]
+    parts.append(line(left, y_acc(baseline_accuracy), right, y_acc(baseline_accuracy), color="#4f7f54", width=1.2))
+    parts.append(polyline(acc_pts, "#245f73", 3))
+    parts.append(polyline(margin_pts, "#8f5a24", 3))
+    for r in rows:
+        parts.append(f'<circle cx="{x_for(r["rank"]):.1f}" cy="{y_acc(r["intervened_accuracy"]):.1f}" r="4" fill="#245f73"/>')
+        parts.append(f'<circle cx="{x_for(r["rank"]):.1f}" cy="{y_margin(r["intervened_margin"]):.1f}" r="4" fill="#8f5a24"/>')
+    parts.append(text((left + right) / 2, bottom + 52, "kept rank", "small", "middle"))
+    parts.append(line(560, 335, 596, 335, color="#245f73", width=3))
+    parts.append(text(606, 340, "intervened accuracy", "small"))
+    parts.append(line(560, 360, 596, 360, color="#8f5a24", width=3))
+    parts.append(text(606, 365, "intervened margin, rescaled", "small"))
+    parts.append(text(32, 404, "Interpretation: rank-16 is not enough; near-full preservation is much closer to baseline. This supports a broad value-readable state, not a compact vector.", "small"))
+    write_svg("value_code_rank_curve.svg", width, height, "\n".join(parts))
 
 
 def build_contextual_alignment() -> None:
@@ -804,9 +1044,14 @@ def main() -> None:
         CROSS_SEED_ROOT,
     ]:
         require_path(path)
+    for path in VALUE_CODE_KEEP_REPORTS.values():
+        require_path(path)
     build_updated_chain()
     build_weight_birth()
     build_qk_causal_transfer()
+    build_qk_adamw_fidelity()
+    build_cross_seed_role_mass_heatmap()
+    build_value_code_rank_curve()
     build_contextual_alignment()
     build_qk_optimizer_phase_structure()
     build_reference_write_optimizer_split()

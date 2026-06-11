@@ -59,6 +59,27 @@ The write/readout side is real but less closed. It is better described as a cont
   </div>
 </div>
 
+| Claim | Main evidence | Boundary |
+| --- | --- | --- |
+| QK route forms | `C_QK` growth, low-rank `W_QK`, support-over-distractor separation | strongest part of the account |
+| QK route is causal | full residual transfer `40.58`, rank-4 QK transfer `10.54`, distractor control `-0.317` | important but not the whole circuit |
+| AdamW tracks route growth | cumulative attribution plus one-step fidelity scatter | first-order scalar attribution, not exact nonlinear equality |
+| Role/address dissociation | all-head cross-seed role-mass heatmap and winner/control attribution | six seeds in one task family |
+| Write/readout is contextual | prediction-position split, value-code intervention, transfer rescue | causal but not closed-form |
+
+### Reader Glossary
+
+| term | meaning here |
+| --- | --- |
+| component | a named module such as an attention head or MLP block |
+| address | the component name that currently carries a role, such as `L2H1` |
+| role | a task-level function measured by a scalar, such as retrieving the true support value |
+| route growth | positive change in a role scalar such as `Delta C_QK` |
+| QK | the attention part that scores where a position should look |
+| OV / write | the attention part that adds a vector after attention has selected sources |
+| residual perturbation | the vector change added to the residual stream by a component |
+| direct readout | how much a vector points directly toward the answer logits before later processing |
+
 <figure class="paper-figure">
   <img src="assets/figures/updated_loss_to_lookup_chain.svg" alt="Loss to lookup chain">
   <figcaption><strong>Figure 1. The measured chain.</strong> The audit follows one role from loss pressure, to optimizer state, to weight geometry, to route separation, to output behavior.</figcaption>
@@ -343,6 +364,13 @@ In the from-initialization trace:
 
 So the instantaneous raw-gradient / SGD-equivalent direction is much too small to explain the route birth in the traced run. The actual AdamW parameter update is the right explanatory object for this scalar.
 
+The same attribution is not only an endpoint story. On the one-step trace, measured `Delta C_QK` and first-order prediction from the actual parameter update line up almost exactly after rounding: Pearson `r = 1.000`, `R^2 = 1.000`, and sign match `99.5%`. This does not make the nonlinear scalar change exact over long intervals, but it answers the local-fidelity concern.
+
+<figure class="paper-figure">
+  <img src="assets/figures/qk_adamw_fidelity.svg" alt="QK AdamW per-step fidelity">
+  <figcaption><strong>Figure 8. Per-step AdamW fidelity.</strong> The one-step actual-update prediction matches measured `Delta C_QK` locally. The cumulative endpoint mismatch is therefore not hiding a failed per-step attribution.</figcaption>
+</figure>
+
 The update also does not land symmetrically inside QK. In a traced `5500 -> 5550` diagnostic window, the leading route sharpens mostly through the query side:
 
 | term | actual growth |
@@ -372,7 +400,7 @@ The phase structure matters:
 
 <figure class="paper-figure">
   <img src="assets/figures/qk_optimizer_phase_structure.svg" alt="QK optimizer phase structure">
-  <figcaption><strong>Figure 8. QK formation has windows.</strong> The cleanest birth window is `750 -> 2500`: the route grows while the raw SGD-equivalent term is slightly negative and Adam momentum carries the useful direction.</figcaption>
+  <figcaption><strong>Figure 9. QK formation has windows.</strong> The cleanest birth window is `750 -> 2500`: the route grows while the raw SGD-equivalent term is slightly negative and Adam momentum carries the useful direction.</figcaption>
 </figure>
 
 The matched seed-7 optimizer ablation is a bounded control, not an impossibility theorem. Under the tested recipe and finite `6000`-step budget:
@@ -389,12 +417,19 @@ The best SGD+momentum run was not random noise. It learned shallow structure: to
 
 <figure class="paper-figure">
   <img src="assets/figures/optimizer_ablation_summary.svg" alt="Optimizer ablation summary">
-  <figcaption><strong>Figure 9. Bounded optimizer ablation.</strong> AdamW-family runs solve and form the measured route under the tested recipe. Same-budget SGD variants do not. This is not a universal SGD impossibility theorem.</figcaption>
+  <figcaption><strong>Figure 10. Bounded optimizer ablation.</strong> AdamW-family runs solve and form the measured route under the tested recipe. Same-budget SGD variants do not. This is not a universal SGD impossibility theorem.</figcaption>
 </figure>
 
 ### 5. The Role Repeats While The Address Moves
 
 For cross-seed scans, heads are ranked by the predefined support-value route scalar on the same fixed probe set. Winners are top positive movers. Controls are bottom-ranked or weak/negative movers under the same scalar.
+
+I rank by signed `Delta C_QK`, not by `|Delta C_QK|`, because negative movement is meaningful: it means a head is moving away from the retrieval role, not merely that its magnitude is small.
+
+<figure class="paper-figure">
+  <img src="assets/figures/cross_seed_qk_role_mass_heatmap.svg" alt="Cross-seed QK role mass heatmap">
+  <figcaption><strong>Figure 11. Cross-seed role mass.</strong> The heatmap shows signed `Delta C_QK` for every head in each seed. The winner changes, but positive route mass is structured rather than an arbitrary argmax over identical heads.</figcaption>
+</figure>
 
 Across five additional seeds, the winning head changed:
 
@@ -420,7 +455,7 @@ Winner heads grow positively in all five seeds. Bottom controls move negatively 
 
 <figure class="paper-figure">
   <img src="assets/figures/cross_seed_qk_write_role_map.svg" alt="Cross-seed QK and write role map">
-  <figcaption><strong>Figure 10. Role/address dissociation.</strong> The support-value retrieval role repeats across seeds, but the winning head address changes. The write/readout role also repeats with moving component paths.</figcaption>
+  <figcaption><strong>Figure 12. Role/address dissociation.</strong> The support-value retrieval role repeats across seeds, but the winning head address changes. The write/readout role also repeats with moving component paths.</figcaption>
 </figure>
 
 The interpretation is precise:
@@ -500,7 +535,7 @@ Most of the write side is residual carrying, with a smaller local positive conve
 
 <figure class="paper-figure">
   <img src="assets/figures/write_side_mechanism.svg" alt="Write side mechanism">
-  <figcaption><strong>Figure 11. Write/readout mechanism.</strong> The measured write is a contextual residual coupling, not a static `W_OV` answer-vector claim.</figcaption>
+  <figcaption><strong>Figure 13. Write/readout mechanism.</strong> The measured write is a contextual residual coupling, not a static `W_OV` answer-vector claim.</figcaption>
 </figure>
 
 The mature-looking write directions are present surprisingly early. Against a step-2500 reference basis, `delta_in` overlap is already about `0.661` at step `750`; MLP-output overlap is about `0.721`. But the scalar-relevant effect is tiny until the birth window:
@@ -515,7 +550,7 @@ The mature-looking write directions are present surprisingly early. Against a st
 
 <figure class="paper-figure">
   <img src="assets/figures/write_functional_birth.svg" alt="Write functional birth">
-  <figcaption><strong>Figure 12. Write coupling birth.</strong> The mature-looking write direction is partly present early. What turns on sharply around `1500 -> 1750` is coupling to answer/value readout directions.</figcaption>
+  <figcaption><strong>Figure 14. Write coupling birth.</strong> The mature-looking write direction is partly present early. What turns on sharply around `1500 -> 1750` is coupling to answer/value readout directions.</figcaption>
 </figure>
 
 The write-side optimizer attribution is also AdamW-carried in the reference seed. For the fixed-readout write scalar over `1500 -> 2500`:
@@ -553,6 +588,13 @@ baseline:      margin  5.264, accuracy 0.765
 keep rank 16: margin -4.248, accuracy 0.451
 keep rank127: margin  5.707, accuracy 0.758
 ```
+
+The available keep-rank sweep gives a coarser curve:
+
+<figure class="paper-figure">
+  <img src="assets/figures/value_code_rank_curve.svg" alt="Value-code keep-rank curve">
+  <figcaption><strong>Figure 15. Value-code dimensionality curve.</strong> Keeping rank 16 is far from enough, while near-full rank preservation is much closer to baseline. The current curve is coarse, but it supports the broad-code interpretation.</figcaption>
+</figure>
 
 <div class="boundary-box">
 <p>The rank-127 result should not be read as a compact-code result. In a 128-dimensional residual stream, keeping 127 dimensions is close to keeping the whole state. I read this as evidence against a small low-rank value-vector story and in favor of a broadly distributed value-readable prediction-position state.</p>
@@ -595,7 +637,7 @@ At step `3500`, source-plus-context rescue reaches:
 
 <figure class="paper-figure">
   <img src="assets/figures/contextual_semantic_alignment.svg" alt="Contextual semantic alignment">
-  <figcaption><strong>Figure 13. Contextual transfer.</strong> Support value-code transfer is real, but prediction-position context already carries much of the recoverable value-code scaffold.</figcaption>
+  <figcaption><strong>Figure 16. Contextual transfer.</strong> Support value-code transfer is real, but prediction-position context already carries much of the recoverable value-code scaffold.</figcaption>
 </figure>
 
 This is the main write-side twist. The support value does not write the whole answer code from scratch. The prediction slot already carries much of the readout-ready value-code scaffold, and support retrieval helps shape that scaffold into the answer-specific state.
@@ -642,7 +684,7 @@ Output-space closure looks much cleaner on fixed or branch-aware scalars:
 
 <figure class="paper-figure">
   <img src="assets/figures/closure_boundary.svg" alt="Closure boundary">
-  <figcaption><strong>Figure 14. Closure boundary.</strong> Fixed-output and fixed-branch scalars are cleaner formation targets than moving answer margin.</figcaption>
+  <figcaption><strong>Figure 17. Closure boundary.</strong> Fixed-output and fixed-branch scalars are cleaner formation targets than moving answer margin.</figcaption>
 </figure>
 
 This is a methodological result, not just a limitation. Moving answer margin is often the first scalar people reach for, but it can be a bad proof target for formation audits when the wrong-token branch changes.
