@@ -1,0 +1,4 @@
+claim,scalar_or_space,R2,window,interpretation
+closure boundary,route/write scalar closure for correct-value logit,0.37,1500-2500,routes help but do not close the scalar
+closure boundary,matched fixed-output scalar closure,0.868,1500-2500,output-space fixed scalar closes better
+closure boundary,moving answer margin closure,0.407,1500-2500,moving best-wrong branch remains harder

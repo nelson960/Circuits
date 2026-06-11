@@ -1,0 +1,4 @@
+variant,validation_answer_accuracy,QK_separation,scope
+AdamW baseline,0.976,8.03,seed-7 matched recipe and budget
+AdamW beta1=0,0.984,9.26,seed-7 matched recipe and budget
+best SGD+momentum sweep,0.0085,0.118,seed-7 matched budget; best observed SGD-family route separation

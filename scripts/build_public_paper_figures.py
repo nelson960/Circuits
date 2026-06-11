@@ -73,6 +73,14 @@ BRANCH_DECOMPOSITION_REPORT = ROOT / (
     "artifacts/runs/symbolic_kv_reference_formation/analysis/answer_margin_branch_decomposition/"
     "query_key_support_value_5500_5550_stepwise/answer_margin_branch_decomposition_report.json"
 )
+FULL_RESIDUAL_ROUTE_REPORT = ROOT / (
+    "artifacts/runs/symbolic_kv_reference_formation/analysis/route_gradient_selection/"
+    "heldout_route_comparison/full_residual_query_key/candidate_route_gradient_selection_report.json"
+)
+L2H1_QK_QUERY_ROUTE_REPORT = ROOT / (
+    "artifacts/runs/symbolic_kv_reference_formation/analysis/route_gradient_selection/"
+    "heldout_route_comparison/l2h1_qk_query_query_key/candidate_route_gradient_selection_report.json"
+)
 CROSS_SEED_ROOT = ROOT / "artifacts/runs/symbolic_kv_cross_seed_adam"
 
 
@@ -290,6 +298,57 @@ def build_weight_birth() -> None:
         subtitle="All curves are artifact-backed and min-max normalized for shape comparison.",
     )
     write_svg("weight_qk_birth_timeline.svg", 980, 500, body)
+
+
+def _route_score_by_pair_type(report: dict, pair_type: str) -> float:
+    rows = report["summary"]["final_by_pair_type_ranked_by_sgd_delta"]
+    matches = [r for r in rows if r["pair_type"] == pair_type]
+    if len(matches) != 1:
+        raise RuntimeError(f"Expected one {pair_type} row, found {len(matches)}")
+    return float(matches[0]["route_score"])
+
+
+def build_qk_causal_transfer() -> None:
+    full = load_json(FULL_RESIDUAL_ROUTE_REPORT)
+    qk = load_json(L2H1_QK_QUERY_ROUTE_REPORT)
+    full_query = _route_score_by_pair_type(full, "query_key")
+    qk_query = _route_score_by_pair_type(qk, "query_key")
+    qk_distractor = _route_score_by_pair_type(qk, "distractor")
+    recovery = qk_query / full_query
+
+    values = [
+        ("full residual\nquery-key transfer", full_query, "#245f73"),
+        ("rank-4 L2H1 QK\nquery transfer", qk_query, "#4f7f54"),
+        ("same QK route\ndistractor control", qk_distractor, "#b95f56"),
+    ]
+    width, height = 900, 420
+    left, top, bottom = 92, 92, 286
+    chart_right = 820
+    max_abs = max(abs(v) for _, v, _ in values)
+    zero_y = bottom - (0 - min(0.0, qk_distractor)) / (max_abs - min(0.0, qk_distractor)) * (bottom - top)
+    parts = [
+        text(32, 36, "The QK route is causal but not the whole circuit", "title"),
+        text(32, 61, "Final-checkpoint route-transfer test on heldout query-key pairs, with a distractor control.", "subtitle"),
+    ]
+    for tick in [0, 10, 20, 30, 40]:
+        y = bottom - tick / 42.0 * (bottom - top)
+        parts.append(line(left - 24, y, chart_right, y, "grid", "#ddd6c8", 1))
+        parts.append(text(left - 34, y + 4, str(tick), "tiny", "end"))
+    parts.append(line(left - 24, zero_y, chart_right, zero_y, color="#4a4741", width=1.2))
+    group_gap, bar_w = 210, 118
+    for i, (label, value, color) in enumerate(values):
+        x = left + 42 + i * group_gap
+        scale = (bottom - top) / 42.0
+        h = abs(value) * scale
+        y = zero_y - h if value >= 0 else zero_y
+        parts.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{bar_w:.1f}" height="{h:.1f}" fill="{color}" opacity="0.9"/>')
+        parts.append(text(x + bar_w / 2, y - 9 if value >= 0 else y + h + 18, f"{value:.2f}", "small", "middle"))
+        label_lines = label.split("\n")
+        parts.append(text(x + bar_w / 2, 326, label_lines[0], "tiny", "middle"))
+        parts.append(text(x + bar_w / 2, 342, label_lines[1], "tiny", "middle"))
+    parts.append(rect(140, 365, 620, 36, "warn"))
+    parts.append(text(450, 388, f"Rank-4 QK recovers {recovery * 100:.1f}% of full residual query-key transfer; the rest remains distributed.", "small", "middle"))
+    write_svg("qk_causal_transfer.svg", width, height, "\n".join(parts))
 
 
 def build_contextual_alignment() -> None:
@@ -740,11 +799,14 @@ def main() -> None:
         OUTPUT_ROUTE_CLOSURE_REPORT,
         LINE_INTEGRAL_REPORT,
         BRANCH_DECOMPOSITION_REPORT,
+        FULL_RESIDUAL_ROUTE_REPORT,
+        L2H1_QK_QUERY_ROUTE_REPORT,
         CROSS_SEED_ROOT,
     ]:
         require_path(path)
     build_updated_chain()
     build_weight_birth()
+    build_qk_causal_transfer()
     build_contextual_alignment()
     build_qk_optimizer_phase_structure()
     build_reference_write_optimizer_split()

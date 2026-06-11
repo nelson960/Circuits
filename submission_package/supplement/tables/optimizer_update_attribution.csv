@@ -1,0 +1,7 @@
+term,value,window,notes
+actual_delta_C_QK,+4.11,from initialization 0-6000,measured route growth
+AdamW_reconstruction,+5.22,from initialization 0-6000,first-order reconstruction using actual AdamW parameter update
+raw_gradient_SGD_equivalent,+0.031,from initialization 0-6000,small instantaneous raw-gradient contribution
+Adam_current_term,+2.37,from initialization 0-6000,AdamW preconditioned current-gradient component
+Adam_momentum_term,+3.05,from initialization 0-6000,AdamW first-moment component in traced run
+weight_decay,-0.20,from initialization 0-6000,decay term

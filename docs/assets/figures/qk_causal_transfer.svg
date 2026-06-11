@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="420" viewBox="0 0 900 420" role="img">
+<defs>
+<marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+<path d="M0,0 L0,6 L9,3 z" fill="#343434" />
+</marker>
+<style>
+.title{font:700 22px Georgia,serif;fill:#171615}.subtitle{font:15px Georgia,serif;fill:#4a4741}.label{font:14px Georgia,serif;fill:#2a2927}.small{font:12px Georgia,serif;fill:#5a5247}.tiny{font:10.5px Georgia,serif;fill:#5a5247}.axis{stroke:#4a4741;stroke-width:1}.grid{stroke:#ddd6c8;stroke-width:1}.box{fill:#fffdf8;stroke:#9b8f7e;stroke-width:1.4;rx:8}.ok{fill:#e7f3ed;stroke:#4f8f6f}.warn{fill:#fff4dc;stroke:#b78b3b}.open{fill:#f8e8e6;stroke:#aa615b}</style>
+</defs>
+<text x="32.0" y="36.0" class="title" text-anchor="start">The QK route is causal but not the whole circuit</text>
+<text x="32.0" y="61.0" class="subtitle" text-anchor="start">Final-checkpoint route-transfer test on heldout query-key pairs, with a distractor control.</text>
+<line x1="68.0" y1="286.0" x2="820.0" y2="286.0" class="grid" stroke="#ddd6c8" stroke-width="1"/>
+<text x="58.0" y="290.0" class="tiny" text-anchor="end">0</text>
+<line x1="68.0" y1="239.8" x2="820.0" y2="239.8" class="grid" stroke="#ddd6c8" stroke-width="1"/>
+<text x="58.0" y="243.8" class="tiny" text-anchor="end">10</text>
+<line x1="68.0" y1="193.6" x2="820.0" y2="193.6" class="grid" stroke="#ddd6c8" stroke-width="1"/>
+<text x="58.0" y="197.6" class="tiny" text-anchor="end">20</text>
+<line x1="68.0" y1="147.4" x2="820.0" y2="147.4" class="grid" stroke="#ddd6c8" stroke-width="1"/>
+<text x="58.0" y="151.4" class="tiny" text-anchor="end">30</text>
+<line x1="68.0" y1="101.2" x2="820.0" y2="101.2" class="grid" stroke="#ddd6c8" stroke-width="1"/>
+<text x="58.0" y="105.2" class="tiny" text-anchor="end">40</text>
+<line x1="68.0" y1="284.5" x2="820.0" y2="284.5" stroke="#4a4741" stroke-width="1.2"/>
+<rect x="134.0" y="97.0" width="118.0" height="187.5" fill="#245f73" opacity="0.9"/>
+<text x="193.0" y="88.0" class="small" text-anchor="middle">40.58</text>
+<text x="193.0" y="326.0" class="tiny" text-anchor="middle">full residual</text>
+<text x="193.0" y="342.0" class="tiny" text-anchor="middle">query-key transfer</text>
+<rect x="344.0" y="235.8" width="118.0" height="48.7" fill="#4f7f54" opacity="0.9"/>
+<text x="403.0" y="226.8" class="small" text-anchor="middle">10.54</text>
+<text x="403.0" y="326.0" class="tiny" text-anchor="middle">rank-4 L2H1 QK</text>
+<text x="403.0" y="342.0" class="tiny" text-anchor="middle">query transfer</text>
+<rect x="554.0" y="284.5" width="118.0" height="1.5" fill="#b95f56" opacity="0.9"/>
+<text x="613.0" y="304.0" class="small" text-anchor="middle">-0.32</text>
+<text x="613.0" y="326.0" class="tiny" text-anchor="middle">same QK route</text>
+<text x="613.0" y="342.0" class="tiny" text-anchor="middle">distractor control</text>
+<rect x="140.0" y="365.0" width="620.0" height="36.0" class="warn" />
+<text x="450.0" y="388.0" class="small" text-anchor="middle">Rank-4 QK recovers 26.0% of full residual query-key transfer; the rest remains distributed.</text>
+</svg>

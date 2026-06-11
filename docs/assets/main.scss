@@ -126,6 +126,51 @@ li {
   margin-bottom: 1.6rem;
 }
 
+.claim-box,
+.plain-box,
+.boundary-box {
+  margin: 1.1rem 0 1.45rem 0;
+  padding: 1rem 1.1rem;
+  border: 1px solid #ded5c5;
+  border-radius: 8px;
+  background: #fffdf8;
+}
+
+.claim-box {
+  border-left: 5px solid #4f8f6f;
+}
+
+.boundary-box {
+  border-left: 5px solid #b78b3b;
+  background: #fffaf0;
+}
+
+.claim-box p:last-child,
+.plain-box p:last-child,
+.boundary-box p:last-child {
+  margin-bottom: 0;
+}
+
+.evidence-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 0.85rem;
+  margin: 1.1rem 0 1.45rem 0;
+}
+
+.evidence-card {
+  padding: 0.9rem 1rem;
+  border: 1px solid #ded5c5;
+  border-radius: 8px;
+  background: #fffdf8;
+}
+
+.evidence-card strong {
+  display: block;
+  margin-bottom: 0.35rem;
+  color: #171615;
+}
+
 .paper-byline {
   margin-top: -0.75rem;
   margin-bottom: 1rem;

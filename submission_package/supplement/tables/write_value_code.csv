@@ -1,0 +1,9 @@
+claim,metric,value,step_or_window,interpretation
+value-code causal use,rank-16 value-identity removal margin_drop,4.97,step 3500,removing compact value subspace damages behavior
+value-code causal use,rank-16 value-identity removal answer_accuracy_drop,0.288,step 3500,removing compact value subspace damages answer accuracy
+value-code broadness,rank-127 keep validation accuracy before,0.7647,step 3500,near-full value identity subspace baseline
+value-code broadness,rank-127 keep validation accuracy after,0.7582,step 3500,near-full value identity almost preserves IID behavior
+contextual transfer,source+context rescue negative-answer-loss damage,1.005,step 3500,source plus prediction context nearly restores stable scalar
+contextual transfer,source+context rescue fixed removed-branch margin damage,0.754,step 3500,source plus prediction context helps fixed-branch scalar
+contextual transfer,context-only rescue negative-answer-loss damage,0.959,step 3500,prediction context scaffold is already strong
+contextual transfer,context-only rescue fixed removed-branch margin damage,0.640,step 3500,prediction context alone partly readout-ready
